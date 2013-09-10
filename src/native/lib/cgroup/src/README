@@ -1,0 +1,1 @@
+gcc -I/usr/local/jdk-6u24-64/include -I/usr/local/jdk-6u24-64/include/linux   -o libCGroupEventListener.so -shared -fPIC  org_apache_hadoop_mapred_CGroupEventListener.c

@@ -33,7 +33,7 @@ import org.apache.hadoop.io.Writable;
  */
 class KillJobAction extends TaskTrackerAction {
   final JobID jobId;
-
+ 
   public KillJobAction() {
     super(ActionType.KILL_JOB);
     jobId = new JobID();

@@ -33,7 +33,9 @@ import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.EditLogFileOutputStream;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp;
+import org.apache.hadoop.hdfs.server.namenode.INodeId;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -133,7 +135,7 @@ public class TestPreTransactionalServerLogReader {
       long txId, boolean forceSync) throws IOException {
     FSEditLogOp.AddOp op = FSEditLogOp.AddOp.getUniqueInstance();
     op.setTransactionId(txId);
-    op.set("/a/b", (short)3, 100L, 100L, 100L, new Block[0],
+    op.set(INodeId.GRANDFATHER_INODE_ID, "/a/b", (short)3, 100L, 100L, 100L, new BlockInfo[0],
         PermissionStatus.createImmutable("x", "y", FsPermission.getDefault()),
         "x", "y");
     out.write(op);

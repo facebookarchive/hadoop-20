@@ -88,7 +88,7 @@ public class StringUtils {
   public static String humanReadableInt(long number) {
     long absNumber = Math.abs(number);
     double result = number;
-    String suffix = "";
+    String suffix = " B";
     if (absNumber < 1024) {
       // nothing
     } else if (absNumber < 1024 * 1024) {

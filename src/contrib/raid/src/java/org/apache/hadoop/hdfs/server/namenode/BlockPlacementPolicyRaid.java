@@ -37,6 +37,7 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyDefault;
+import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy.NotEnoughReplicasException;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.net.DNSToSwitchMapping;
 import org.apache.hadoop.net.NetworkTopology;
@@ -96,13 +97,48 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
     return chooseTarget(srcPath, numOfReplicas, writer, chosenNodes, null, 
         blocksize);
   }
-  
+
+  @Override
+  protected void place3rdReplicaForInClusterWriter(
+      HashMap<Node, Node> excludedNodes, long blocksize,
+      int maxNodesPerRack,List<DatanodeDescriptor> results
+      ) throws NotEnoughReplicasException {
+    if (results.size() > 2) {
+      return;
+    }
+    HashSet<String> excludedRacks = new HashSet<String>();
+    for (DatanodeDescriptor node : results) {
+      String rack = node.getNetworkLocation();
+      excludedRacks.add(rack);
+    }
+    
+    do {
+      String remoteRack = clusterMap.chooseRack(excludedRacks);
+      if (remoteRack == null) { // no more remote rack available
+        // choose a node on the rack where the first replica is located
+        chooseLocalRack(
+            results.get(0), excludedNodes, blocksize, maxNodesPerRack, results);
+        return;
+      }
+      // a remote rack is chosen
+      try {
+        excludedRacks.add(remoteRack);
+        chooseRandom(1, remoteRack, excludedNodes, blocksize, 
+            maxNodesPerRack, results);
+        return;
+      } catch (NotEnoughReplicasException ne) {
+        // try again until all remote tracks are exhausted
+      }
+    } while (true);
+  }
+    
+
   @Override
   public DatanodeDescriptor[] chooseTarget(String srcPath, int numOfReplicas,
       DatanodeDescriptor writer, List<DatanodeDescriptor> chosenNodes,
       List<Node> exlcNodes, long blocksize) {
     try {
-      FileInfo info = getFileInfo(srcPath);
+      FileInfo info = getFileInfo(null, srcPath);
       if (LOG.isDebugEnabled()) {
         LOG.debug("FileType:" + srcPath + " " + info.type.name());
       }
@@ -142,7 +178,7 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
     DatanodeDescriptor chosenNode = null;
     try {
       String path = getFullPathName(inode);
-      FileInfo info = getFileInfo(path);
+      FileInfo info = getFileInfo(inode, path);
       if (info.type == FileType.NOT_RAID) {
         return super.chooseReplicaToDelete(
             inode, block, replicationFactor, first, second);
@@ -442,7 +478,7 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
           if (fileSize < minFileSize) {
             continue;
           }
-          int numBlocks = childInode.blocks.length;
+          int numBlocks = childInode.getBlocks().length;
 
           if (numBlocks < sourceStart && !found) {
             sourceStart -= numBlocks; 
@@ -533,7 +569,7 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
             List<LocatedBlock> childBlocks = getLocatedBlocks(childName, childInode);
             sourceBlocks.addAll(childBlocks);
           } else {
-            int childBlockSize = childInode.blocks.length;
+            int childBlockSize = childInode.getBlocks().length;
 
             /** 
              * If we find the target file, we will addAll the
@@ -831,7 +867,7 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
    * @return raid information
    * @throws IOException
    */
-  protected FileInfo getFileInfo(String path) throws IOException {
+  protected FileInfo getFileInfo(FSInodeInfo srcINode, String path) throws IOException {
     for (Codec c : Codec.getCodecs()) {
       if (path.startsWith(c.tmpHarDirectoryPS)) {
         return new FileInfo(FileType.HAR_TEMP_PARITY, c);
@@ -844,6 +880,13 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
       }
       NameWithINode ni = getParityFile(c, path);
       if (ni != null) {
+        if (c.isDirRaid && srcINode != null && srcINode instanceof INodeFile) {
+          INodeFile inf = (INodeFile)srcINode;
+          if (inf.getFileSize() < this.minFileSize) {
+            // It's too small to be raided
+            return new FileInfo(FileType.NOT_RAID, null);
+          }
+        }
         return new FileInfo(FileType.SOURCE, c, ni.name, ni.inode);
       }
     }

@@ -19,9 +19,6 @@ package org.apache.hadoop.hdfs.notifier;
 
 public class NotifierConfig {
   
-  // conf param for edits location
-  public static final String NOTIFIER_EDITS_SOURCE = "notifier.edits.dir";
-  
   public static final String LOG_READER_STREAM_RETRIES = "notifier.reader.stream.retries";
   public static final int LOG_READER_STREAM_RETRIES_DEFAULT = 30;
   

@@ -20,11 +20,12 @@ package org.apache.hadoop.hdfs.server.namenode;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.fail;
 
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -54,7 +55,7 @@ public class TestAvatarStorageSetup {
   // names for image/edits
   private final String imageLclName = baseDir + "image/";
   private final String imageShdName0 = baseDir + "imageShared0/";
-  private final String imageShdName1 = baseDir + "imageShared0/";
+  private final String imageShdName1 = baseDir + "imageShared1/";
 
   private final String editsLclName = baseDir + "edits/";
   private final String editsShdName0 = baseDir + "editsShared0/";
@@ -119,6 +120,31 @@ public class TestAvatarStorageSetup {
         imageShd0, imageShd1, 
         editsShd0, editsShd1);
   }
+  
+  @Test(expected = IOException.class)
+  public void sharedImageQJMNotEqualToEdits() throws IOException, URISyntaxException {
+    // QJM shared image location
+    URI qjmSharedImage = new URI("qjm://testjournalImage");
+    URI qjmSharedJournal = new URI("qjm://testjournalJournal");
+    
+    AvatarStorageSetup.validate(conf, 
+        getList(imageLcl),
+        getList(editsLcl), 
+        qjmSharedImage, imageShd1, 
+        qjmSharedJournal, editsShd1);
+  }
+  
+  @Test
+  public void sharedImageQJM() throws IOException, URISyntaxException {
+    // QJM shared image location
+    URI qjmShared = new URI("qjm://testjournal");
+    
+    AvatarStorageSetup.validate(conf, 
+        getList(imageLcl),
+        getList(editsLcl), 
+        qjmShared, imageShd1, 
+        qjmShared, editsShd1);
+  }
 
   @Test(expected = IOException.class)
   public void sharedEditsShoudlNotOverlap() throws IOException {
@@ -131,7 +157,7 @@ public class TestAvatarStorageSetup {
   }
 
   @Test(expected = IOException.class)
-  public void shouldNotContainSharedImageLoaction() throws IOException {
+  public void shouldNotContainSharedImageLocation() throws IOException {
     // dfs.name.dir.shared is set manually
     conf.set("dfs.name.dir.shared", "/somelocation");
     AvatarStorageSetup.validate(conf, 
@@ -142,7 +168,7 @@ public class TestAvatarStorageSetup {
   }
   
   @Test(expected = IOException.class)
-  public void shouldNotContainSharedEditsLoaction() throws IOException {
+  public void shouldNotContainSharedEditsLocation() throws IOException {
     // dfs.name.edits.dir.shared is set manually
     conf.set("dfs.name.edits.dir.shared", "/somelocation");
     AvatarStorageSetup.validate(conf, 
@@ -218,8 +244,7 @@ public class TestAvatarStorageSetup {
   @Test
   public void testLocationMapForNonFiles() throws Exception {
     // configure non-file journals
-    imageLcl = Util.stringAsURI("foo:/imagelocal");
-    editsLcl = Util.stringAsURI("foo:/editslocal");
+    // local image and edits must be file-based
     editsShd0 = Util.stringAsURI("foo:/editsshd0");
     editsShd1 = Util.stringAsURI("foo:/editsshd1");
 
@@ -268,6 +293,57 @@ public class TestAvatarStorageSetup {
     }  
   }
   
+  @Test
+  public void testSameSharedImageLocation() throws Exception {
+    
+    Configuration conf = new Configuration();
+    
+    URI img0 = new URI("qjm://localhost:1234;localhost:1235;localhost:1236/test-id/");
+    URI img1 = new URI("qjm://localhost:1234;localhost:1235;localhost:1236/test-id/");
+    URI edit0 = new URI("qjm://localhost:1234;localhost:1235;localhost:1236/test-id/zero/");
+    URI edit1 = new URI("qjm://localhost:1234;localhost:1235;localhost:1236/test-id/one/");
+    conf.set("dfs.name.dir.shared0", img0.toString());
+    conf.set("dfs.name.dir.shared1", img1.toString());
+    conf.set("dfs.name.edits.dir.shared0", edit0.toString());
+    conf.set("dfs.name.edits.dir.shared1", edit1.toString());
+ 
+    // local locations for image and edits
+    Collection<URI> namedirs = NNStorageConfiguration.getNamespaceDirs(conf, null);
+    Collection<URI> editsdir = NNStorageConfiguration.getNamespaceEditsDirs(conf, null);
+    
+    try {
+      AvatarStorageSetup.validate(conf, namedirs, editsdir, img0, img1, edit0, edit1);
+      fail("fail of same shared image location");
+    } catch (IOException ex) {
+      assertTrue(ex.getMessage().contains("same image location"));
+    }
+  }
+  
+  @Test
+  public void testSameSharedEditsLocation() throws Exception {
+    
+    Configuration conf = new Configuration();
+    
+    URI img0 = new URI("qjm://localhost:1234;localhost:1235;localhost:1236/test-id/zero/");
+    URI img1 = new URI("qjm://localhost:1234;localhost:1235;localhost:1236/test-id/one/");
+    URI edit0 = new URI("qjm://localhost:1234;localhost:1235;localhost:1236/test-id/");
+    URI edit1 = new URI("qjm://localhost:1234;localhost:1235;localhost:1236/test-id/");
+    conf.set("dfs.name.dir.shared0", img0.toString());
+    conf.set("dfs.name.dir.shared1", img1.toString());
+    conf.set("dfs.name.edits.dir.shared0", edit0.toString());
+    conf.set("dfs.name.edits.dir.shared1", edit1.toString());
+ 
+    // local locations for image and edits
+    Collection<URI> namedirs = NNStorageConfiguration.getNamespaceDirs(conf, null);
+    Collection<URI> editsdir = NNStorageConfiguration.getNamespaceEditsDirs(conf, null);
+    
+    try {
+      AvatarStorageSetup.validate(conf, namedirs, editsdir, img0, img1, edit0, edit1);
+      fail("fail of same shared eduts location");
+    } catch (IOException ex) {
+      assertTrue(ex.getMessage().contains("same edits location"));
+    }
+  }
   
   ///// helpers
   

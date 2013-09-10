@@ -58,27 +58,29 @@ public class TestDFSClientMetricsSync extends TestCase {
 
 		long returnValue = (Long) privateStringMethod.invoke(metrics);
 		assertEquals(THREAD_COUNT * OPERATIONS_PER_THREAD, returnValue);
+
+    metrics.doUpdates(null);
 		
     assertEquals(THREAD_COUNT * OPERATIONS_PER_THREAD,
-        metrics.numCreateDirOps.getCurrentIntervalValue());
+        metrics.numCreateDirOps.getPreviousIntervalValue());
     assertEquals(THREAD_COUNT * OPERATIONS_PER_THREAD,
-        metrics.numCreateFileOps.getCurrentIntervalValue());
+        metrics.numCreateFileOps.getPreviousIntervalValue());
     assertEquals(THREAD_COUNT * OPERATIONS_PER_THREAD,
-        metrics.preadOps.getCurrentIntervalValue());
+        metrics.preadOps.getPreviousIntervalValue());
     assertEquals(THREAD_COUNT * OPERATIONS_PER_THREAD * PREAD_SIZE_VALUE,
-        metrics.preadSize.getCurrentIntervalValue());
+        metrics.preadSize.getPreviousIntervalValue());
 		assertEquals(PREAD_TIME_VALUE, metrics.preadLatency.getMinTime());
     assertEquals(THREAD_COUNT * OPERATIONS_PER_THREAD,
-        metrics.readOps.getCurrentIntervalValue());
+        metrics.readOps.getPreviousIntervalValue());
     assertEquals(THREAD_COUNT * OPERATIONS_PER_THREAD,
-        metrics.readsFromLocalFile.getCurrentIntervalValue());
+        metrics.readsFromLocalFile.getPreviousIntervalValue());
     assertEquals(THREAD_COUNT * OPERATIONS_PER_THREAD * READ_SIZE_VALUE,
-        metrics.readSize.getCurrentIntervalValue());
+        metrics.readSize.getPreviousIntervalValue());
 		assertEquals(READ_TIME_VALUE, metrics.readLatency.getMinTime());
 		assertEquals(SYNC_TIME_VALUE, metrics.syncLatency.getMinTime());
     assertEquals(THREAD_COUNT * OPERATIONS_PER_THREAD,
-        metrics.writeOps.getCurrentIntervalValue());
+        metrics.writeOps.getPreviousIntervalValue());
     assertEquals(THREAD_COUNT * OPERATIONS_PER_THREAD * WRITE_SIZE_VALUE,
-        metrics.writeSize.getCurrentIntervalValue());
+        metrics.writeSize.getPreviousIntervalValue());
 	}
 }

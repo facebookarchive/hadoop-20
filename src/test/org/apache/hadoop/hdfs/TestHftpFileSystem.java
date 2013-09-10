@@ -20,6 +20,7 @@ import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.log4j.Level;
 
 /**
@@ -46,7 +47,7 @@ public class TestHftpFileSystem extends TestCase {
     RAN.setSeed(seed);
 
     config = new Configuration();
-    config.set("slave.host.name", "localhost");
+    config.set(FSConstants.SLAVE_HOST_NAME, "localhost");
 
     cluster = new MiniDFSCluster(config, 2, true, null);
     hdfs = cluster.getFileSystem();

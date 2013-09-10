@@ -25,13 +25,12 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.nio.BufferOverflowException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.LinkedList;
-import java.util.zip.CRC32;
 
 import org.apache.hadoop.fs.FSOutputSummer;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
@@ -40,24 +39,32 @@ import org.apache.hadoop.fs.Syncable;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.DFSClient.MultiDataInputStream;
 import org.apache.hadoop.hdfs.DFSClient.MultiDataOutputStream;
+import org.apache.hadoop.hdfs.protocol.AppendBlockHeader;
+import org.apache.hadoop.hdfs.profiling.DFSWriteProfilingData;
+import org.apache.hadoop.hdfs.profiling.DFSWriteProfilingData.WritePacketClientProfile;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.ClientDatanodeProtocol;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DSQuotaExceededException;
+import org.apache.hadoop.io.WriteOptions;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
+import org.apache.hadoop.hdfs.protocol.DataTransferProtocol.PipelineAck;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithOldGS;
 import org.apache.hadoop.hdfs.protocol.NSQuotaExceededException;
 import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlock;
 import org.apache.hadoop.hdfs.protocol.WriteBlockHeader;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.namenode.INode;
 import org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException;
 import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.Text;
+import org.apache.hadoop.ipc.Client;
 import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
@@ -67,7 +74,7 @@ import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.Progressable;
-import org.apache.hadoop.util.PureJavaCrc32;
+import org.apache.hadoop.util.NativeCrc32;
 import org.apache.hadoop.util.StringUtils;
 
 /****************************************************************
@@ -102,13 +109,15 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
   private MultiDataInputStream blockReplyStream;
   private Block block;
   final private long blockSize;
+  private boolean pktIncludeVersion = false;
+  final private int packetVersion;
   private DataChecksum checksum;
-  private LinkedList<Packet> dataQueue = new LinkedList<Packet>();
-  private LinkedList<Packet> ackQueue = new LinkedList<Packet>();
+  private LinkedList<DFSOutputStreamPacket> dataQueue = new LinkedList<DFSOutputStreamPacket>();
+  private LinkedList<DFSOutputStreamPacket> ackQueue = new LinkedList<DFSOutputStreamPacket>();
   private int numPendingHeartbeats = 0;
   private long lastPacketSentTime = 0;
   private final long packetTimeout;
-  private Packet currentPacket = null;
+  private DFSOutputStreamPacket currentPacket = null;
   private int maxPackets = 80; // each packet 64K, total 5MB
   // private int maxPackets = 1000; // each packet 64K, total 64MB
   private DataStreamer streamer;
@@ -119,7 +128,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
   private long bytesCurBlock = 0; // bytes writen in current block
   private int packetSize = 0; // write packet size, including the header.
   private int chunksPerPacket = 0;
-  private DatanodeInfo[] nodes = null; // list of targets for current block
+  DatanodeInfo[] nodes = null; // list of targets for current block
   private DatanodeInfo[] favoredNodes = null; // put replicas here if possible
   private volatile boolean hasError = false;
   private volatile int errorIndex = 0;
@@ -137,8 +146,8 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
 
   private boolean forceSync;
   private boolean doParallelWrites = false;
-  
-  private int namespaceId;  // the namespace that the file belongs to
+    
+  private final WriteOptions options;
 
   private void setLastException(IOException e) {
     if (lastException == null) {
@@ -149,149 +158,6 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
   public void setOffsets(long offset) {
     DFSClient.LOG.info("set last block offsets in file: " + src + " pos: " + offset);
     lastBlkOffset = offset;
-  }
-
-  private class Packet {
-    ByteBuffer buffer;           // only one of buf and buffer is non-null
-    byte[]  buf;
-    long    seqno;               // sequencenumber of buffer in block
-    long    offsetInBlock;       // offset in block
-    boolean lastPacketInBlock;   // is this the last packet in block?
-    int     numChunks;           // number of chunks currently in packet
-    int     maxChunks;           // max chunks in packet
-    int     dataStart;
-    int     dataPos;
-    int     checksumStart;
-    int     checksumPos;
-
-    private static final long HEART_BEAT_SEQNO = -1L;
-
-    /**
-     *  create a heartbeat packet
-     */
-    Packet() {
-      this.lastPacketInBlock = false;
-      this.numChunks = 0;
-      this.offsetInBlock = 0;
-      this.seqno = HEART_BEAT_SEQNO;
-
-      buffer = null;
-      int packetSize = DataNode.PKT_HEADER_LEN + DFSClient.SIZE_OF_INTEGER;
-      buf = new byte[packetSize];
-
-      checksumStart = dataStart = packetSize;
-      checksumPos = checksumStart;
-      dataPos = dataStart;
-      maxChunks = 0;
-    }
-
-   // create a new packet
-    Packet(int pktSize, int chunksPerPkt, long offsetInBlock)
-    throws IOException {
-      this.lastPacketInBlock = false;
-      this.numChunks = 0;
-      this.offsetInBlock = offsetInBlock;
-      this.seqno = currentSeqno;
-      currentSeqno++;
-
-      buffer = null;
-      buf = new byte[pktSize];
-
-      checksumStart = DataNode.PKT_HEADER_LEN + DFSClient.SIZE_OF_INTEGER;
-      checksumPos = checksumStart;
-      dataStart = checksumStart + chunksPerPkt * checksum.getChecksumSize();
-      dataPos = dataStart;
-      maxChunks = chunksPerPkt;
-    }
-
-    void writeData(byte[] inarray, int off, int len) {
-      if ( dataPos + len > buf.length) {
-        throw new BufferOverflowException();
-      }
-      System.arraycopy(inarray, off, buf, dataPos, len);
-      dataPos += len;
-    }
-
-    void  writeChecksum(byte[] inarray, int off, int len) {
-      if (checksumPos + len > dataStart) {
-        throw new BufferOverflowException();
-      }
-      System.arraycopy(inarray, off, buf, checksumPos, len);
-      checksumPos += len;
-    }
-
-    /**
-     * Returns ByteBuffer that contains one full packet, including header.
-     * @throws IOException
-     */
-    ByteBuffer getBuffer() throws IOException {
-      /* Once this is called, no more data can be added to the packet.
-       * setting 'buf' to null ensures that.
-       * This is called only when the packet is ready to be sent.
-       */
-      if (buffer != null) {
-        return buffer;
-      }
-
-      //prepare the header and close any gap between checksum and data.
-
-      int dataLen = dataPos - dataStart;
-      int checksumLen = checksumPos - checksumStart;
-
-      if (checksumPos != dataStart) {
-        /* move the checksum to cover the gap.
-         * This can happen for the last packet.
-         */
-        System.arraycopy(buf, checksumStart, buf,
-                         dataStart - checksumLen , checksumLen);
-      }
-
-      int pktLen = DFSClient.SIZE_OF_INTEGER + dataLen + checksumLen;
-
-      //normally dataStart == checksumPos, i.e., offset is zero.
-      buffer = ByteBuffer.wrap(buf, dataStart - checksumPos,
-													 DataNode.PKT_HEADER_LEN + pktLen);
-      buf = null;
-      buffer.mark();
-
-      /* write the header and data length.
-       * The format is described in comment before DataNode.BlockSender
-       */
-      buffer.putInt(pktLen);  // pktSize
-      buffer.putLong(offsetInBlock);
-      buffer.putLong(seqno);
-
-      if (dfsClient.dataTransferVersion >= dfsClient.getDataTransferProtocolVersion()) {
-	        byte booleanFieldValue = 0x00;
-
-	        if (lastPacketInBlock) {
-	          booleanFieldValue |= DataNode.isLastPacketInBlockMask;
-	        }
-	        if (forceSync) {
-	          booleanFieldValue |= DataNode.forceSyncMask;
-	        }
-	          buffer.put(booleanFieldValue);
-      } else {
-        buffer.put((byte) (lastPacketInBlock? 1: 0));
-      }
-
-      //end of pkt header
-      buffer.putInt(dataLen); // actual data length, excluding checksum.
-      buffer.reset();
-      return buffer;
-    }
-
-    private long getEndPosInCurrBlk() {
-      return offsetInBlock + (dataPos - dataStart);
-    }
-    
-    /**
-     * Check if this packet is a heart beat packet
-     * @return true if the sequence number is HEART_BEAT_SEQNO
-     */
-    private boolean isHeartbeatPacket() {
-      return seqno == HEART_BEAT_SEQNO;
-    }
   }
 
   /** Decide if the write pipeline supports bidirectional heartbeat or not */
@@ -381,7 +247,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
           }
         }
 
-        Packet one = null;
+        DFSOutputStreamPacket one = null;
 
         // process IO errors if any
         doSleep = processDatanodeError(hasError, false);
@@ -400,11 +266,16 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
             
             // get packet to be sent.
             if (dataQueue.isEmpty()) {
-              one = new Packet();  // heartbeat packet
+              one = DFSOutputStreamPacketFactory.getHeartbeatPacket(
+                  DFSOutputStream.this, ifPacketIncludeVersion(),
+                  getPacketVersion()); // heartbeat
+                                                                     // packet
             } else {
               one = dataQueue.getFirst(); // regular data packet
+              one.eventPopFromDataQueue();
             }
           }
+                  
           long offsetInBlock = one.offsetInBlock;
 
           // get new block from namenode.
@@ -418,7 +289,8 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
             response.start();
           }
 
-          if (offsetInBlock >= blockSize) {
+          if (offsetInBlock > blockSize
+              || (offsetInBlock == blockSize && (one.dataLength > 0 || !one.lastPacketInBlock))) {
             throw new IOException("BlockSize " + blockSize +
                                   " is smaller than data size. " +
                                   " Offset of packet in block " +
@@ -428,6 +300,9 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
 
           ByteBuffer buf = one.getBuffer();
 
+          InjectionHandler.processEventIO(
+              InjectionEvent.DFSCLIENT_DATASTREAM_BEFORE_WRITE, blockStream);
+          
           // write out data to remote datanode
           blockStream.write(buf.array(), buf.position(), buf.remaining());
 
@@ -451,6 +326,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
               dataQueue.notifyAll();
               synchronized (ackQueue) {
                 ackQueue.addLast(one);
+                one.eventAddToAckQueue();
                 lastPacketSentTime = System.currentTimeMillis();
                 ackQueue.notifyAll();
               }
@@ -588,21 +464,43 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
             break;
           }
 
+          eventStartReceiveAck();
+          PipelineAck pipelineAck = null;
           if (!doParallelWrites) {
             // verify seqno from datanode
-            seqno = blockReplyStream.get(0).readLong();
-            DFSClient.LOG.debug("DFSClient received ack for seqno " + seqno);
-            if (seqno == Packet.HEART_BEAT_SEQNO && !supportClientHeartbeat()) {
-              continue;
-            }
-            // regular ack
-            // processes response status from all datanodes.
-            for (int i = 0; i < targets.length && dfsClient.clientRunning; i++) {
-              short reply = blockReplyStream.get(0).readShort();
-              if (reply != DataTransferProtocol.OP_STATUS_SUCCESS) {
-                recordError = i; // first bad datanode
-                throw new IOException("Bad response " + reply + " for block "
-                    + block + " from datanode " + targets[i].getName());
+            if (supportClientHeartbeat()) {
+              pipelineAck = new PipelineAck();
+              pipelineAck.readFields(blockReplyStream.get(0), targets.length,
+                  profileData != null);
+              
+              seqno = pipelineAck.getSeqno();
+              
+              if (!pipelineAck.isSuccess()) {
+                for (int i = 0; i < targets.length && dfsClient.clientRunning; i++) {
+                  short reply = pipelineAck.getReply(i);
+                  if (reply != DataTransferProtocol.OP_STATUS_SUCCESS) {
+                    recordError = i; // first bad datanode
+                    throw new IOException("Bad response " + reply + " for block "
+                        + block + " from datanode " + targets[i].getName());
+                  }
+                }                
+              }
+            } else {
+              // Backward compatibility codes.
+              seqno = blockReplyStream.get(0).readLong();
+              DFSClient.LOG.debug("DFSClient received ack for seqno " + seqno);
+              if (seqno == DFSOutputStreamPacket.HEART_BEAT_SEQNO) {
+                continue;
+              }
+              // regular ack
+              // processes response status from all datanodes.
+              for (int i = 0; i < targets.length && dfsClient.clientRunning; i++) {
+                short reply = blockReplyStream.get(0).readShort();
+                if (reply != DataTransferProtocol.OP_STATUS_SUCCESS) {
+                  recordError = i; // first bad datanode
+                  throw new IOException("Bad response " + reply + " for block "
+                      + block + " from datanode " + targets[i].getName());
+                }
               }
             }
           } else {
@@ -636,7 +534,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
 
           assert seqno != -2 :
             "Ack for unkown seqno should be a failed ack!";
-          if (seqno == Packet.HEART_BEAT_SEQNO) {  // a heartbeat ack
+          if (seqno == DFSOutputStreamPacket.HEART_BEAT_SEQNO) {  // a heartbeat ack
             assert supportClientHeartbeat();
             synchronized(ackQueue) {
               assert numPendingHeartbeats > 0;
@@ -645,7 +543,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
             continue;
           }
 
-          Packet one = null;
+          DFSOutputStreamPacket one = null;
           synchronized (ackQueue) {
             assert !ackQueue.isEmpty();
             one = ackQueue.getFirst();
@@ -655,6 +553,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
                 " for block " + block +
                 one.seqno + " but received " + seqno);
           }
+                    
           lastPacketInBlock = one.lastPacketInBlock;
 
           if (lastPacketInBlock) {
@@ -675,6 +574,20 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
             ackQueue.notifyAll();
           }
 
+          one.eventAckReceived();
+
+          if (getProfileData() != null) {
+            getProfileData().finishPacket(one.profile, pipelineAck);
+            long slowWriteProfileThreshold = options
+                .getLogSlowWriteProfileDataThreshold();
+            long totalTime = getProfileData().recentPacketProfile.getTotalTime();
+            if (slowWriteProfileThreshold > 0
+                && totalTime > slowWriteProfileThreshold) {
+              DFSClient.LOG.warn("Slow Write Packet for block : " + block +
+                  ", packet seqno : " + one.seqno +  ", total time : " +
+                  totalTime + " \n" + getProfileData().recentPacketProfile);
+            }
+          }
         } catch (Exception e) {
           if (!closed) {
             hasError = true;
@@ -795,55 +708,75 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       // by stamping appropriate generation stamps.
       //
       LocatedBlock newBlock = null;
-      ProtocolProxy<ClientDatanodeProtocol> primary =  null;
       DatanodeInfo primaryNode = null;
+      boolean clientAdRecoveryPrimaryProtocolSupported = false;
       try {
-        // Pick the "least" datanode as the primary datanode to avoid deadlock.
-        primaryNode = Collections.min(Arrays.asList(newnodes));
-		/* considering pipeline recovery needs 3 RPCs to DataNodes
-		 * and 2 RPCs to NameNode; So rpcTimeout sets to be 5 times of
-		 * client socketTimeout
-		 */
-        int recoverTimeout = 5*dfsClient.socketTimeout;
-        primary = DFSClient.createClientDNProtocolProxy(primaryNode,
-            dfsClient.conf, recoverTimeout);
-        try {
-          if (primary.isMethodSupported("recoverBlock", int.class, Block.class,
-              boolean.class, DatanodeInfo[].class, long.class)) {
-            // The deadline is up to RPC time out minus one socket timeout
-            // to be more conservative.
-            newBlock = primary.getProxy().recoverBlock(namespaceId, block,
-                isAppend, newnodes,
-                System.currentTimeMillis() + recoverTimeout - dfsClient.socketTimeout);
-          } else if (primary.isMethodSupported("recoverBlock", int.class, Block.class, boolean.class, DatanodeInfo[].class)) {
-            newBlock = primary.getProxy().recoverBlock(
-                namespaceId, block, isAppend, newnodes);
-          } else {
-            newBlock = primary.getProxy().recoverBlock(block, isAppend, newnodes);
-          }
-        } catch (RemoteException re) {
-          if (re.unwrapRemoteException() instanceof BlockAlreadyCommittedException) {
-            throw new BlockAlreadyCommittedException(re);
-          } else {
-            throw re;
-          }
+        clientAdRecoveryPrimaryProtocolSupported = dfsClient.namenodeProtocolProxy
+            .isMethodSupported("nextGenerationStamp", Block.class,
+                boolean.class);
+      } catch (InterruptedIOException iie) {
+        return false;
+      } catch (IOException ioe) {
+        DFSClient.LOG.warn(
+            "Error when trying to determine whether namenode protocol "
+                + "supports client as block recovoery coordinator.", ioe);
+      }
+      boolean clientAsRecoveryPrimary = dfsClient.conf.getBoolean(
+          "dfs.client.as.block.recovery.primary", true)
+          && clientAdRecoveryPrimaryProtocolSupported;
+      try {
+        if (clientAsRecoveryPrimary) {
+          BlockRecoveryCoordinator brc = new BlockRecoveryCoordinator(
+              DFSClient.LOG, dfsClient.conf, dfsClient.socketTimeout, null,
+              new BlockSyncer(dfsClient.getNamespaceId(),
+                  dfsClient.getNameNodeRPC(), DFSClient.LOG), null);
+          newBlock = brc.recoverBlock(dfsClient.getNamespaceId(), block, false,
+              newnodes, false, System.currentTimeMillis() + dfsClient.socketTimeout * 8000);
+        } else {
+          // Pick the "least" datanode as the primary datanode to avoid
+          // deadlock.
+          primaryNode = Collections.min(Arrays.asList(newnodes));
+          newBlock = recoverBlockFromPrimaryDataNode(primaryNode, newnodes,
+              isAppend);
         }
+        
         if (newBlock == null) {
           throw new IOException("all datanodes do not have the block");
         }
         boolean isEmpty;
         long nextByteToSend;
+        long newBlockSize = newBlock.getBlockSize();
+        int numPktRemoved;
         synchronized (dataQueue) {
+          numPktRemoved = adjustDataQueueAfterBlockRecovery(newBlockSize);
           isEmpty = dataQueue.isEmpty();
-          nextByteToSend = isEmpty ? 
-            bytesCurBlock : dataQueue.getFirst().offsetInBlock;
+          if (isEmpty) {
+            if (currentPacket != null) {
+              nextByteToSend = currentPacket.offsetInBlock;
+            } else {
+              nextByteToSend = bytesCurBlock;
+            }
+          } else {
+            nextByteToSend = dataQueue.getFirst().offsetInBlock;
+          }
         }
-        if (nextByteToSend > newBlock.getBlockSize()) {
-            DFSClient.LOG.warn("Missing bytes! Error Recovery for block " + block +
-              " end up with " +
-              newBlock.getBlockSize() + " bytes but client already sent " +
-              nextByteToSend + " bytes and data queue is " +
-              (isEmpty ? "" : "not ") + "empty.");
+        if (numPktRemoved > 0) {
+          DFSClient.LOG.info("Remove " + numPktRemoved
+              + " packets in the packet queue after block recovery");
+          if (nextByteToSend > newBlockSize) {
+            DFSClient.LOG
+                .warn("Missing bytes after removing packets! It should never happen. nextByteToSend "
+                    + nextByteToSend + " new block size " + newBlockSize);
+          }
+        } else if (nextByteToSend > newBlockSize) {
+          DFSClient.LOG.warn("Missing bytes! Error Recovery for block " + block
+              + " end up with " + newBlock.getBlockSize()
+              + " bytes but client already sent " + nextByteToSend
+              + " bytes and data queue is " + (isEmpty ? "" : "not ")
+              + "empty.");
+        } else if (DFSClient.LOG.isDebugEnabled()) {
+          DFSClient.LOG.debug("Didn't remove any block. nextByteToSend "
+                    + nextByteToSend + " new block size " + newBlockSize);
         }
       } catch (BlockAlreadyCommittedException e) {
         dfsClient.incWriteExpCntToStats();
@@ -866,8 +799,10 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
         DFSClient.LOG.warn("Failed recovery attempt #" + recoveryErrorCount +
             " from primary datanode " + primaryNode, e);
         recoveryErrorCount++;
-        if (recoveryErrorCount > maxRecoveryErrorCount) {
-          if (nodes.length > 1) {
+        // For client as primary, no need to retry as all failures thrown by
+        // data nodes are already handled.
+        if (clientAsRecoveryPrimary || recoveryErrorCount > maxRecoveryErrorCount) {
+          if (!clientAsRecoveryPrimary && nodes.length > 1) {
             // if the primary datanode failed, remove it from the list.
             // The original bad datanode is left in the list because it is
             // conservative to remove only one datanode in one iteration.
@@ -909,9 +844,6 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
                  ". Will retry...");
         return true;          // sleep when we return from here
       } finally {
-        if (primary != null) {
-          RPC.stopProxy(primary.getProxy());
-        }
       }
       recoveryErrorCount = 0; // block recovery successful
 
@@ -926,12 +858,132 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       this.hasError = false;
       lastException = null;
       errorIndex = 0;
-      success = createBlockOutputStream(nodes, dfsClient.clientName, true);
+      success = createBlockOutputStream(nodes, dfsClient.clientName, 
+          true, false);
     }
 
     response = new ResponseProcessor(nodes);
     response.start();
     return false; // do not sleep, continue processing
+  }
+  
+  LocatedBlock recoverBlockFromPrimaryDataNode(DatanodeInfo primaryNode,
+      DatanodeInfo[] newnodes, boolean isAppend) throws IOException {
+    ProtocolProxy<ClientDatanodeProtocol> primary = null;
+    try {
+    // Copied from org.apache.hadoop.ipc.Client
+    int connectTimeout = dfsClient.conf.getInt(
+        Client.CONNECT_TIMEOUT_KEY, Client.CONNECT_TIMEOUT_DEFAULT);
+    int maxRetries = dfsClient.conf.getInt(
+        Client.CONNECT_MAX_RETRIES_KEY, Client.CONNECT_MAX_RETRIES_DEFAULT);
+    /*
+     * considering pipeline recovery needs 3 RPCs to DataNodes and 2 RPCs to
+     * NameNode; So rpcTimeout sets to be 5 times of client socketTimeout.
+     * Also each datanode RPC might take upto (connectTimeout * maxRetries)
+     * to establish connection.
+     */
+    int recoverTimeout = 5 * dfsClient.socketTimeout + 3
+        * (connectTimeout * maxRetries);
+    primary = DFSClient.createClientDNProtocolProxy(primaryNode,
+        dfsClient.conf, recoverTimeout);
+    try {
+      if (primary.isMethodSupported("recoverBlock", int.class, Block.class,
+          boolean.class, DatanodeInfo[].class, long.class)) {
+        // The deadline is up to RPC time out minus one socket timeout
+        // to be more conservative.
+        return primary.getProxy().recoverBlock(dfsClient.namespaceId, block,
+            isAppend, newnodes,
+            System.currentTimeMillis() + recoverTimeout -
+            dfsClient.socketTimeout - (maxRetries * connectTimeout));
+      } else if (primary.isMethodSupported("recoverBlock", int.class, Block.class, boolean.class, DatanodeInfo[].class)) {
+        return primary.getProxy().recoverBlock(
+            dfsClient.namespaceId, block, isAppend, newnodes);
+      } else {
+        return primary.getProxy().recoverBlock(block, isAppend, newnodes);
+      }
+    } catch (RemoteException re) {
+      if (re.unwrapRemoteException() instanceof BlockAlreadyCommittedException) {
+        throw new BlockAlreadyCommittedException(re);
+      } else {
+        throw re;
+      }
+    }
+    } finally {
+      if (primary != null) {
+        RPC.stopProxy(primary.getProxy());
+      }
+    }
+  }
+  
+  
+  private int adjustDataQueueAfterBlockRecovery(long newBlockSize) {
+    // New block size should be one of the packet's ending position
+    // If the block offset of the first packet is not the new block
+    // size, we should be able to remove several packets in packet
+    // queue and make sure the first packet is the new block size.
+    // Otherwise, something went wrong.
+    //
+    // We are conservative here: if the first unacked packet starts
+    // with a full chunk, it can always be a clean checkpoint. We
+    // keep the packets starting from it.
+    //
+    int bytesPerChecksum = checksum.getBytesPerChecksum();
+    int numPktRemoved = 0;
+    long newAckedSeqno = -1;
+    while (!dataQueue.isEmpty()) {
+      DFSOutputStreamPacket first = dataQueue.getFirst();
+      long endOffsetOfBlock = first.getEndPosInCurrBlk();
+      if (first.isHeartbeatPacket()) {
+        dataQueue.removeFirst();
+        numPktRemoved++;
+      } else if (first.offsetInBlock % bytesPerChecksum == 0) {
+        // The first unacked packet starts with a full chunk.
+        //
+        break;
+      } else if (endOffsetOfBlock <= newBlockSize) {
+        if (first.lastPacketInBlock) {
+          // Last block is already acked in all remaining replicas
+          // Resend an empty one to force the stream to finish.
+          //
+          if (endOffsetOfBlock != newBlockSize) {
+            DFSClient.LOG.warn("Packet is the last packet in block with "
+                + endOffsetOfBlock
+                + " but new block length after block recovery is "
+                + newBlockSize + ". Something went wrong.");
+          }
+          
+          first.cleanup();
+          first.offsetInBlock = endOffsetOfBlock;
+          DFSClient.LOG
+              .info("Resend last packet in block and make it empty, new offsetInBlock "
+                  + endOffsetOfBlock);
+          break;
+        } else {
+          dataQueue.removeFirst();
+          numPktRemoved++;
+          if (first.seqno > lastAckedSeqno) {
+            newAckedSeqno = first.seqno;
+          }
+        }
+      } else {
+        if (first.offsetInBlock != newBlockSize) {
+          DFSClient.LOG.warn("Packet has start offset " + first.offsetInBlock
+              + " and end offset " + endOffsetOfBlock
+              + " but new block length after block recovery is " + newBlockSize
+              + ". Something went wrong.");          
+        }
+        break;
+      }
+    }
+    
+    if (numPktRemoved > 0 && newAckedSeqno != -1) {
+      synchronized (ackQueue) {
+        lastAckedSeqno = newAckedSeqno;
+        ackQueue.notifyAll();
+      }
+    }
+
+    return numPktRemoved;
   }
 
   private void isClosed() throws IOException {
@@ -955,12 +1007,28 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       return value;
     }
   }
+  
+  static private DFSWriteProfilingData getProfile(DFSClient dfsClient) {
+    DFSWriteProfilingData profile = DFSClient.getAndResetProfileDataForNextOutputStream();
+    if (dfsClient != null) {
+      boolean ifAutoPrint = dfsClient.conf.getBoolean(
+          FSConstants.FS_OUTPUT_STREAM_AUTO_PRINT_PROFILE, false);
+      if (ifAutoPrint) {
+        if (profile == null) {
+          profile = new DFSWriteProfilingData();
+        }
+        profile.setAutoPrintWhileClose(true);
+      }
+    }
+    return profile;
+  }
 
   private DFSOutputStream(DFSClient dfsClient, String src, long blockSize,
       Progressable progress, int bytesPerChecksum, short replication, boolean forceSync,
-      boolean doParallelWrites, DatanodeInfo[] favoredNodes)
+ boolean doParallelWrites, DatanodeInfo[] favoredNodes,
+      WriteOptions options)
   throws IOException {
-    super(new PureJavaCrc32(), bytesPerChecksum, 4);
+    super(new NativeCrc32(), bytesPerChecksum, 4, getProfile(dfsClient));
     this.dfsClient = dfsClient;
     this.forceSync = forceSync;
     this.doParallelWrites = doParallelWrites;
@@ -968,6 +1036,9 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
     this.blockSize = blockSize;
     this.blockReplication = replication;
     this.progress = progress;
+    this.options = options;
+    this.pktIncludeVersion = dfsClient.ifPacketIncludeVersion();
+    this.packetVersion = dfsClient.getOutPacketVersion();
     
     streamer = new DataStreamer();
     
@@ -992,7 +1063,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
     }
     checksum = DataChecksum.newDataChecksum(FSConstants.CHECKSUM_TYPE,
                                             bytesPerChecksum,
-                                            new PureJavaCrc32());
+                                            new NativeCrc32());
   }
   
   /**
@@ -1003,9 +1074,19 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       Progressable progress, LocatedBlock lastBlock, FileStatus stat,
       int bytesPerChecksum)
       throws IOException {
-    this(dfsClient, src, buffersize, progress, lastBlock, stat, bytesPerChecksum, 0);
+    this(dfsClient, src, buffersize, progress, lastBlock, stat,
+        bytesPerChecksum, 0);
   }
 
+  DFSOutputStream(DFSClient dfsClient, String src, FsPermission masked,
+      boolean overwrite, boolean createParent, short replication,
+      long blockSize, Progressable progress, int buffersize,
+      int bytesPerChecksum, boolean forceSync, boolean doParallelWrites,
+      DatanodeInfo[] favoredNodes) throws IOException {
+    this(dfsClient, src, masked, overwrite, createParent, replication,
+        blockSize, progress, buffersize, bytesPerChecksum, forceSync,
+        doParallelWrites, favoredNodes, new WriteOptions());
+  }
   /**
    * Create a new output stream to the given DataNode.
    * @see ClientProtocol#create(String, FsPermission, String, boolean, short, long)
@@ -1014,9 +1095,10 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       boolean overwrite, boolean createParent, short replication, long blockSize,
       Progressable progress,int buffersize, int bytesPerChecksum,
       boolean forceSync, boolean doParallelWrites,
-      DatanodeInfo[] favoredNodes) throws IOException {
+      DatanodeInfo[] favoredNodes, WriteOptions options)
+      throws IOException {
     this(dfsClient, src, blockSize, progress, bytesPerChecksum, replication,
-        forceSync, doParallelWrites, favoredNodes);
+        forceSync, doParallelWrites, favoredNodes, options);
 
     computePacketChunkSize(dfsClient.writePacketSize, bytesPerChecksum);
 
@@ -1050,9 +1132,10 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       Progressable progress, LocatedBlock lastBlock, FileStatus stat,
       int bytesPerChecksum, int namespaceId) throws IOException {
     this(dfsClient, src, stat.getBlockSize(), progress, bytesPerChecksum,
-        stat.getReplication(), false, false, null);
+        stat.getReplication(), false, false, null,
+        new WriteOptions());
     initialFileSize = stat.getLen(); // length of file when opened
-    this.namespaceId = namespaceId;
+    dfsClient.updateNamespaceIdIfNeeded(namespaceId);
     //
     // The last partial block of the file has to be filled.
     //
@@ -1064,6 +1147,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       // calculate the amount of free space in the pre-existing
       // last crc chunk
       int usedInCksum = (int)(stat.getLen() % bytesPerChecksum);
+      super.bytesSentInChunk = usedInCksum;
       int freeInCksum = bytesPerChecksum - usedInCksum;
 
       // if there is space in the last block, then we have to
@@ -1073,16 +1157,21 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
                               src + " is full.");
       }
 
+      int dataProtocolVersion = dfsClient.getDataTransferProtocolVersion();
       // indicate that we are appending to an existing block
-      bytesCurBlock = lastBlock.getBlockSize();
-
+      if (dataProtocolVersion >= DataTransferProtocol.APPEND_BLOCK_VERSION) {
+        bytesCurBlock = lastBlock.getBlock().getNumBytes();
+      } else {
+        bytesCurBlock = lastBlock.getBlockSize();
+      }
+      
       if (usedInCksum > 0 && freeInCksum > 0) {
         // if there is space in the last partial chunk, then
         // setup in such a way that the next packet will have only
         // one chunk that fills up the partial chunk.
         //
         computePacketChunkSize(0, freeInCksum);
-        resetChecksumChunk(freeInCksum);
+        resetChecksumChunk();
         this.appendChunk = true;
       } else {
         // if the remaining space in the block is smaller than
@@ -1102,12 +1191,19 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
                               " of file " + src);
 
       }
-      // keep trying to setup a pipeline until you know all DNs are dead
-      while (processDatanodeError(true, true)) {
-        try {
-          Thread.sleep(1000);
-        } catch (InterruptedException  e) {
+      
+      if (dataProtocolVersion < DataTransferProtocol.APPEND_BLOCK_VERSION) {
+        // go through the block recovery process to setup the pipeline for append
+        while(processDatanodeError(true, true)) {
+          try {
+            Thread.sleep(1000);
+          } catch (InterruptedException  e) {
+            lastException = new IOException(e);
+            break;
+          }
         }
+      } else {
+        setupPipelineForAppend(lastBlock);
       }
       if (lastException != null) {
         throw lastException;
@@ -1122,10 +1218,55 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
     setOffsets(blockOffset);
     streamer.start();
   }
+  
+  /**
+   * Setup the Append pipeline, the length of current pipeline will shrink
+   * if any datanodes are dead during the process.
+   */
+  private boolean setupPipelineForAppend(LocatedBlock lastBlock) throws IOException {
+    if (nodes == null || nodes.length == 0) {
+      String msg = "Could not get block locations. " +
+          "Source file \"" + src
+          + "\" - Aborting...";
+      DFSClient.LOG.warn(msg);
+      setLastException(new IOException(msg));
+      closed = true;
+      if (streamer != null) streamer.close();
+      return false;
+    }
+    
+    boolean success = createBlockOutputStream(nodes, dfsClient.clientName, false, true);
+    long oldGenerationStamp = 
+        ((LocatedBlockWithOldGS)lastBlock).getOldGenerationStamp();
+    
+    if (success) {
+      // bump up the generation stamp in NN.
+      Block newBlock = lastBlock.getBlock();
+      Block oldBlock = new Block(newBlock.getBlockId(), newBlock.getNumBytes(), 
+          oldGenerationStamp);
+      dfsClient.namenode.updatePipeline(dfsClient.clientName, 
+          oldBlock, newBlock, nodes);
+    } else {
+      DFSClient.LOG.warn("Fall back to block recovery process when trying" +
+          " to setup the append pipeline for file " + src);
+      // set the old generation stamp 
+      block.setGenerationStamp(oldGenerationStamp);
+      // fall back the block recovery
+      while(processDatanodeError(true, true)) {
+        try {
+          Thread.sleep(1000);
+        } catch (InterruptedException  e) {
+          lastException = new IOException(e);
+          break;
+        }
+      }
+    }
+    return success;
+  }
 
   private void computePacketChunkSize(int psize, int csize) {
     int chunkSize = csize + checksum.getChecksumSize();
-    int n = DataNode.PKT_HEADER_LEN + DFSClient.SIZE_OF_INTEGER;
+    int n = getPacketHeaderLen() + DFSClient.SIZE_OF_INTEGER;
     chunksPerPacket = Math.max((psize - n + chunkSize-1)/chunkSize, 1);
     packetSize = n + chunkSize*chunksPerPacket;
     if (DFSClient.LOG.isDebugEnabled()) {
@@ -1168,7 +1309,8 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       //
       // Connect to first DataNode in the list.
       //
-      success = createBlockOutputStream(nodes, dfsClient.clientName, false);
+      success = createBlockOutputStream(nodes, dfsClient.clientName, 
+          false, false);
 
       if (!success) {
         DFSClient.LOG.info("Abandoning block " + block + " for file " + src);
@@ -1200,7 +1342,8 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
         }
         
         nodes = remainingNodes;
-        success = createBlockOutputStream(nodes, dfsClient.clientName, false);
+        success = createBlockOutputStream(nodes, dfsClient.clientName, 
+            false, false);
       }
     }
     
@@ -1215,7 +1358,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
   // Returns true if success, otherwise return failure.
   //
   private boolean createBlockOutputStream(DatanodeInfo[] nodes, String client,
-                  boolean recoveryFlag) {
+                  boolean recoveryFlag, boolean appendFlag) {
     String firstBadLink = "";
     if (DFSClient.LOG.isDebugEnabled()) {
       for (int i = 0; i < nodes.length; i++) {
@@ -1265,14 +1408,32 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
         tmpOut[curNode] = out;
         DataInputStream brs = new DataInputStream(NetUtils.getInputStream(s));
         replyIn[curNode] = brs;
+        
+        if (getProfileData() != null) {
+          getProfileData().nextBlock();
+        }
 
         int version = dfsClient.getDataTransferProtocolVersion();
-        WriteBlockHeader header = new WriteBlockHeader(version,
-            namespaceId, block.getBlockId(), block.getGenerationStamp(),
-            pipelineDepth, recoveryFlag, false, null, pipelineDepth - 1,
-            nodes, client);
-        header.writeVersionAndOpCode(out);
-        header.write(out);
+        // write the header
+        if (!appendFlag) {
+          WriteBlockHeader header = new WriteBlockHeader(version,
+              dfsClient.namespaceId, block.getBlockId(), block.getGenerationStamp(),
+              pipelineDepth, recoveryFlag, false, null, pipelineDepth - 1,
+              nodes, client);
+          header.getWritePipelineInfo().setWriteOptions(options);
+          header.getWritePipelineInfo().getWriteOptions()
+              .setIfProfileEnabled(profileData != null);
+          header.writeVersionAndOpCode(out);
+          header.write(out);
+        } else {
+          AppendBlockHeader header = new AppendBlockHeader(version,
+              dfsClient.namespaceId, block.getBlockId(), block.getNumBytes(), 
+              block.getGenerationStamp(),
+              pipelineDepth, false, null, pipelineDepth - 1,
+              nodes, client);
+          header.writeVersionAndOpCode(out);
+          header.write(out);
+        }
         checksum.writeHeader(out);
         out.flush();
 
@@ -1287,7 +1448,13 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       blockStream = dfsClient.new MultiDataOutputStream(tmpOut);
       blockReplyStream = dfsClient.new MultiDataInputStream(replyIn);
       this.s = sockets;
-
+      
+      if (appendFlag) {
+        // start the responseProcessor if the pipeline is successfully setup
+        // for append only
+        response = new ResponseProcessor(nodes);
+        response.start(); 
+      }
     } catch (IOException ie) {
 
       DFSClient.LOG.info("Exception in createBlockOutputStream " +
@@ -1319,6 +1486,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
         this.s = null;
       }
     }
+    
     return result;
   }
 
@@ -1378,7 +1546,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
               loc.getDataProtocolVersion());
           if (loc instanceof LocatedBlockWithMetaInfo) {
             LocatedBlockWithMetaInfo metaLoc = (LocatedBlockWithMetaInfo)loc;
-            this.namespaceId = metaLoc.getNamespaceID();
+            dfsClient.updateNamespaceIdIfNeeded(metaLoc.getNamespaceID());
             dfsClient.getNewNameNodeIfNeeded(metaLoc.getMethodFingerPrint());
           }
           return loc;
@@ -1447,6 +1615,8 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
                             " but found to be " + checksum.length);
     }
 
+    eventStartEnqueuePacket();
+    
     synchronized (dataQueue) {
 
       // If queue is full, then wait till we can create  enough space
@@ -1460,7 +1630,15 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       isClosed();
       
       if (currentPacket == null) {
-        currentPacket = new Packet(packetSize, chunksPerPacket, bytesCurBlock);
+        WritePacketClientProfile pktProfile = null;
+        if (getProfileData() != null) {
+          pktProfile = getProfileData().getWritePacketClientProfile();
+        }
+
+        currentPacket = DFSOutputStreamPacketFactory.getPacket(
+            DFSOutputStream.this, ifPacketIncludeVersion(),
+            getPacketVersion(), packetSize, chunksPerPacket, bytesCurBlock, pktProfile);
+
         if (DFSClient.LOG.isDebugEnabled()) {
           DFSClient.LOG.debug("DFSClient writeChunk allocating new packet seqno=" +
                     currentPacket.seqno +
@@ -1475,8 +1653,14 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
         }
       }
 
-      currentPacket.writeChecksum(checksum, 0, cklen);
-      currentPacket.writeData(b, offset, len);
+      if (packetVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_FIRST) {
+        currentPacket.writeChecksum(checksum, 0, cklen);
+        currentPacket.writeData(b, offset, len);
+      } else {
+        // packetVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_INLINE
+        currentPacket.writeData(b, offset, len);
+        currentPacket.writeChecksum(checksum, 0, cklen);
+      }
       currentPacket.numChunks++;
       bytesCurBlock += len;
 
@@ -1501,19 +1685,22 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
           lastFlushOffset = 0;
         }
         enqueueCurrentPacket();
+        
+        eventEndEnquePacket();
 
         // If this was the first write after reopening a file, then the above
         // write filled up any partial chunk. Tell the summer to generate full
         // crc chunks from now on.
         if (appendChunk) {
           appendChunk = false;
-          resetChecksumChunk(bytesPerChecksum);
+          resetChecksumChunk();
         }
         int psize = Math.min((int)(blockSize-bytesCurBlock), 
             dfsClient.writePacketSize);
         computePacketChunkSize(psize, bytesPerChecksum);
       }
     }
+    
 
     //LOG.debug("DFSClient writeChunk done length " + len +
     //          " checksum length " + cklen);
@@ -1523,6 +1710,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
     synchronized (dataQueue) {
       if (currentPacket == null) return;
       dataQueue.addLast(currentPacket);
+      currentPacket.eventAddToDataQueue();
       dataQueue.notifyAll();
       lastQueuedSeqno = currentPacket.seqno;
       currentPacket = null;
@@ -1539,21 +1727,23 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
     try {
       long toWaitFor;
       synchronized (this) {
+        eventStartSync();
         /* Record current blockOffset. This might be changed inside
          * flushBuffer() where a partial checksum chunk might be flushed.
          * After the flush, reset the bytesCurBlock back to its previous value,
          * any partial checksum chunk will be sent now and in next packet.
          */
         long saveOffset = bytesCurBlock;
-        Packet oldCurrentPacket = currentPacket;
+        DFSOutputStreamPacket oldCurrentPacket = currentPacket;
 
-        // flush checksum buffer, but keep checksum buffer intact
-        flushBuffer(true);
+        // flush checksum buffer as an incomplete chunk
+        flushBuffer(false, shouldKeepPartialChunkData());
         // bytesCurBlock potentially incremented if there was buffered data
-
+        
+        eventSyncStartWaitAck();
+        
         if (DFSClient.LOG.isDebugEnabled()) {
-          DFSClient.LOG.debug("DFSClient flush() : saveOffset " + saveOffset +
-                    " bytesCurBlock " + bytesCurBlock +
+          DFSClient.LOG.debug("DFSClient flush() : bytesCurBlock " + bytesCurBlock +
                     " lastFlushOffset " + lastFlushOffset);
         }
 
@@ -1573,13 +1763,19 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
           }
           currentPacket = null;
         }
-        // Restore state of stream. Record the last flush offset
-        // of the last full chunk that was flushed.
-        //
-        bytesCurBlock = saveOffset;
+
+        if (shouldKeepPartialChunkData()) {
+          // Restore state of stream. Record the last flush offset
+          // of the last full chunk that was flushed.
+          //
+          bytesCurBlock = saveOffset;
+        }
         toWaitFor = lastQueuedSeqno;
       }
+
       waitForAckedSeqno(toWaitFor);
+      
+      eventSyncPktAcked();
 
       // If any new blocks were allocated since the last flush,
       // then persist block locations on namenode.
@@ -1594,6 +1790,9 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       }
       long timeval = System.currentTimeMillis() - start;
       dfsClient.metrics.incSyncTime(timeval);
+
+      eventEndSync();
+
     } catch (IOException e) {
         lastException = new IOException("IOException flush:", e);
         closed = true;
@@ -1622,6 +1821,10 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       }
       return nodes.length;
     }
+  }
+  
+  public DFSWriteProfilingData getProfileData() {
+    return (DFSWriteProfilingData) profileData;
   }
 
   /**
@@ -1692,6 +1895,10 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
         lastException = e;
         throw e;
       }
+      if (profileData != null && profileData.isAutoPrintWhileClose()) {
+        DFSClient.LOG.info("Write Profile for " + this.src + ":"
+            + profileData.toString());
+      }
     } finally {
       // We always try to remove the connection from the lease to
       // avoid memory leak. In case of failed close(), it is possible
@@ -1759,21 +1966,31 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
     isClosed();
 
     try {
-        flushBuffer();       // flush from all upper layers
+        eventStartWrite();
 
+        flushBuffer(true, false);       // flush from all upper layers
+
+        eventCloseAfterFlushBuffer();
+        
         // Mark that this packet is the last packet in block.
         // If there are no outstanding packets and the last packet
         // was not the last one in the current block, then create a
         // packet with empty payload.
         synchronized (dataQueue) {
           if (currentPacket == null && bytesCurBlock != 0) {
-            currentPacket = new Packet(packetSize, chunksPerPacket,
-			bytesCurBlock);
+            WritePacketClientProfile pktProfile = null;
+            if (getProfileData() != null) {
+              pktProfile = getProfileData().getWritePacketClientProfile();
+            }
+            currentPacket = DFSOutputStreamPacketFactory.getPacket(
+              DFSOutputStream.this, ifPacketIncludeVersion(),
+              getPacketVersion(), packetSize, chunksPerPacket, bytesCurBlock, pktProfile);
           }
           if (currentPacket != null) {
             currentPacket.lastPacketInBlock = true;
           }
         }
+                
       flushInternal();             // flush all data to Datanodes
       isClosed(); // check to see if flushInternal had any exceptions
       closed = true; // allow closeThreads() to showdown threads
@@ -1798,7 +2015,11 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
       blockStream = null;
       blockReplyStream = null;
 
+      eventCloseReceivedAck();
+      
       dfsClient.closeFile(src, lastBlkOffset, getLastBlock());
+      
+      eventEndClose();
     } finally {
       closed = true;
     }
@@ -1810,7 +2031,7 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
 
   synchronized void setChunksPerPacket(int value) {
     chunksPerPacket = Math.min(chunksPerPacket, value);
-    packetSize = DataNode.PKT_HEADER_LEN + DFSClient.SIZE_OF_INTEGER +
+    packetSize = getPacketHeaderLen() + DFSClient.SIZE_OF_INTEGER +
 						 (checksum.getBytesPerChecksum() +
 							checksum.getChecksumSize()) * chunksPerPacket;
   }
@@ -1824,5 +2045,99 @@ class DFSOutputStream extends FSOutputSummer implements Syncable, Replicable {
    */
   long getInitialLen() {
     return initialFileSize;
+  }
+  
+  private void eventStartEnqueuePacket() {
+    if (getProfileData() != null) {
+      getProfileData().startEnqueuePacket();
+    }
+  }
+
+  private void eventEndEnquePacket() {
+    if (getProfileData() != null) {
+      getProfileData().endEnquePacket();
+    }
+  }
+
+  private void eventStartSync() {
+    if (getProfileData() != null) {
+      getProfileData().startSync();
+    }
+  }
+
+  private void eventSyncStartWaitAck() {
+    if (getProfileData() != null) {
+      getProfileData().syncStartWaitAck();
+    }
+  }
+
+  private void eventSyncPktAcked() {
+    if (getProfileData() != null) {
+      getProfileData().syncPktAcked();
+    }
+  }
+
+  private void eventEndSync() {
+    if (getProfileData() != null) {
+      getProfileData().endSync();
+    }
+  }
+
+  private void eventCloseAfterFlushBuffer() {
+    if (getProfileData() != null) {
+      getProfileData().closeAfterFlushBuffer();
+    }
+  }
+
+  private void eventCloseReceivedAck() {
+    if (getProfileData() != null) {
+      getProfileData().closeReceivedAck();
+    }
+  }
+
+  private void eventEndClose() {
+    if (getProfileData() != null) {
+      getProfileData().endClose();
+    }
+  }
+
+  public void eventStartReceiveAck() {
+    if (getProfileData() != null) {
+      getProfileData().startReceiveAck();
+    }
+  }
+
+  int getPacketHeaderLen() {
+    return DataNode.getPacketHeaderLen(ifPacketIncludeVersion());
+  }
+  
+  long incAndGetCurrentSeqno() {
+    return currentSeqno++;
+  }
+  
+  int getPacketVersion() {
+    return packetVersion;
+  }
+
+  boolean ifPacketIncludeVersion() {
+    return pktIncludeVersion;
+  }
+  
+  boolean ifForceSync() {
+    return forceSync;
+  }
+  
+  int getBytesPerChecksum() {
+    return checksum.getBytesPerChecksum();
+  }
+  
+  int getChecksumSize() {
+    return checksum.getChecksumSize();
+  }
+
+  @Override
+  protected boolean shouldKeepPartialChunkData() throws IOException {
+    return this.dfsClient.getDataTransferProtocolVersion() <
+        DataTransferProtocol.NOT_RESEND_PARTIAL_CHUNK_VERSION;
   }
 }

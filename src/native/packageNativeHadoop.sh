@@ -60,8 +60,18 @@ then
     cd $BUILD_NATIVE_DIR/$platform/lib
     $TAR *hadoop* | (cd $DIST_LIB_DIR/$platform/; $UNTAR)
     $TAR *liblzma* | (cd $DIST_LIB_DIR/$platform/; $UNTAR)
+    $TAR *liblz4* | (cd $DIST_LIB_DIR/$platform/; $UNTAR)
+    cp libGetUserGroupInfo.so $DIST_LIB_DIR/$platform/
     mv $DIST_LIB_DIR/$platform/liblzma.so $DIST_LIB_DIR/$platform/liblzma.so.0
+    mv $DIST_LIB_DIR/$platform/liblz4.so $DIST_LIB_DIR/$platform/liblz4.so.0
   done  
+fi
+
+if [ -d ${CGROUP_LIB_DIR} ]
+then
+    echo "Copying CGroup library in ${CGROUP_LIB_DIR} to $DIST_LIB_DIR/$platform/"
+    cd ${CGROUP_LIB_DIR}
+    cp libCGroupEventListener.so $DIST_LIB_DIR/$platform/
 fi
 
 if [ "${BUNDLE_SNAPPY_LIB}" == "true" ]

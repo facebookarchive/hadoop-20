@@ -28,8 +28,12 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.*;
 import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.hdfs.DFSInputStream;
+import org.apache.hadoop.hdfs.protocol.ClientCompatibleImplementation;
 import org.apache.hadoop.hdfs.protocol.*;
+import org.apache.hadoop.hdfs.protocol.ClientProxyRequests.OpenRequest;
+import org.apache.hadoop.hdfs.protocol.ClientProxyRequests.PingRequest;
+import org.apache.hadoop.hdfs.protocol.ClientProxyResponses.OpenResponse;
+import org.apache.hadoop.hdfs.protocol.ClientProxyResponses.PingResponse;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.*;
 import org.apache.hadoop.hdfs.server.namenode.NotReplicatedYetException;
@@ -41,6 +45,8 @@ import org.apache.hadoop.security.AccessControlException;
 
 import junit.framework.TestCase;
 import static org.mockito.Mockito.*;
+
+import org.apache.hadoop.util.StringUtils;
 import org.mockito.stubbing.Answer;
 import org.mockito.invocation.InvocationOnMock;
 
@@ -116,7 +122,7 @@ public class TestDFSClientRetries extends TestCase {
   
   // more tests related to different failure cases can be added here.
   
-  class TestNameNode implements ClientProtocol
+  class TestNameNode extends ClientCompatibleImplementation
   {
     int num_calls = 0;
     
@@ -141,7 +147,7 @@ public class TestDFSClientRetries extends TestCase {
                                      long clientVersion)
     throws IOException
     {
-      return versionID;
+      return ClientProtocol.versionID;
     }
     public ProtocolSignature getProtocolSignature(String protocol,
         long clientVersion, int clientMethodsHash) throws IOException {
@@ -164,10 +170,54 @@ public class TestDFSClientRetries extends TestCase {
     }
 
     @Override
-    public LocatedBlock addBlock(String src, String clientName, 
-                                 DatanodeInfo[] excludedNodes) 
-      throws IOException {
+    public LocatedBlock addBlock(String src, String clientName, DatanodeInfo[] excludedNodes) throws
+        IOException {
       return addBlock(src, clientName);
+    }
+
+    @Override
+    public LocatedBlock addBlock(String src, String clientName, DatanodeInfo[] excludedNode,
+        DatanodeInfo[] favoredNodes) throws IOException {
+      return addBlock(src, clientName);
+    }
+
+    public VersionedLocatedBlock addBlockAndFetchVersion(String src,
+        String clientName, DatanodeInfo[] excludedNodes) throws IOException {
+      return (VersionedLocatedBlock) addBlock(src, clientName);
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+        String clientName, DatanodeInfo[] excludedNodes) throws IOException {
+      return addBlockAndFetchMetaInfo(src, clientName, excludedNodes, null);
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+        String clientName, DatanodeInfo[] excludedNodes,
+        DatanodeInfo[] favoredNodes) throws IOException {
+      return addBlockAndFetchMetaInfo(src, clientName, excludedNodes, null, -1);
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+        String clientName, DatanodeInfo[] excludedNodes, long pos)
+        throws IOException {
+      return addBlockAndFetchMetaInfo(src, clientName, excludedNodes, null, pos, null);
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+        String clientName, DatanodeInfo[] excludedNodes,
+        DatanodeInfo[] favoredNodes, long pos) throws IOException {
+      return addBlockAndFetchMetaInfo(src, clientName, excludedNodes, favoredNodes, pos, null);
+    }
+
+    @Override
+    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
+      String clientName, DatanodeInfo[] excludedNodes,
+      DatanodeInfo[] favoredNodes, long pos, Block lastBlockId) throws IOException   {
+      return (LocatedBlockWithMetaInfo) addBlock(src, clientName);
     }
 
     // The following methods are stub methods that are not needed by this mock class
@@ -182,6 +232,8 @@ public class TestDFSClientRetries extends TestCase {
     public LocatedBlock append(String src, String clientName) throws IOException { return null; }
 
     public LocatedBlockWithMetaInfo appendAndFetchMetaInfo(String src, String clientName) throws IOException { return null; }
+    
+    public LocatedBlockWithOldGS appendAndFetchOldGS(String src, String clientName) throws IOException { return null; }
 
     public boolean setReplication(String src, short replication) throws IOException { return false; }
 
@@ -206,6 +258,9 @@ public class TestDFSClientRetries extends TestCase {
     public void concat(String trg, String[] srcs, boolean restricted) throws IOException {  }
 
     public boolean hardLink(String src, String dst) throws IOException { return false; }
+    
+    public void merge(String parity, String source, String codecId, int[] checksums)
+        throws IOException {}
 
     public String[] getHardLinkedFiles(String src) throws IOException {
       return new String[] {};
@@ -218,6 +273,9 @@ public class TestDFSClientRetries extends TestCase {
     public boolean delete(String src, boolean recursive) throws IOException { return false; }
 
     public boolean mkdirs(String src, FsPermission masked) throws IOException { return false; }
+    
+    public boolean raidFile(String src, String codecId, short expectedSourceRepl) 
+        throws IOException { return false;}
 
     public OpenFileInfo[] iterativeGetOpenFiles(
       String prefix, int millis, String start) throws IOException {
@@ -262,6 +320,8 @@ public class TestDFSClientRetries extends TestCase {
 
     public void metaSave(String filename) throws IOException {}
 
+    public void blockReplication(boolean isEnable) throws IOException {}
+
     public FileStatus getFileInfo(String src) throws IOException { return null; }
 
     public HdfsFileStatus getHdfsFileInfo(String src) throws IOException {
@@ -274,11 +334,6 @@ public class TestDFSClientRetries extends TestCase {
     public void fsync(String src, String client) throws IOException {}
 
     public void setTimes(String src, long mtime, long atime) throws IOException {}
-
-    @Override
-    public LocatedBlock addBlock(String src, String clientName,
-        DatanodeInfo[] excludedNode, DatanodeInfo[] favoredNodes)
-      throws IOException { return null; }
 
     @Override @Deprecated
     public FileStatus[] getCorruptFiles()
@@ -314,54 +369,9 @@ public class TestDFSClientRetries extends TestCase {
       return null;
     }
 
-    public VersionedLocatedBlock addBlockAndFetchVersion(String src,
-        String clientName, DatanodeInfo[] excludedNodes) throws IOException {
-      // TODO Auto-generated method stub
-      return null;
-    }
-
-    @Override
-    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
-        String clientName, DatanodeInfo[] excludedNodes) throws IOException {
-      // TODO Auto-generated method stub
-      return null;
-    }
-
     @Override
     public LocatedBlocksWithMetaInfo openAndFetchMetaInfo(String src,
         long offset, long length) throws IOException {
-      // TODO Auto-generated method stub
-      return null;
-    }
-
-    @Override
-    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
-        String clientName, DatanodeInfo[] excludedNodes,
-        DatanodeInfo[] favoredNodes) throws IOException {
-      // TODO Auto-generated method stub
-      return null;
-    }
-
-    @Override
-    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
-        String clientName, DatanodeInfo[] excludedNodes, long pos)
-        throws IOException {
-      // TODO Auto-generated method stub
-      return null;
-    }
-
-    @Override
-    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
-        String clientName, DatanodeInfo[] excludedNodes,
-        DatanodeInfo[] favoredNodes, long pos) throws IOException {
-      // TODO Auto-generated method stub
-      return null;
-    }
-
-    @Override
-    public LocatedBlockWithMetaInfo addBlockAndFetchMetaInfo(String src,
-      String clientName, DatanodeInfo[] excludedNodes,
-      DatanodeInfo[] favoredNodes, long pos, Block lastBlockId) throws IOException   {
       // TODO Auto-generated method stub
       return null;
     }
@@ -381,6 +391,32 @@ public class TestDFSClientRetries extends TestCase {
     @Override
     public void recount() throws IOException {
     }
+
+    @Override
+    public void updatePipeline(String clientName, Block oldBlock,
+        Block newBlock, DatanodeID[] newNodes) throws IOException {
+      throw new IOException("unimplemented");
+    }
+
+    @Override
+    public long nextGenerationStamp(Block block, boolean fromNN)
+        throws IOException {
+      // TODO Auto-generated method stub
+      return 0;
+    }
+
+    @Override
+    public void commitBlockSynchronization(Block block,
+        long newgenerationstamp, long newlength, boolean closeFile,
+        boolean deleteblock, DatanodeID[] newtargets) throws IOException {
+      // TODO Auto-generated method stub
+      
+    }
+
+    @Override
+    public PingResponse ping(PingRequest req) throws IOException {
+      return null;
+    }
   }
 
   
@@ -399,8 +435,8 @@ public class TestDFSClientRetries extends TestCase {
     try {
       os.close();
     } catch (Exception e) {
-      assertTrue("Retries are not being stopped correctly",
-           e.getMessage().equals(tnn.ADD_BLOCK_EXCEPTION));
+      assertTrue("Retries are not being stopped correctly: " + StringUtils.stringifyException(e),
+          e.getMessage().equals(tnn.ADD_BLOCK_EXCEPTION));
     }
   }
 
@@ -436,9 +472,10 @@ public class TestDFSClientRetries extends TestCase {
         // If the client will retry maxBlockAcquires times, then if we fail
         // any more than that number of times, the operation should entirely
         // fail.
-        doAnswer(new FailNTimesAnswer(preSpyNN, numDataNode,
-            Math.min(maxBlockAcquires, numDataNode) + 1))
-          .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+        FailNTimesAnswer answer1 = new FailNTimesAnswer(preSpyNN, numDataNode,
+            Math.min(maxBlockAcquires, numDataNode) + 1);
+        doAnswer(answer1).when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+        doAnswer(answer1).when(spyNN).open(any(OpenRequest.class));
         try {
           IOUtils.copyBytes(client.open(file.toString()), new IOUtils.NullOutputStream(), conf,
                             true);
@@ -448,19 +485,20 @@ public class TestDFSClientRetries extends TestCase {
         }
   
         // If we fail exactly that many times, then it should succeed.
-        doAnswer(new FailNTimesAnswer(preSpyNN, numDataNode,
-            Math.min(maxBlockAcquires, numDataNode)))
-          .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
-        IOUtils.copyBytes(client.open(file.toString()), new IOUtils.NullOutputStream(), conf,
-                          true);
+        FailNTimesAnswer answer2 = new FailNTimesAnswer(preSpyNN, numDataNode,
+            Math.min(maxBlockAcquires, numDataNode));
+        doAnswer(answer2).when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+        doAnswer(answer2).when(spyNN).open(any(OpenRequest.class));
+        IOUtils.copyBytes(client.open(file.toString()), new IOUtils.NullOutputStream(), conf, true);
   
         DFSClient.LOG.info("Starting test case for failure reset");
   
         // Now the tricky case - if we fail a few times on one read, then succeed,
         // then fail some more on another read, it shouldn't fail.
-        doAnswer(new FailNTimesAnswer(preSpyNN, numDataNode,
-            Math.min(maxBlockAcquires, numDataNode)))
-          .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+        FailNTimesAnswer answer3 = new FailNTimesAnswer(preSpyNN, numDataNode,
+            Math.min(maxBlockAcquires, numDataNode));
+        doAnswer(answer3).when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+        doAnswer(answer3).when(spyNN).open(any(OpenRequest.class));
         DFSInputStream is = client.open(file.toString());
         byte buf[] = new byte[10];
         IOUtils.readFully(is, buf, 0, buf.length);
@@ -471,9 +509,10 @@ public class TestDFSClientRetries extends TestCase {
         // So, force the block locations on this stream to be refreshed from bad info.
         // When reading again, it should start from a fresh failure count, since
         // we're starting a new operation on the user level.
-        doAnswer(new FailNTimesAnswer(preSpyNN, numDataNode,
-            Math.min(maxBlockAcquires, numDataNode)))
-          .when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+        FailNTimesAnswer answer4 = new FailNTimesAnswer(preSpyNN, numDataNode,
+            Math.min(maxBlockAcquires, numDataNode));
+        doAnswer(answer4).when(spyNN).openAndFetchMetaInfo(anyString(), anyLong(), anyLong());
+        doAnswer(answer4).when(spyNN).open(any(OpenRequest.class));
         is.openInfo();
         // Seek to beginning forces a reopen of the BlockReader - otherwise it'll
         // just keep reading on the existing stream and the fact that we've poisoned
@@ -494,7 +533,7 @@ public class TestDFSClientRetries extends TestCase {
    * a poisoned block list a certain number of times before returning
    * a proper one.
    */
-  private static class FailNTimesAnswer implements Answer<LocatedBlocks> {
+  private static class FailNTimesAnswer implements Answer {
     private int failuresLeft;
     private NameNode realNN;
     private int numDataNode;
@@ -505,13 +544,20 @@ public class TestDFSClientRetries extends TestCase {
       this.numDataNode = numDataNode;
     }
 
-    public LocatedBlocksWithMetaInfo answer(InvocationOnMock invocation) throws IOException {
+    public Object answer(InvocationOnMock invocation) throws IOException {
       Object args[] = invocation.getArguments();
-      LocatedBlocksWithMetaInfo realAnswer = realNN.openAndFetchMetaInfo(
-        (String)args[0],
-        (Long)args[1],
-        (Long)args[2]);
+      if (args.length == 1) {
+        LocatedBlocksWithMetaInfo realAnswer = realNN.open((OpenRequest) args[0]).get();
+        return new OpenResponse(injectFailureIfNecessary(realAnswer));
+      } else {
+        LocatedBlocksWithMetaInfo realAnswer = realNN.openAndFetchMetaInfo((String) args[0],
+            (Long) args[1], (Long) args[2]);
+        return injectFailureIfNecessary(realAnswer);
+      }
+    }
 
+    private LocatedBlocksWithMetaInfo injectFailureIfNecessary(
+        LocatedBlocksWithMetaInfo realAnswer) {
       if (failuresLeft-- > 0) {
         NameNode.LOG.info("FailNTimesAnswer injecting failure.");
         return makeBadBlockList(realAnswer);

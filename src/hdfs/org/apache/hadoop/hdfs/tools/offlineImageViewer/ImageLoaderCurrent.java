@@ -49,15 +49,17 @@ import org.apache.hadoop.util.InjectionHandler;
  * The only difference between v18 and v19 was the utilization of the
  * stickybit.  Therefore, the same viewer can reader either format.
  *
- * Versions -19 fsimage layout (with changes from -16 up):
+ * fsimage layout (with changes from -16 up):
  * Image version (int)
  * Namepsace ID (int)
  * NumFiles (long)
  * Generation stamp (long)
  * Last Transaction ID (long) // added in -37
+ * Last INode ID (long) // added in -42
  * INodes (count = NumFiles)
  *  INode
  *    Path (String)
+ *    INode ID (long) // added in -42
  *    Replication (short)
  *    Modification Time (long as date)
  *    Access Time (long) // added in -16
@@ -68,6 +70,7 @@ import org.apache.hadoop.util.InjectionHandler;
  *        Block ID (long)
  *        Num bytes (long)
  *        Generation stamp (long)
+ *        Block checksum (int) // added in -43
  *    Namespace Quota (long)
  *    Diskspace Quota (long) // added in -18
  *    Permissions
@@ -79,6 +82,7 @@ import org.apache.hadoop.util.InjectionHandler;
  * INodesUnderConstruction (count = NumINodesUnderConstruction)
  *  INodeUnderConstruction
  *    Path (bytes as string)
+ *    INode ID (long) // added in -42
  *    Replication (short)
  *    Modification time (long as date)
  *    Preferred block size (long)
@@ -88,6 +92,7 @@ import org.apache.hadoop.util.InjectionHandler;
  *        Block ID (long)
  *        Num bytes (long)
  *        Generation stamp (long)
+ *        Block checksum (int)
  *    Permissions
  *      Username (String)
  *      Groupname (String)
@@ -113,7 +118,7 @@ class ImageLoaderCurrent implements ImageLoader {
                                       new SimpleDateFormat("yyyy-MM-dd HH:mm");
   private static int[] versions = { -16, -17, -18, -19, -20, -21, -22, -23,
       -24, -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37, -38,
-      -39, -40, -41};
+      -39, -40, -41, -42, -43, -44 };
   private int imageVersion = 0;
 
   /* (non-Javadoc)
@@ -151,6 +156,10 @@ class ImageLoaderCurrent implements ImageLoader {
       v.visit(ImageElement.GENERATION_STAMP, in.readLong());
       if (imageVersion <= FSConstants.STORED_TXIDS) {
         v.visit(ImageElement.LAST_TXID, in.readLong());
+      }
+      
+      if (LayoutVersion.supports(Feature.ADD_INODE_ID, imageVersion)) {
+        v.visit(ImageElement.LAST_INODE_ID, in.readLong());
       }
 
       if (LayoutVersion.supports(Feature.FSIMAGE_COMPRESSION, imageVersion)) {
@@ -200,9 +209,15 @@ class ImageLoaderCurrent implements ImageLoader {
     for(int i = 0; i < numINUC; i++) {
       checkInterruption();
       v.visitEnclosingElement(ImageElement.INODE_UNDER_CONSTRUCTION);
+      
       byte [] name = FSImageSerialization.readBytes(in);
       String n = new String(name, "UTF8");
       v.visit(ImageElement.INODE_PATH, n);
+      
+      if (LayoutVersion.supports(Feature.ADD_INODE_ID, imageVersion)) {
+        v.visit(ImageElement.INODE_ID, in.readLong());
+      }
+      
       v.visit(ImageElement.REPLICATION, in.readShort());
       v.visit(ImageElement.MODIFICATION_TIME, formatDate(in.readLong()));
 
@@ -253,7 +268,13 @@ class ImageLoaderCurrent implements ImageLoader {
     }
     
     if(skipBlocks) {
-      int bytesToSkip = ((Long.SIZE * 3 /* fields */) / 8 /*bits*/) * numBlocks;
+      int fieldsBytes = Long.SIZE * 3;
+      if (LayoutVersion.supports(Feature.BLOCK_CHECKSUM, imageVersion)) {
+        // For block checksum
+        fieldsBytes += Integer.SIZE;
+      }
+      
+      int bytesToSkip = ((fieldsBytes /* fields */) / 8 /*bits*/) * numBlocks;
       if(in.skipBytes(bytesToSkip) != bytesToSkip)
         throw new IOException("Error skipping over blocks");
       
@@ -263,6 +284,9 @@ class ImageLoaderCurrent implements ImageLoader {
         v.visit(ImageElement.BLOCK_ID, in.readLong());
         v.visit(ImageElement.NUM_BYTES, in.readLong());
         v.visit(ImageElement.GENERATION_STAMP, in.readLong());
+        if (LayoutVersion.supports(Feature.BLOCK_CHECKSUM, imageVersion)) {
+          v.visit(ImageElement.BLOCK_CHECKSUM, in.readInt());
+        }
         v.leaveEnclosingElement(); // Block
       }
     }
@@ -368,6 +392,7 @@ class ImageLoaderCurrent implements ImageLoader {
       boolean skipBlocks, String parentName) throws IOException {
     checkInterruption();
     v.visitEnclosingElement(ImageElement.INODE);
+
     String pathName = FSImageSerialization.readString(in);
     if (parentName != null) {  // local name
       pathName = "/" + pathName;
@@ -377,12 +402,22 @@ class ImageLoaderCurrent implements ImageLoader {
     }
 
     v.visit(ImageElement.INODE_PATH, pathName);
+    
+    
+    if (LayoutVersion.supports(Feature.ADD_INODE_ID, imageVersion)) {
+      v.visit(ImageElement.INODE_ID, in.readLong());
+    }
+    
     if (LayoutVersion.supports(Feature.HARDLINK, imageVersion)) {
       byte inodeType = in.readByte();
       if (inodeType == INode.INodeType.HARDLINKED_INODE.type) {
         v.visit(ImageElement.INODE_TYPE, INode.INodeType.HARDLINKED_INODE.toString());
         long hardlinkID =  WritableUtils.readVLong(in);
         v.visit(ImageElement.INODE_HARDLINK_ID, hardlinkID);
+      } else if (inodeType == INode.INodeType.RAIDED_INODE.type) {
+        v.visit(ImageElement.INODE_TYPE, INode.INodeType.RAIDED_INODE.toString());
+        String codecId = WritableUtils.readString(in);
+        v.visit(ImageElement.RAID_CODEC_ID, codecId);
       } else {
         v.visit(ImageElement.INODE_TYPE, INode.INodeType.REGULAR_INODE.toString());
       }

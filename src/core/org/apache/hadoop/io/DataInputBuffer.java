@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.io;
 
+import org.apache.hadoop.io.CompatibleWritable.CompatibleDataInput;
+
 import java.io.*;
 
 /** A reusable {@link DataInput} implementation that reads from an in-memory
@@ -38,7 +40,7 @@ import java.io.*;
  * </pre>
  *  
  */
-public class DataInputBuffer extends DataInputStream {
+public class DataInputBuffer extends DataInputStream implements CompatibleDataInput {
   private static class Buffer extends ByteArrayInputStream {
     public Buffer() {
       super(new byte[] {});
@@ -88,4 +90,8 @@ public class DataInputBuffer extends DataInputStream {
   /** Returns the length of the input. */
   public int getLength() { return buffer.getLength(); }
 
+  @Override
+  public boolean canReadNextVersion() {
+    return buffer.getPosition() < buffer.getLength();
+  }
 }

@@ -24,6 +24,7 @@ import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
@@ -32,11 +33,14 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Random;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Comparator;
 
+import org.apache.commons.logging.Log;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.BlockAndLocation;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FilterFileSystem;
@@ -54,6 +58,18 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NodeBase;
 
 public class DFSUtil {
+  private static final ThreadLocal<Random> RANDOM = new ThreadLocal<Random>() {
+    @Override
+    protected Random initialValue() {
+      return new Random();
+    }
+  };
+  
+  /** @return a pseudo random number generator. */
+  public static Random getRandom() {
+    return RANDOM.get();
+  }
+  
   /**
    * Compartor for sorting DataNodeInfo[] based on decommissioned states.
    * Decommissioned nodes are moved to the end of the array on sorting with
@@ -217,6 +233,33 @@ public class DFSUtil {
     }
     return result;
   }
+  
+  /**
+   * An implementation of the String.split(String);
+   */
+  public static String[] split(String str, char separator) {
+    final int len;
+    if (str == null 
+        || ((len = str.length()) == 0)) {
+      return null;
+    }
+
+    List<String> componentList = new ArrayList<String>();
+    int startIndex = 0;
+
+    for (int i = 0; i < len; i++) {
+      if (str.charAt(i) == separator) {
+        componentList.add(str.substring(startIndex, i));
+        startIndex = i + 1;
+      }
+    }
+
+    if (str.charAt(len - 1) != separator) {
+      componentList.add(str.substring(startIndex, len));
+    }
+
+    return componentList.toArray(new String[componentList.size()]);
+  }
 
   public static byte[][] splitAndGetPathComponents(String str) {
     try {
@@ -290,7 +333,7 @@ public class DFSUtil {
     return str.substring(startIndex, endIndex).getBytes(utf8charsetName);
   }
   
-  /**
+   /**
    * Convert a LocatedBlocks to BlockLocations[]
    * @param blocks a LocatedBlocks
    * @return an array of BlockLocations
@@ -326,6 +369,48 @@ public class DFSUtil {
     }
     return blkLocations;
   }
+
+  
+  /**
+  * Convert a LocatedBlocks to BlockAndLocations[]
+  * @param blocks a LocatedBlocks
+  * @return an array of BlockLocations
+  */
+ public static BlockAndLocation[] locatedBlocks2BlockLocations(
+     LocatedBlocks blocks) {
+   if (blocks == null) {
+     return new BlockAndLocation[0];
+   }
+   int nrBlocks = blocks.locatedBlockCount();
+   BlockAndLocation[] blkLocations = new BlockAndLocation[nrBlocks];
+   if (nrBlocks == 0) {
+     return blkLocations;
+   }
+   int idx = 0;
+   for (LocatedBlock blk : blocks.getLocatedBlocks()) {
+     assert idx < nrBlocks : "Incorrect index";
+     DatanodeInfo[] locations = blk.getLocations();
+     String[] hosts = new String[locations.length];
+     String[] names = new String[locations.length];
+     String[] racks = new String[locations.length];
+     for (int hCnt = 0; hCnt < locations.length; hCnt++) {
+       hosts[hCnt] = locations[hCnt].getHostName();
+       names[hCnt] = locations[hCnt].getName();
+       NodeBase node = new NodeBase(names[hCnt],
+                                    locations[hCnt].getNetworkLocation());
+       racks[hCnt] = node.toString();
+     }
+     Block block = blk.getBlock();
+     blkLocations[idx] = new BlockAndLocation(block.getBlockId(),
+                                           block.getGenerationStamp(),
+                                           names, hosts, racks,
+                                           blk.getStartOffset(),
+                                           block.getNumBytes(),
+                                           blk.isCorrupt());
+     idx++;
+   }
+   return blkLocations;
+ }
 
   /**
    * @return all corrupt files in dfs
@@ -425,9 +510,7 @@ public class DFSUtil {
     try {
       defaultAddress = conf.get(FileSystem.FS_DEFAULT_NAME_KEY + suffix);
       if (defaultAddress != null) {
-        Configuration newConf = new Configuration(conf);
-        newConf.set(FileSystem.FS_DEFAULT_NAME_KEY, defaultAddress);
-        defaultAddress = NameNode.getHostPortString(NameNode.getAddress(newConf));
+        defaultAddress = NameNode.getDefaultAddress(conf);
       }
     } catch (IllegalArgumentException e) {
       defaultAddress = null;
@@ -544,13 +627,7 @@ public class DFSUtil {
    */
   public static List<InetSocketAddress> getClientRpcAddresses(
       Configuration conf, Collection<String> suffixes) throws IOException {
-    // Use default address as fall back
-    String defaultAddress;
-    try {
-      defaultAddress = NameNode.getHostPortString(NameNode.getAddress(conf));
-    } catch (IllegalArgumentException e) {
-      defaultAddress = null;
-    }
+
     List<InetSocketAddress> addressList; 
     if(suffixes != null && !suffixes.isEmpty()){
       addressList = new ArrayList<InetSocketAddress>();
@@ -559,6 +636,13 @@ public class DFSUtil {
             FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY));
       }
     } else {
+      // Use default address as fall back
+      String defaultAddress;
+      try {
+        defaultAddress = NameNode.getDefaultAddress(conf);
+      } catch (IllegalArgumentException e) {
+        defaultAddress = null;
+      }
       addressList = getAddresses(conf, defaultAddress,
         FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
     }
@@ -588,7 +672,7 @@ public class DFSUtil {
     // Use default address as fall back
     String defaultAddress;
     try {
-      defaultAddress = NameNode.getHostPortString(NameNode.getAddress(conf));
+      defaultAddress = NameNode.getDefaultAddress(conf);
     } catch (IllegalArgumentException e) {
       defaultAddress = null;
     }
@@ -810,14 +894,24 @@ public class DFSUtil {
       return null;
   }
   
-  
   /*
-   * Connect to the some url to get the html content 
+   * Connect to the some url to get the html content
    */
-  public static String getHTMLContent(URI uri) throws IOException {
+  public static String getHTMLContent(URI uri) throws IOException,
+      SocketTimeoutException {
+    return getHTMLContentWithTimeout(uri.toURL(), 0, 0); 
+  }
+  
+  public static String getHTMLContentWithTimeout(URL path, int connectTimeout, 
+      int readTimeout) throws IOException, SocketTimeoutException  {
     InputStream stream = null;
-    URL path = uri.toURL();
     URLConnection connection = path.openConnection();
+    if (connectTimeout > 0) {
+      connection.setConnectTimeout(connectTimeout);
+    }
+    if (readTimeout > 0) {
+      connection.setReadTimeout(readTimeout);
+    }
     stream = connection.getInputStream();
     BufferedReader input = new BufferedReader(
         new InputStreamReader(stream));
@@ -854,6 +948,12 @@ public class DFSUtil {
       sb.append(se + "\n");
     }
     return sb.toString();   
+  }
+
+  public static void throwAndLogIllegalState(String message, Log LOG) {
+    IllegalStateException ise = new IllegalStateException(message);
+    LOG.error(ise);
+    throw ise;
   }
   
   public static String getAllStackTraces() {

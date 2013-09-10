@@ -20,16 +20,24 @@ package org.apache.hadoop.hdfs.server.namenode.bookkeeper;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.LedgerEntry;
 import org.apache.bookkeeper.client.LedgerHandle;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Enumeration;
+
+import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.BookKeeperJournalManager.bkException;
+import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZkUtil.interruptedException;
 
 /**
  * A {@link InputStream} over a BookKeeper ledger which maps to a specific
  * edit log segment.
  */
 public class BookKeeperJournalInputStream extends InputStream {
+
+  private static final Log LOG =
+      LogFactory.getLog(BookKeeperJournalInputStream.class);
 
   // BookKeeper ledger is mutable as the ledger may need to be re-opened
   // by the caller in order to find the true end for tailing
@@ -98,7 +106,7 @@ public class BookKeeperJournalInputStream extends InputStream {
     }
 
     void incrementNextLedgerEntryId() {
-      this.nextLedgerEntryId += 1;
+      this.nextLedgerEntryId++;
     }
 
     void setNextLedgerEntryId(long nextLedgerEntryId) {
@@ -147,11 +155,19 @@ public class BookKeeperJournalInputStream extends InputStream {
   private InputStream nextEntryStream() throws IOException {
     long nextLedgerEntryId = currentStreamState.getNextLedgerEntryId();
     if (nextLedgerEntryId > maxLedgerEntryIdSeen) {
-      // Return null if we've reached the end of the ledger: we can not
-      // read beyond the end of the ledger and it is up to the caller to
-      // either find the new "tail" of the ledger (if the ledger is in-
-      // progress) or open the next ledger (if the ledger is finalized)
-      return null;
+      updateMaxLedgerEntryIdSeen();
+      if (nextLedgerEntryId > maxLedgerEntryIdSeen) {
+        // Return null if we've reached the end of the ledger: we can not
+        // read beyond the end of the ledger and it is up to the caller to
+        // either find the new "tail" of the ledger (if the ledger is in-
+        // progress) or open the next ledger (if the ledger is finalized)
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Requesting to ledger entryId " + nextLedgerEntryId +
+              ", but "+ " maxLedgerEntryIdSeen is " + maxLedgerEntryIdSeen +
+              ", ledger length is " + ledger.getLength());
+        }
+        return null;
+      }
     }
     try {
       Enumeration<LedgerEntry> entries =
@@ -181,9 +197,44 @@ public class BookKeeperJournalInputStream extends InputStream {
    * determine the "tail" of the ledger.
    * @param ledger The new ledger object
    */
-  public void resetLedger(LedgerHandle ledger) {
+  public void resetLedger(LedgerHandle ledger) throws IOException {
     this.ledger = ledger;
-    this.maxLedgerEntryIdSeen = ledger.getLastAddConfirmed();
+    updateMaxLedgerEntryIdSeen();
+  }
+
+  /**
+   * Set <code>maxLedgerEntryIdSeen</code> to the maximum of last confirmed
+   * entry-id from a quorum of bookies and last confirmed entry-id from
+   * metadata stored in ZooKeeper. The reason is to handle the case of
+   * when a ledger becomes finalized mid-flight: in this case last confirmed
+   * entry-id that is read from a quorum is no longer reliable, but a reliable
+   * last-confirmed entry-id is now available in ZooKeeper metadata which is
+   * updated when a ledger is finalized.
+   * @throws IOException If there's an error talking to BookKeeper
+   *                     or ZooKeeper
+   */
+  private void updateMaxLedgerEntryIdSeen() throws IOException {
+    long lcFromMetadata = ledger.getLastAddConfirmed();
+    long lcFromQuorum;
+    try {
+      lcFromQuorum = ledger.readLastConfirmed();
+    } catch (BKException e) {
+      bkException("Unable to read last confirmed ledger entry id "
+          + "from ledger " + ledger.getId(), e);
+      return;
+    } catch (InterruptedException e) {
+      interruptedException("Interrupted reading last confirmed ledger " +
+          "entry id from ledger " + ledger.getId(), e);
+      return;
+    }
+    long newMaxLedgerEntryIdSeen = Math.max(lcFromMetadata, lcFromQuorum);
+    if (newMaxLedgerEntryIdSeen > maxLedgerEntryIdSeen) {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Resetting maxLedgerEntryIdSeen from " + maxLedgerEntryIdSeen +
+            " to " + newMaxLedgerEntryIdSeen);
+      }
+      maxLedgerEntryIdSeen = newMaxLedgerEntryIdSeen;
+    }
   }
 
   /**
@@ -199,8 +250,7 @@ public class BookKeeperJournalInputStream extends InputStream {
 
   /**
    * "Go back" to the specified reader position by resetting the reader
-   * a saved state associated with that position. Currently, we can only reset
-   * to either position 0 (beginning of the ledger), or the last saved position
+   * a saved state associated with that position.
    * @param position The reader position we want to go back to
    * @throws IllegalArgumentException If an illegal position is specified
    * @throws IOException If there is an error communicating with BookKeeper
@@ -208,8 +258,19 @@ public class BookKeeperJournalInputStream extends InputStream {
   public void position(long position) throws IOException {
     if (position == 0) {
       currentStreamState.setNextLedgerEntryId(firstLedgerEntryId);
+      currentStreamState.setOffsetInEntry(0);
       entryStream = null;
-    } else if (position == savedStreamState.getReaderPosition()) {
+    } else if (savedStreamState == null ||
+        position != savedStreamState.getReaderPosition()) {
+      // Seek to an arbitrary position through "brute force"
+      if (position > Integer.MAX_VALUE) {
+        throw new IllegalArgumentException("Asked to position to " + position +
+            ", but can only \"brute-force\" skip up" + Integer.MAX_VALUE);
+      }
+      position(0);
+      skip(position, (int) position);
+    } else {
+      // savedStream != null && position == savedStream.getReaderPosition()
       int bytesToSkip = 0;
       if (savedStreamState.getOffsetInLedger() > position) {
         // Since reading from the input stream is buffered, we usually will
@@ -225,25 +286,34 @@ public class BookKeeperJournalInputStream extends InputStream {
             savedStreamState.getOffsetInLedger() + ") < position(" + position
             + ")");
       }
-      long nextLedgerEntryId = savedStreamState.getNextLedgerEntryId() - 1;
+      long nextLedgerEntryId = savedStreamState.getNextLedgerEntryId() == firstLedgerEntryId ?
+          firstLedgerEntryId : (savedStreamState.getNextLedgerEntryId() - 1);
       currentStreamState.setNextLedgerEntryId(nextLedgerEntryId);
-      entryStream = null;
       if (bytesToSkip > 0) {
-        // Read further into the ledger such that our position matches the
-        // position last consumed by the reader. Discard the data read.
-        byte[] data = new byte[bytesToSkip];
-        int skipped;
-        if ((skipped = read(data, 0, bytesToSkip)) != bytesToSkip) {
-          throw new IllegalStateException("Could not skip to position " +
-              position + ", tried to read " + bytesToSkip  +
-              " but only read " + skipped + " bytes!");
+        entryStream = null;
+        skip(position, bytesToSkip);
+      } else {
+        if (currentStreamState.getNextLedgerEntryId() > 0) {
+          currentStreamState.setNextLedgerEntryId(currentStreamState.getNextLedgerEntryId() - 1);
         }
+        entryStream = nextEntryStream();
       }
-    } else {
-      throw new IllegalArgumentException(getClass() +
-          " does not support seeking to arbitrary positions");
     }
     currentStreamState.setOffsetInLedger(position);
+  }
+
+  private void skip(long position, int bytesToSkip) throws IOException {
+    // Read further into the ledger such that our position matches the
+    // position last consumed by the reader. Discard the data read.
+    LOG.info("Attempting to skip " + bytesToSkip + " bytes to get to position "
+        + position);
+    byte[] data = new byte[bytesToSkip];
+    int skipped;
+    if ((skipped = read(data, 0, bytesToSkip)) != bytesToSkip) {
+      throw new IllegalStateException("Could not skip to position " +
+          position + ", tried to read " + bytesToSkip  +
+          " but only read " + skipped + " bytes!");
+    }
   }
 
   @Override

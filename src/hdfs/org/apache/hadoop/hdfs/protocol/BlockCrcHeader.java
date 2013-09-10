@@ -59,9 +59,6 @@ public class BlockCrcHeader extends DataTransferHeader {
   }
 
   public void write(DataOutput out) throws IOException {
-    if (getDataTransferVersion() < DataTransferProtocol.BLOCK_CRC_VERSION) {
-      throw new IOException("Server version doesn't support block CRC");
-    }
     if (getDataTransferVersion() >= DataTransferProtocol.FEDERATION_VERSION) {
       out.writeInt(namespaceId);
     }

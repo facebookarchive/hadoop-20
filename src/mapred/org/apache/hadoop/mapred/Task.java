@@ -55,6 +55,7 @@ import org.apache.hadoop.io.serializer.SerializationFactory;
 import org.apache.hadoop.mapred.IFile.Writer;
 import org.apache.hadoop.mapreduce.JobStatus;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.util.JMXThreadBasedMetrics;
 import org.apache.hadoop.util.Progress;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -109,7 +110,17 @@ abstract public class Task implements Writable, Configurable {
     PHYSICAL_MEMORY_BYTES,
     VIRTUAL_MEMORY_BYTES,
     REDUCERS_PROCESSING_NO_DATA,
-    REDUCERS_PROCESSING_DATA
+    REDUCERS_PROCESSING_DATA,
+    RSS_MEMORY_BYTES,
+    MAX_MEMORY_BYTES,
+    INST_MEMORY_BYTES,
+    MAX_RSS_MEMORY_BYTES,
+    CPU_MILLISECONDS_JVM,
+    REDUCE_COPY_CPU_JVM,
+    REDUCE_SORT_CPU_JVM,
+    MAP_SPILL_CPU_JVM,
+    MAP_MEM_SORT_CPU_JVM,
+    MAP_MERGE_CPU_JVM
   }
   
   //Counters for Map Tasks
@@ -200,7 +211,8 @@ abstract public class Task implements Writable, Configurable {
   protected TaskUmbilicalProtocol umbilical;
   private ResourceCalculatorPlugin resourceCalculator = null;
   private long initCpuCumulativeTime = 0;
-
+  private long initJvmCpuCumulativeTime = 0;
+  
   protected long taskStartTime;
   protected long taskEndTime;
   
@@ -208,6 +220,10 @@ abstract public class Task implements Writable, Configurable {
   // by the Hadoop scheduler for Mesos to associate a Mesos task ID with each
   // task and recover these IDs on the TaskTracker.
   protected BytesWritable extraData = new BytesWritable();
+  
+  private CGroupResourceTracker cgResourceTracker = null;
+  
+  protected JMXThreadBasedMetrics jmxThreadInfoTracker = null;
   
   ////////////////////////////////////////////
   // Constructors
@@ -539,6 +555,16 @@ abstract public class Task implements Writable, Configurable {
       initCpuCumulativeTime =
         resourceCalculator.getProcResourceValues().getCumulativeCpuTime();
     }
+    
+    jmxThreadInfoTracker = new JMXThreadBasedMetrics();
+    jmxThreadInfoTracker.registerThreadToTask(
+        "MAIN_TASK", Thread.currentThread().getId());
+    this.initJvmCpuCumulativeTime = 
+        jmxThreadInfoTracker.getCumulativeCPUTime();
+    
+    cgResourceTracker = new CGroupResourceTracker (
+                          job, CGroupResourceTracker.RESOURCE_TRAKCER_TYPE.TASK, 
+                          taskId.toString(), resourceCalculator);
   }
 
   protected class TaskReporterMonitor
@@ -845,17 +871,31 @@ abstract public class Task implements Writable, Configurable {
     long cpuTime = res.getCumulativeCpuTime();
     long pMem = res.getPhysicalMemorySize();
     long vMem = res.getVirtualMemorySize();
+    long cpuJvmTime = this.jmxThreadInfoTracker.getCumulativeCPUTime();
     // Remove the CPU time consumed previously by JVM reuse
     cpuTime -= initCpuCumulativeTime;
+    cpuJvmTime -= this.initJvmCpuCumulativeTime;
     counters.findCounter(Counter.CPU_MILLISECONDS).setValue(cpuTime);
     counters.findCounter(Counter.PHYSICAL_MEMORY_BYTES).setValue(pMem);
     counters.findCounter(Counter.VIRTUAL_MEMORY_BYTES).setValue(vMem);
+    counters.findCounter(Counter.CPU_MILLISECONDS_JVM).setValue(cpuJvmTime);
     if(isMapTask()) { //Mapper Task
       counters.findCounter(MapCounter.MAP_CPU_MILLISECONDS).setValue(cpuTime);
     }
     else {
       counters.findCounter(ReduceCounter.REDUCE_CPU_MILLISECONDS).setValue(cpuTime);
     }
+  }
+  
+  void updateCGResourceCounters() {
+    counters.findCounter(Counter.MAX_MEMORY_BYTES).setValue(cgResourceTracker.getMaxMemoryUsage());
+    counters.findCounter(Counter.INST_MEMORY_BYTES).setValue(cgResourceTracker.getMemoryUsage());
+    
+    long rssMemoryUsage = cgResourceTracker.getRSSMemoryUsage();
+    if (rssMemoryUsage > counters.getCounter(Counter.MAX_RSS_MEMORY_BYTES)) {
+      counters.findCounter(Counter.MAX_RSS_MEMORY_BYTES).setValue(rssMemoryUsage);
+    }
+    counters.findCounter(Counter.RSS_MEMORY_BYTES).setValue(rssMemoryUsage);
   }
   
   protected ProcResourceValues getCurrentProcResourceValues() {
@@ -976,6 +1016,7 @@ abstract public class Task implements Writable, Configurable {
       updater.updateCounters();      
     }
     updateResourceCounters();
+    updateCGResourceCounters();
     updateGCcounters();
   }
 

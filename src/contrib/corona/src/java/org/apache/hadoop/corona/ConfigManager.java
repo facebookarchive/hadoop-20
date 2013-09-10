@@ -117,6 +117,10 @@ public class ConfigManager {
 
   /** Weight xml tag name */
   public static final String WEIGHT_TAG_NAME = "weight";
+  /** Priority xml tag name */
+  public static final String PRIORITY_TAG_NAME = "priority";
+  /** Whitelist xml tag name */
+  public static final String WHITELIST_TAG_NAME = "whitelist";
   /** Min xml tag name prefix */
   public static final String MIN_TAG_NAME_PREFIX = "min";
   /** Max xml tag name prefix */
@@ -153,8 +157,11 @@ public class ConfigManager {
   public static final long DEFAULT_STARVING_TIME_FOR_SHARE = 5 * 60 * 1000L;
   /** The default allowed starvation time for a minimum allocation */
   public static final long DEFAULT_STARVING_TIME_FOR_MINIMUM = 3 * 60 * 1000L;
-  /** The comparator to use by default */
-  private static final ScheduleComparator DEFAULT_COMPARATOR =
+  /** The comparator to use by default within any pool group */
+  private static final ScheduleComparator DEFAULT_POOL_GROUP_COMPARATOR =
+      ScheduleComparator.PRIORITY;
+  /** The comparator to use by default within any pool */
+  private static final ScheduleComparator DEFAULT_POOL_COMPARATOR =
     ScheduleComparator.FIFO;
 
   /** If defined, generate the pools config document periodically */
@@ -196,8 +203,12 @@ public class ConfigManager {
   private Map<PoolInfo, Double> poolInfoToWeight;
   /** The Map of redirections (source -> target) for PoolInfo objects */
   private Map<PoolInfo, PoolInfo> poolInfoToRedirect;
+  /** The Map of priorities for the pools */
+  private Map<PoolInfo, Integer> poolInfoToPriority;
+  /** The Map of whitelist for the pools */
+  private Map<PoolInfo, String> poolInfoToWhitelist;
   /** The default comparator for the schedulables within the pool */
-  private ScheduleComparator defaultComparator;
+  private ScheduleComparator defaultPoolComparator;
   /** The ratio of the share to consider starvation */
   private double shareStarvingRatio;
   /** The allowed starvation time for the share */
@@ -276,7 +287,7 @@ public class ConfigManager {
     typeToNodeWait = new EnumMap<ResourceType, Long>(ResourceType.class);
     typeToRackWait = new EnumMap<ResourceType, Long>(ResourceType.class);
 
-    defaultComparator = DEFAULT_COMPARATOR;
+    defaultPoolComparator = DEFAULT_POOL_COMPARATOR;
     shareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
     minPreemptPeriod = DEFAULT_MIN_PREEMPT_PERIOD;
     grantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
@@ -472,6 +483,18 @@ public class ConfigManager {
     return min == null ? 0 : min;
   }
 
+  /**
+   * Get the configured ScheduleComparator.
+   * in a given pool group
+   * @param poolGroupName the name of the pool group
+   * @return the configured comparator. (returns DEFAULT_POOL_GROUP_COMPARATOR
+   *         by default.
+   */
+  public ScheduleComparator getPoolGroupComparator(String poolGroupName) {
+    // TODO: If it uses a shared data structure, this needs to be thread safe!!
+    // TODO: Currently unconfigurable.
+    return DEFAULT_POOL_GROUP_COMPARATOR;
+  }
 
   /**
    * Get the configured maximum allocation for a given {@link ResourceType}
@@ -524,6 +547,17 @@ public class ConfigManager {
   }
 
   /**
+   * Get the priority for the pool
+   * @param poolInfo Pool info to check
+   * @return the priority for the pool
+   */
+  public synchronized int getPriority(PoolInfo poolInfo) {
+    Integer priority = (poolInfoToPriority == null) ? null :
+        poolInfoToPriority.get(poolInfo);
+    return priority == null ? 0 : priority;
+  }
+
+  /**
    * Get a redirected PoolInfo (destination) from the source.  Only supports
    * one level of redirection.
    * @param poolInfo Pool info to check for a destination
@@ -554,6 +588,10 @@ public class ConfigManager {
     }
     return actualPoolInfo;
   }
+  
+  public synchronized String getWhitelist(PoolInfo poolInfo) {
+    return poolInfoToWhitelist.get(poolInfo);
+  }
 
   /**
    * Get a copy of the map of redirects (used for cm.jsp)
@@ -570,11 +608,11 @@ public class ConfigManager {
    * @param poolInfo Pool info to check
    * @return the scheduling comparator to use for the pool
    */
-  public synchronized ScheduleComparator getComparator(PoolInfo poolInfo) {
+  public synchronized ScheduleComparator getPoolComparator(PoolInfo poolInfo) {
     ScheduleComparator comparator =
         (poolInfoToComparator == null) ? null :
             poolInfoToComparator.get(poolInfo);
-    return comparator == null ? defaultComparator : comparator;
+    return comparator == null ? defaultPoolComparator : comparator;
   }
 
   public synchronized long getPreemptedTaskMaxRunningTime() {
@@ -828,7 +866,7 @@ public class ConfigManager {
       IOException, SAXException, ParserConfigurationException, JSONException {
     Map<ResourceType, Long> newTypeToNodeWait;
     Map<ResourceType, Long> newTypeToRackWait;
-    ScheduleComparator newDefaultComparator = DEFAULT_COMPARATOR;
+    ScheduleComparator newDefaultPoolComparator = DEFAULT_POOL_COMPARATOR;
     double newShareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
     long newMinPreemptPeriod = DEFAULT_MIN_PREEMPT_PERIOD;
     int newGrantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
@@ -865,7 +903,8 @@ public class ConfigManager {
           loadLocalityWaits(jsonTypes, newTypeToNodeWait, newTypeToRackWait);
         }
         if (key.equals("defaultSchedulingMode")) {
-          newDefaultComparator = ScheduleComparator.valueOf(json.getString(key));
+          newDefaultPoolComparator =
+              ScheduleComparator.valueOf(json.getString(key));
         }
         if (key.equals("shareStarvingRatio")) {
           newShareStarvingRatio = json.getDouble(key);
@@ -933,7 +972,7 @@ public class ConfigManager {
     synchronized (this) {
       this.typeToNodeWait = newTypeToNodeWait;
       this.typeToRackWait = newTypeToRackWait;
-      this.defaultComparator = newDefaultComparator;
+      this.defaultPoolComparator = newDefaultPoolComparator;
       this.shareStarvingRatio = newShareStarvingRatio;
       this.minPreemptPeriod = newMinPreemptPeriod;
       this.grantsPerIteration = newGrantsPerIteration;
@@ -967,7 +1006,7 @@ public class ConfigManager {
     // transition entirely into JSON.
     Map<ResourceType, Long> newTypeToNodeWait;
     Map<ResourceType, Long> newTypeToRackWait;
-    ScheduleComparator newDefaultComparator = DEFAULT_COMPARATOR;
+    ScheduleComparator newDefaultPoolComparator = DEFAULT_POOL_COMPARATOR;
     double newShareStarvingRatio = DEFAULT_SHARE_STARVING_RATIO;
     long newMinPreemptPeriod = DEFAULT_MIN_PREEMPT_PERIOD;
     int newGrantsPerIteration = DEFAULT_GRANTS_PER_ITERATION;
@@ -1005,7 +1044,8 @@ public class ConfigManager {
         }
       }
       if (matched(element, "defaultSchedulingMode")) {
-        newDefaultComparator = ScheduleComparator.valueOf(getText(element));
+        newDefaultPoolComparator =
+            ScheduleComparator.valueOf(getText(element));
       }
       if (matched(element, "shareStarvingRatio")) {
         newShareStarvingRatio = Double.parseDouble(getText(element));
@@ -1073,7 +1113,7 @@ public class ConfigManager {
     synchronized (this) {
       this.typeToNodeWait = newTypeToNodeWait;
       this.typeToRackWait = newTypeToRackWait;
-      this.defaultComparator = newDefaultComparator;
+      this.defaultPoolComparator = newDefaultPoolComparator;
       this.shareStarvingRatio = newShareStarvingRatio;
       this.minPreemptPeriod = newMinPreemptPeriod;
       this.grantsPerIteration = newGrantsPerIteration;
@@ -1111,6 +1151,10 @@ public class ConfigManager {
         new HashMap<PoolInfo, ScheduleComparator>();
     Map<PoolInfo, Double> newPoolInfoToWeight =
         new HashMap<PoolInfo, Double>();
+    Map<PoolInfo, Integer> newPoolInfoToPriority =
+        new HashMap<PoolInfo, Integer>();
+    Map<PoolInfo, String> newPoolInfoToWhitelist = 
+        new HashMap<PoolInfo, String>();
 
     Map<PoolInfo, PoolInfo> newJobExceedsLimitPoolRedirect = new HashMap<PoolInfo, PoolInfo>();
     Map<PoolInfo, Long> newPoolJobSizeLimit = new HashMap<PoolInfo, Long>();
@@ -1197,6 +1241,13 @@ public class ConfigManager {
                 double val = Double.parseDouble(getText(poolField));
                 newPoolInfoToWeight.put(poolInfo, val);
               }
+              if (matched(poolField, PRIORITY_TAG_NAME)) {
+                int val = Integer.parseInt(getText(poolField));
+                newPoolInfoToPriority.put(poolInfo, val);
+              }
+              if (matched(poolField, WHITELIST_TAG_NAME)) {
+                newPoolInfoToWhitelist.put(poolInfo, getText(poolField));
+              }
             }
           }
         }
@@ -1211,6 +1262,8 @@ public class ConfigManager {
       this.typePoolInfoToMin = newTypePoolInfoToMin;
       this.poolInfoToComparator = newPoolInfoToComparator;
       this.poolInfoToWeight = newPoolInfoToWeight;
+      this.poolInfoToPriority = newPoolInfoToPriority;
+      this.poolInfoToWhitelist = newPoolInfoToWhitelist;
       this.jobExceedsLimitPoolRedirect = newJobExceedsLimitPoolRedirect;
       this.poolJobSizeLimit = newPoolJobSizeLimit;
     }
@@ -1314,6 +1367,9 @@ public class ConfigManager {
    * @return the text inside of the xml element
    */
   private static String getText(Element element) {
+    if (element.getFirstChild() == null) {
+      return "";
+    }
     return ((Text) element.getFirstChild()).getData().trim();
   }
 

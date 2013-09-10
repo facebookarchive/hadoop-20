@@ -360,6 +360,12 @@ public class JSPUtil {
     sb.append("</table>\n");
     return sb.toString();
   }
+  
+  public static void cleanJobInfo(String jobId) {
+    synchronized(jobHistoryCache) {
+      jobHistoryCache.remove(jobId);
+    }
+  }
 
   public static JobInfo getJobInfo(HttpServletRequest request, FileSystem fs)
       throws IOException {

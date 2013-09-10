@@ -18,8 +18,10 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.channels.FileChannel;
 
 /**
  * The interface for a block replica to be read.
@@ -63,4 +65,6 @@ public interface ReplicaToRead {
   boolean hasBlockCrcInfo();
 
   int getBlockCrc() throws IOException;
+
+  BlockDataFile getBlockDataFile() throws IOException;
 }

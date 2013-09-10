@@ -58,6 +58,11 @@ public class TrashPolicyDefault extends TrashPolicyBase {
   }
 
   @Override
+  protected Path getExtraTrashPath() throws IOException {
+    return null;
+  }
+  
+  @Override
   protected TrashPolicyBase getTrashPolicy(Path trashBasePath, Configuration conf) throws IOException {
     return new TrashPolicyDefault(trashBasePath, conf);
   }

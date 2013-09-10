@@ -18,15 +18,22 @@
 package org.apache.hadoop.hdfs.server.namenode.metrics;
 
 
+import java.util.ArrayList;
+import java.util.Arrays;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.server.namenode.DatanodeDescriptor;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+import org.apache.hadoop.hdfs.server.namenode.FSNamesystemDatanodeHelper;
+import org.apache.hadoop.hdfs.server.namenode.FSNamesystemDatanodeHelper.DatanodeStatus;
 import org.apache.hadoop.metrics.*;
 import org.apache.hadoop.metrics.util.MetricsBase;
 import org.apache.hadoop.metrics.util.MetricsIntValue;
 import org.apache.hadoop.metrics.util.MetricsLongValue;
 import org.apache.hadoop.metrics.util.MetricsRegistry;
+import org.apache.hadoop.metrics.util.MetricsTimeVaryingInt;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
 
 /**
@@ -46,10 +53,16 @@ public class FSNamesystemMetrics implements Updater {
   final MetricsRecord metricsRecord;
   public MetricsRegistry registry = new MetricsRegistry();
 
+  final MetricsIntValue numDeadMonitoringThread =
+    new MetricsIntValue("numDeadMonitoringThread", registry);
   final MetricsIntValue filesTotal = new MetricsIntValue("FilesTotal", registry);
   final MetricsLongValue blocksTotal = new MetricsLongValue("BlocksTotal", registry);
   final MetricsLongValue diskSpaceTotalGB = new MetricsLongValue(
       "DiskspaceTotalGB", registry);
+  final MetricsIntValue datanodesUsagePctMin = new MetricsIntValue("DatanodesUsagePctMin", registry);
+  final MetricsIntValue datanodesUsagePctMedian = new MetricsIntValue("DatanodesUsagePctMedian", registry);
+  final MetricsIntValue datanodesUsagePctMax = new MetricsIntValue("DatanodesUsagePctMax", registry);
+  final MetricsIntValue datanodesUsagePctStdev = new MetricsIntValue("DatanodesUsagePctStdev", registry);
   final MetricsIntValue capacityTotalGB = new MetricsIntValue("CapacityTotalGB", registry);
   final MetricsIntValue capacityUsedGB = new MetricsIntValue("CapacityUsedGB", registry);
   final MetricsIntValue capacityRemainingGB = new MetricsIntValue("CapacityRemainingGB", registry);
@@ -69,6 +82,16 @@ public class FSNamesystemMetrics implements Updater {
            new MetricsTimeVaryingLong("NumLeaserRecoveries", registry);
   final MetricsLongValue numUnderConstructionFiles =
                  new MetricsLongValue("numUnderConstructionFiles", registry);
+  public MetricsTimeVaryingInt numHeartBeatMonitorExceptions =
+                 new MetricsTimeVaryingInt("numHeartBeatMonitorExceptions", registry);
+  public MetricsTimeVaryingInt numUnderReplicationMonitorExceptions =
+                 new MetricsTimeVaryingInt("numUnderReplicationMonitorExceptions", registry);
+  public MetricsTimeVaryingInt numOverReplicationMonitorExceptions =
+                 new MetricsTimeVaryingInt("numOverReplicationMonitorExceptions", registry);
+  public MetricsTimeVaryingInt numRaidEncodingTaskMonitorExceptions =
+      new MetricsTimeVaryingInt("numRaidEncodingTaskMonitorExceptions", registry);
+  public MetricsTimeVaryingInt numLeaseManagerMonitorExceptions =
+                 new MetricsTimeVaryingInt("numLeaseManagerMonitorExceptions", registry);
   public MetricsTimeVaryingLong numLocalRackReplications =
                  new MetricsTimeVaryingLong("LocalRackReplications", registry);
   public MetricsTimeVaryingLong numAcrossRackReplications =
@@ -81,6 +104,27 @@ public class FSNamesystemMetrics implements Updater {
                  new MetricsTimeVaryingLong("NewBlocksWithoutFailure", registry);
   public MetricsTimeVaryingLong numNewBlocks =
                  new MetricsTimeVaryingLong("NewBlocks", registry);
+  
+  // datanode status metrics
+  final MetricsIntValue numLiveNodes = new MetricsIntValue("numLiveNodes",
+      registry);
+  final MetricsIntValue numLiveExcludedNodes = new MetricsIntValue(
+      "numLiveExcludedNodes", registry);
+  final MetricsIntValue numLiveDecommissioningInProgressNodes = new MetricsIntValue(
+      "numLiveDecommissioningInProgressNodes", registry);
+  final MetricsIntValue numLiveDecommissioned = new MetricsIntValue(
+      "numLiveDecommissioned", registry);
+
+  // datanode status metrics
+  final MetricsIntValue numDeadNodes = new MetricsIntValue("numDeadNodes",
+      registry);
+  final MetricsIntValue numDeadExcludedNodes = new MetricsIntValue(
+      "numDeadExcludedNodes", registry);
+  final MetricsIntValue numDeadDecommissioningNotCompletedNodes = new MetricsIntValue(
+      "numDeadDecommissioningNotCompletedNodes", registry);
+  final MetricsIntValue numDeadDecommissioned = new MetricsIntValue(
+      "numDeadDecommissioned", registry);
+  
   final FSNamesystem fsNameSystem;   
 
   public FSNamesystemMetrics(Configuration conf, FSNamesystem ns) {
@@ -98,6 +142,28 @@ public class FSNamesystemMetrics implements Updater {
 
   private int roundBytesToGBytes(long bytes) {
     return Math.round(((float)bytes/(1024 * 1024 * 1024)));
+  }
+  
+  /**
+   * Pushes live/dead datanode metrics, and return the list of live nodes,
+   * so it can be reused.
+   */
+  private void populateDatanodeMetrics(ArrayList<DatanodeDescriptor> live,
+      ArrayList<DatanodeDescriptor> dead) {
+
+    DatanodeStatus status = FSNamesystemDatanodeHelper.getDatanodeStats(fsNameSystem,
+        live, dead);
+
+    // populate metrics
+    numLiveNodes.set(status.numLive);
+    numLiveExcludedNodes.set(status.numLiveExcluded);
+    numLiveDecommissioningInProgressNodes.set(status.numLiveDecommissioningInProgress);
+    numLiveDecommissioned.set(status.numLiveDecommissioned);
+
+    numDeadNodes.set(status.numDead);
+    numDeadExcludedNodes.set(status.numDeadExcluded);
+    numDeadDecommissioningNotCompletedNodes.set(status.numDeadDecommissioningNotCompleted);
+    numDeadDecommissioned.set(status.numDeadDecommissioned);
   }
       
   /**
@@ -119,10 +185,43 @@ public class FSNamesystemMetrics implements Updater {
      * If the metrics counter were instead stored in the metrics objects themselves
      * we could avoid copying the values on each update.
      */
+    ArrayList<DatanodeDescriptor> live = new ArrayList<DatanodeDescriptor>(); 
+    populateDatanodeMetrics(live, new ArrayList<DatanodeDescriptor>());
+    
+    float datanodeMin = 0;
+    float datanodeMedian = 0;
+    float datanodeMax = 0;
+    float datanodeStdev = 0;
+    
+    if (live.size() > 0) {
+      float totalDFSUsed = 0;
+      float[] usages = new float[live.size()];
+      int i = 0;
+      for (DatanodeDescriptor dn : live) {
+        usages[i++] = dn.getDfsUsedPercent();
+        totalDFSUsed += dn.getDfsUsedPercent();
+      }
+      totalDFSUsed /= live.size();
+      Arrays.sort(usages);
+      datanodeMedian = usages[usages.length/2];
+      datanodeMax = usages[usages.length - 1];
+      datanodeMin = usages[0];
+      
+      for (i = 0; i < usages.length; i++) {
+        datanodeStdev += (usages[i] - totalDFSUsed) * (usages[i] - totalDFSUsed);
+      }
+      datanodeStdev = (float) Math.sqrt(datanodeStdev/live.size());
+    }
+    
     synchronized (this) {
+      numDeadMonitoringThread.set(fsNameSystem.getNumDeadMonitoringThread());
       filesTotal.set((int) fsNameSystem.getFilesAndDirectoriesTotal());
       blocksTotal.set((int)fsNameSystem.getBlocksTotal());
       diskSpaceTotalGB.set(roundBytesToGBytes(fsNameSystem.getDiskSpaceTotal()));
+      datanodesUsagePctMin.set((int) datanodeMin);
+      datanodesUsagePctMax.set((int) datanodeMax);
+      datanodesUsagePctMedian.set((int) datanodeMedian);
+      datanodesUsagePctStdev.set((int) datanodeStdev);
       capacityTotalGB.set(roundBytesToGBytes(fsNameSystem.getCapacityTotal()));
       capacityUsedGB.set(roundBytesToGBytes(fsNameSystem.getCapacityUsed()));
       capacityRemainingGB.set(roundBytesToGBytes(fsNameSystem.

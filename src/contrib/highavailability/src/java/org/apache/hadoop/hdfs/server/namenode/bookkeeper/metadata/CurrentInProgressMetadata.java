@@ -32,8 +32,8 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.metadata.BookKeeperJournalMetadataManager.interruptedException;
-import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.metadata.BookKeeperJournalMetadataManager.keeperException;
+import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZkUtil.interruptedException;
+import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZkUtil.keeperException;
 
 /**
  * Used by {@link BookKeeperJournalMetadataManager} to point to the

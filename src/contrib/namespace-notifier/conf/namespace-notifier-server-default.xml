@@ -9,11 +9,6 @@
 </property>
 
 <property>
-  <name>notifier.server.id</name>
-  <value>-1</value>
-</property>
-
-<property>
   <name>notifier.dispatcher.count</name>
   <value>10</value>
 </property>

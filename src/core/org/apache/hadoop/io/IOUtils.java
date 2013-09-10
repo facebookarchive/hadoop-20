@@ -28,7 +28,7 @@ import org.apache.commons.logging.Log;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.util.IOThrottler;
-import org.apache.hadoop.util.PureJavaCrc32;
+import org.apache.hadoop.util.NativeCrc32;
 
 /**
  * An utility class for I/O related functionality. 
@@ -103,7 +103,7 @@ public class IOUtils {
     
     PrintStream ps = out instanceof PrintStream ? (PrintStream)out : null;
     byte buf[] = new byte[buffSize];
-    Checksum sum = new PureJavaCrc32();
+    Checksum sum = new NativeCrc32();
     sum.reset();
     try {
       if (throttler != null) {
@@ -204,6 +204,30 @@ public class IOUtils {
       toRead -= ret;
       off += ret;
     }
+  }
+  
+  /**
+   * Reads len bytes in a loop using the channel of the stream
+   */
+  public static int readFileChannelFully(FileChannel fileChannel, byte buf[], 
+      int off, int len, long offset, boolean throwOnEof) throws IOException {
+    ByteBuffer byteBuffer = ByteBuffer.wrap(buf, off, len);
+    int toRead = len;
+    int dataRead = 0;
+    while (toRead > 0) {
+      int ret = fileChannel.read(byteBuffer, offset);
+      if (ret < 0) {
+        if (throwOnEof) {
+          throw new IOException( "Premeture EOF from inputStream");
+        } else {
+          return dataRead;
+        }
+      }
+      toRead -= ret;
+      offset += ret;
+      dataRead += ret;
+    }
+    return dataRead;
   }
 
   /** Reads len bytes in a loop using the channel of the stream
@@ -317,5 +341,21 @@ public class IOUtils {
 
     public void write(int b) throws IOException {
     }
-  }  
+  } 
+
+  /**
+   * Write a ByteBuffer to a FileChannel at a given offset, 
+   * handling short writes.
+   * 
+   * @param fc               The FileChannel to write to
+   * @param buf              The input buffer
+   * @param offset           The offset in the file to start writing at
+   * @throws IOException     On I/O error
+   */
+  public static void writeFully(FileChannel fc, ByteBuffer buf,
+      long offset) throws IOException {
+    do {
+      offset += fc.write(buf, offset);
+    } while (buf.remaining() > 0);
+  }
 }

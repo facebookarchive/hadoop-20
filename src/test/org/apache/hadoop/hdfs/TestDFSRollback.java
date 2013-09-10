@@ -18,7 +18,7 @@
 package org.apache.hadoop.hdfs;
 
 import java.io.File;
-import java.io.IOException;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -32,11 +32,9 @@ import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.NAME_NODE;
 import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.DATA_NODE;
 
-import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil;
-import org.apache.hadoop.fs.FileUtil;
 
 import com.google.common.collect.Lists;
 

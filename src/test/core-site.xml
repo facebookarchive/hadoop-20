@@ -55,4 +55,19 @@
   </description> 
 </property>
 
+<property>
+  <name>fs.hdfs.client.configuration.impl</name>
+  <value>org.apache.hadoop.conf.DefaultClientConfiguration</value>
+</property>
+
+<property>
+  <name>dfs.client.block.location.renewal.enabled</name>
+  <value>true</value>
+</property>
+
+<property>
+  <name>dfsclient.block.location.renewal.interval</name>
+  <value>1000</value>
+</property>
+
 </configuration>

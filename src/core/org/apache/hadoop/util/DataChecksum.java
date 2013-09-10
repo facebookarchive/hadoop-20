@@ -60,10 +60,10 @@ public class DataChecksum implements Checksum {
       return new DataChecksum( CHECKSUM_NULL, new ChecksumNull(), 
           checksumSize, bytesPerChecksum );
     case CHECKSUM_CRC32 :
-      return new DataChecksum(CHECKSUM_CRC32, new PureJavaCrc32(),
+      return new DataChecksum(CHECKSUM_CRC32, new NativeCrc32(),
           checksumSize, bytesPerChecksum );
     case CHECKSUM_CRC32C:
-      return new DataChecksum( CHECKSUM_CRC32C, new PureJavaCrc32C(),
+      return new DataChecksum( CHECKSUM_CRC32C, new NativeCrc32(CHECKSUM_CRC32C),
           checksumSize, bytesPerChecksum);
     default:
       return null;  
@@ -206,10 +206,7 @@ public class DataChecksum implements Checksum {
 
       if ( size == 4 ) {
         int checksum = (int) summer.getValue();
-        buf[offset+0] = (byte) ((checksum >>> 24) & 0xff);
-        buf[offset+1] = (byte) ((checksum >>> 16) & 0xff);
-        buf[offset+2] = (byte) ((checksum >>> 8) & 0xff);
-        buf[offset+3] = (byte) (checksum & 0xff);
+        writeIntToBuf(checksum, buf, offset);
       } else {
         throw new IOException( "Unknown Checksum " + type );
       }
@@ -219,6 +216,13 @@ public class DataChecksum implements Checksum {
       }
       
       return size;
+    }
+
+    static public void writeIntToBuf(int checksum, byte[] buf, int offset) {
+      buf[offset + 0] = (byte) ((checksum >>> 24) & 0xff);
+      buf[offset + 1] = (byte) ((checksum >>> 16) & 0xff);
+      buf[offset + 2] = (byte) ((checksum >>> 8) & 0xff);
+      buf[offset + 3] = (byte) (checksum & 0xff);
     }
    
    /**

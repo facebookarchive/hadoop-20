@@ -51,8 +51,6 @@ public class TestBookKeeperJournalMetadataManager extends BookKeeperSetupUtil {
 
   private BookKeeperJournalMetadataManager manager;
 
-
-
   @Before
   public void setUp() throws Exception {
     super.setUp();
@@ -60,6 +58,7 @@ public class TestBookKeeperJournalMetadataManager extends BookKeeperSetupUtil {
         TEST_ZK_PARENT);
     manager = new BookKeeperJournalMetadataManager(
         getRecoveringZookeeperClient(), TEST_ZK_PARENT);
+    manager.init();
   }
 
   @After

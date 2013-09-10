@@ -22,11 +22,14 @@ import java.io.IOException;
 
 /** Test ignoring the key when preparing input for the stream reducer */
 public class TestStreamingIgnoreKey extends TestStreaming {
+  protected String outputExpect = "R\t\n";
 
   public TestStreamingIgnoreKey() throws IOException {
     super();
+    setExpectedOutput(outputExpect);
   }
 
+  @Override
   protected String[] genArgs() {
     return new String[] {
         "-input", INPUT_FILE.getAbsolutePath(),
@@ -36,17 +39,5 @@ public class TestStreamingIgnoreKey extends TestStreaming {
         "-jobconf", "stream.tmpdir=" + System.getProperty("test.build.data","/tmp"),
         "-jobconf", "stream.reduce.input.ignoreKey=true"
     };
-  }
-
-  public void testCommandLine() throws IOException {
-    createInput();
-    boolean mayExist = false;
-    StreamJob job = new StreamJob(genArgs(), mayExist);
-    job.go();
-    File outFile = new File(OUTPUT_DIR, "part-00000").getAbsoluteFile();
-    String output = StreamUtil.slurp(outFile);
-    outFile.delete();
-    System.out.println("Output: " + output + " (length: " + output.length() + ")");
-    assertEquals("R\t\n", output);
   }
 }

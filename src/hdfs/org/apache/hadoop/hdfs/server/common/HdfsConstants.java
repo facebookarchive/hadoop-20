@@ -29,7 +29,25 @@ public interface HdfsConstants {
    */
   static public enum NodeType {
     NAME_NODE,
-    DATA_NODE;
+    DATA_NODE,
+    JOURNAL_NODE;
+  }
+
+  public static enum Transition {
+    FORMAT("Format"),
+    UPGRADE("Upgrade"),
+    COMPLETE_UPGRADE("Complete Upgrade"),
+    FINALIZE("Finalize"),
+    RECOVER("Recover"),
+    ROLLBACK("Rollback");
+
+    private String name = null;
+    private Transition(String arg) {this.name = arg;}
+
+    @Override
+    public String toString() {
+      return name;
+    }
   }
 
   // Startup options
@@ -45,7 +63,10 @@ public interface HdfsConstants {
     
     private String name = null;
     private StartupOption(String arg) {this.name = arg;}
-    public String getName() {return name;}
+
+    public String getName() {
+      return name;
+    }
   }
 
   // socket releated properties

@@ -116,6 +116,13 @@ public class JobInProgress extends JobInProgressTraits {
   public static final String SPECULATIVE_MAP_UNFINISHED_THRESHOLD_KEY =
       "mapred.map.tasks.speculation.unfinished.threshold";
   private float speculativeMapUnfininshedThreshold = 0.001F;
+  private float speculativeMapLogRateThreshold = 0.001F;
+  private float speculativeReduceLogRateThreshold = 0.001F;
+  private int speculativeMapLogNumThreshold = 3;
+  private int speculativeReduceLogNumThreshold = 3;
+  private long lastTimeCannotspeculativeMapLog = 0;
+  private long lastTimeCannotspeculativeReduceLog = 0;
+  private final long logCannotspeculativeInterval = 150000L;
 
   // Speculate when the percentage of the unfinished reduces is lower than this
   public static final String SPECULATIVE_REDUCE_UNFINISHED_THRESHOLD_KEY =
@@ -250,7 +257,23 @@ public class JobInProgress extends JobInProgressTraits {
     TOTAL_REDUCE_WAIT_MILLIS,
     TOTAL_HIGH_MEMORY_MAP_TASK_KILLED,
     TOTAL_HIGH_MEMORY_REDUCE_TASK_KILLED,
-    
+    TOTAL_CGROUP_MEMORY_MAP_TASK_KILLED,
+    TOTAL_CGROUP_MEMORY_REDUCE_TASK_KILLED,
+    MAX_MAP_MEM_BYTES,
+    MAX_MAP_RSS_MEM_BYTES,
+    MAX_MAP_INST_MEM_BYTES,
+    MAX_REDUCE_MEM_BYTES,
+    MAX_REDUCE_RSS_MEM_BYTES,
+    MAX_REDUCE_INST_MEM_BYTES,
+    NUM_SESSION_DRIVER_CM_CLIENT_RETRY,
+    NUM_RJT_FAILOVER,
+    NUM_SAVED_MAPPERS,
+    NUM_SAVED_REDUCERS,
+    SAVED_MAP_CPU_MILLIS,
+    SAVED_REDUCE_CPU_MILLIS,
+    SAVED_MAP_WALLCLOCK_MILLIS,
+    SAVED_REDUCE_WALLCLOCK_MILLIS,
+    STATE_FETCH_COST_MILLIS
   }
   Counters jobCounters = new Counters();
 
@@ -2221,6 +2244,36 @@ public class JobInProgress extends JobInProgressTraits {
   @Override
   public boolean hasSpeculativeReduces() {
     return hasSpeculativeReduces;
+  }
+
+
+  @Override
+  public boolean shouldLogCannotspeculativeMaps() {
+    long now = JobTracker.getClock().getTime();
+    if ((now - lastTimeCannotspeculativeMapLog) <= logCannotspeculativeInterval)
+        return false;
+    int unfinished = desiredMaps() - finishedMaps();
+    if (unfinished <= desiredMaps() * speculativeMapLogRateThreshold ||
+        unfinished <= speculativeMapLogNumThreshold) {
+        lastTimeCannotspeculativeMapLog = now; 
+        return true;
+    }
+    return false;
+  }
+
+  
+  @Override
+  public boolean shouldLogCannotspeculativeReduces() {
+    long now = JobTracker.getClock().getTime();
+    if ((now - lastTimeCannotspeculativeReduceLog) <= logCannotspeculativeInterval)
+      return false;
+    int unfinished = desiredReduces() - finishedReduces();
+    if (unfinished <= desiredReduces() * speculativeReduceLogRateThreshold ||
+        unfinished <= speculativeReduceLogNumThreshold) {
+        lastTimeCannotspeculativeReduceLog = now; 
+        return true;
+    }
+    return false;
   }
 
   @Override

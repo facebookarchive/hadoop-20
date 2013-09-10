@@ -26,7 +26,6 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.BitSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
@@ -42,6 +41,7 @@ import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -53,7 +53,6 @@ import org.apache.hadoop.raid.LogUtils.LOGRESULTS;
 import org.apache.hadoop.raid.LogUtils.LOGTYPES;
 import org.apache.hadoop.raid.BlockReconstructor.CorruptBlockReconstructor;
 import org.apache.hadoop.raid.StripeReader.StripeInputInfo;
-import org.apache.hadoop.util.InjectionEventI;
 import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.io.MD5Hash;
@@ -70,6 +69,9 @@ public class Encoder {
   public static final String ENCODING_MAX_BUFFER_SIZE_KEY =
       "raid.encoder.max.buffer.size";
   public static final String FINAL_TMP_PARITY_NAME = "0";
+  public static final int DEFAULT_RETRY_COUNT_PARTIAL_ENCODING = 3;
+  public static final String RETRY_COUNT_PARTIAL_ENCODING_KEY =
+      "raid.encoder.retry.count.partial.encoding";
   protected Configuration conf;
   protected int parallelism;
   protected Codec codec;
@@ -77,6 +79,7 @@ public class Encoder {
   protected Random rand;
   protected int bufSize;
   protected int maxBufSize;
+  protected int retryCountPartialEncoding;
   protected byte[][] readBufs;
   protected byte[][] writeBufs;
   protected ChecksumStore checksumStore;
@@ -111,6 +114,8 @@ public class Encoder {
       // only need by directory raid
       this.stripeStore = RaidNode.createStripeStore(conf, false, null);
     }
+    this.retryCountPartialEncoding = conf.getInt(RETRY_COUNT_PARTIAL_ENCODING_KEY,
+        DEFAULT_RETRY_COUNT_PARTIAL_ENCODING);
     allocateBuffers();
   }
   
@@ -314,6 +319,8 @@ public class Encoder {
       LOG.info("Wrote temp parity file " + parityTmp);
       FileStatus tmpStat = parityFs.getFileStatus(parityTmp);
       if (tmpStat.getLen() != expectedPartialParityFileSize) {
+        InjectionHandler.processEventIO(
+            InjectionEvent.RAID_ENCODING_FAILURE_PARTIAL_PARITY_SIZE_MISMATCH);
         throw new IOException("Expected partial parity size " +
           expectedPartialParityFileSize + " does not match actual " +
           tmpStat.getLen() + " in path " + tmpStat.getPath());
@@ -341,6 +348,34 @@ public class Encoder {
     }
   }
   
+  public boolean finishAllPartialEncoding(FileSystem parityFs,
+      Path tmpPartialParityDir, long expectedNum)
+          throws IOException, InterruptedException {
+    //Verify if we finish all partial encoding
+    try {
+      FileStatus[] stats = null;
+      long len = 0;
+      for (int i = 0; i < this.retryCountPartialEncoding; i++) {
+        stats = parityFs.listStatus(tmpPartialParityDir);
+        len = stats != null ? stats.length : 0;
+        if (len == expectedNum) {
+          return true;
+        }
+        if (i + 1 == this.retryCountPartialEncoding) {
+          Thread.sleep(rand.nextInt(2000));
+        }
+      }
+      LOG.info("Number of partial files in the directory " + 
+          tmpPartialParityDir + " is " + len + 
+          ". It's different from expected number " + expectedNum);
+      return false;
+    } catch (FileNotFoundException fnfe) {
+      LOG.info("The temp directory is already moved to final partial" + 
+               " directory");
+      return false;
+    }
+  }
+  
   /**
    * The interface to use to generate a parity file.
    * This method can be called multiple times with the same Encoder object,
@@ -356,7 +391,7 @@ public class Encoder {
     Path parityFile, short parityRepl, long numStripes, long blockSize, 
     Progressable reporter, StripeReader sReader, EncodingCandidate ec)
         throws IOException, InterruptedException {
-    DistributedFileSystem dfs = RaidUtils.convertToDFS(parityFs);
+    DistributedFileSystem dfs = DFSUtil.convertToDFS(parityFs);
     Path srcFile = ec.srcStat.getPath();
     long expectedParityFileSize = numStripes * blockSize * codec.parityLength;
     long expectedPartialParityBlocks =
@@ -374,7 +409,7 @@ public class Encoder {
     String partialParityName = "partial_" + MD5Hash.digest(srcFile.toUri().getPath()) +
         "_" + ec.srcStat.getModificationTime() + "_" + ec.encodingUnit + "_" +
         ec.encodingId;
-    Path partialParityDir = new Path(codec.tmpParityDirectory, partialParityName);
+    Path partialParityDir = new Path(tmpDir, partialParityName);
     Path tmpPartialParityDir = new Path(partialParityDir, "tmp");
     Path finalPartialParityDir = new Path(partialParityDir, "final");
     if (!parityFs.mkdirs(partialParityDir)) {
@@ -415,19 +450,7 @@ public class Encoder {
       ec.isEncoded = true;
       long expectedNum = (long) Math.ceil(numStripes * 1.0 / ec.encodingUnit);
       if (!ec.isRenamed) {
-        //Verify if we finish all partial encoding
-        try {
-          FileStatus[] stats = parityFs.listStatus(tmpPartialParityDir);
-          if (stats == null || stats.length == 0 || stats.length != expectedNum) {
-            int len = stats != null ? stats.length : 0;
-            LOG.info("Number of partial files in the directory " + 
-                tmpPartialParityDir + " is " + len + 
-                ". It's different from expected number " + expectedNum);
-            return false;
-          }
-        } catch (FileNotFoundException fnfe) {
-          LOG.info("The temp directory is already moved to final partial" + 
-                   " directory");
+        if (!finishAllPartialEncoding(parityFs, tmpPartialParityDir, expectedNum)) {
           return false;
         }
         InjectionHandler.processEventIO(
@@ -601,7 +624,7 @@ public class Encoder {
    * @throws InterruptedException 
    */
   private void encodeFileToStream(StripeReader sReader,
-    long blockSize, OutputStream out, CRC32[] crcOuts,
+    long blockSize, FSDataOutputStream out, CRC32[] crcOuts,
     Progressable reporter) 
         throws IOException, InterruptedException {
     OutputStream[] tmpOuts = new OutputStream[codec.parityLength];
@@ -625,6 +648,8 @@ public class Encoder {
         // Create input streams for blocks in the stripe.
         long currentStripeIdx = sReader.getCurrentStripeIdx();
         stripeInputInfo = sReader.getNextStripeInputs();
+        // The offset of first temporary output stream
+        long encodeStartOffset = out.getPos();
         int retry = 3;
         do {
           redo = false;
@@ -647,6 +672,12 @@ public class Encoder {
             encodeStripe(blocks, blockSize, tmpOuts, curCRCOuts, reporter, 
                 true, errorLocations);
           } catch (IOException e) {
+            if (out.getPos() > encodeStartOffset) {
+              // Partial data is already written, throw the exception
+              InjectionHandler.processEventIO(
+                  InjectionEvent.RAID_ENCODING_PARTIAL_STRIPE_ENCODED);
+              throw e;
+            }
             // try to fix the missing block in the stripe using stripe store.
             if ((e instanceof BlockMissingException || 
                 e instanceof ChecksumException) && codec.isDirRaid) {
@@ -728,7 +759,8 @@ public class Encoder {
     int boundedBufferCapacity = 1;
     ParallelStreamReader parallelReader = new ParallelStreamReader(
       reporter, blocks, bufSize, 
-      parallelism, boundedBufferCapacity, blockSize, computeSrcChecksum);
+      parallelism, boundedBufferCapacity, blockSize, computeSrcChecksum,
+      outs);
     parallelReader.start();
     try {
       for (long encoded = 0; encoded < blockSize; encoded += bufSize) {

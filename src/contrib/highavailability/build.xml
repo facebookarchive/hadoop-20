@@ -25,5 +25,17 @@ to call at top-level: ant deploy-contrib compile-core-test
 
   <import file="../build-contrib.xml"/>
 
+  <!-- ================================================================== -->
+  <!-- Make hadoop-test.jar                                               -->
+  <!-- ================================================================== -->
+  <!--                                                                    -->
+  <!-- ================================================================== -->
+  <target name="jar-test" depends="jar" description="Make hadoop-test.jar">
+    <jar jarfile="${build.dir}/highavailability-test.jar"
+         basedir="${build.test}">
+    </jar>
+  </target>
+
+
 </project>
 

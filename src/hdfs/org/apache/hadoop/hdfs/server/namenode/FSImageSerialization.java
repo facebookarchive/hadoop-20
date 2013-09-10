@@ -29,13 +29,13 @@ import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
-import org.apache.hadoop.io.LongWritable;
-import org.apache.hadoop.io.ShortWritable;
+import org.apache.hadoop.hdfs.protocol.LayoutVersion;
+import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
+import org.apache.hadoop.hdfs.server.namenode.INodeStorage.StorageType;
 import org.apache.hadoop.io.UTF8;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableUtils;
-
-import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
 /**
  * Static utility functions for serializing various pieces of data in the correct
@@ -76,17 +76,21 @@ public class FSImageSerialization {
   // from the input stream
   //
   static INodeFileUnderConstruction readINodeUnderConstruction(
-                            DataInputStream in) throws IOException {
+      DataInputStream in, FSDirectory fsDir, int imgVersion) throws IOException {
     byte[] name = readBytes(in);
+    long inodeId = LayoutVersion.supports(Feature.ADD_INODE_ID, imgVersion) ? in
+        .readLong() : fsDir.allocateNewInodeId();
     short blockReplication = in.readShort();
     long modificationTime = in.readLong();
     long preferredBlockSize = in.readLong();
     int numBlocks = in.readInt();
     BlockInfo[] blocks = new BlockInfo[numBlocks];
-    Block blk = new Block();
     for (int i = 0; i < numBlocks; i++) {
-      blk.readFields(in);
-      blocks[i] = new BlockInfo(blk, blockReplication);
+      blocks[i] = new BlockInfo();
+      blocks[i].readFields(in);
+      if (LayoutVersion.supports(Feature.BLOCK_CHECKSUM, imgVersion)) {
+        blocks[i].setChecksum(in.readInt());
+      }
     }
     PermissionStatus perm = PermissionStatus.read(in);
     String clientName = readString(in);
@@ -99,8 +103,9 @@ public class FSImageSerialization {
       locations[i] = new DatanodeDescriptor();
       locations[i].readFields(in);
     }
-
-    return new INodeFileUnderConstruction(name, 
+    
+    return new INodeFileUnderConstruction(inodeId,
+                                          name, 
                                           blockReplication, 
                                           modificationTime,
                                           preferredBlockSize,
@@ -119,6 +124,7 @@ public class FSImageSerialization {
                                            String path) 
                                            throws IOException {
     writeString(path, out);
+    out.writeLong(cons.getId());
     out.writeShort(cons.getReplication());
     out.writeLong(cons.getModificationTime());
     out.writeLong(cons.getPreferredBlockSize());
@@ -126,6 +132,7 @@ public class FSImageSerialization {
     out.writeInt(nrBlocks);
     for (int i = 0; i < nrBlocks; i++) {
       cons.getBlocks()[i].write(out);
+      out.writeInt(cons.getBlocks()[i].getChecksum());
     }
     cons.getPermissionStatus().write(out);
     writeString(cons.getClientName(), out);
@@ -142,6 +149,7 @@ public class FSImageSerialization {
     byte[] name = node.getLocalNameBytes();
     out.writeShort(name.length);
     out.write(name);
+    out.writeLong(node.getId());
     
     if (node instanceof INodeHardLinkFile) {
       // Process the hard link file:  
@@ -156,22 +164,25 @@ public class FSImageSerialization {
             node.getFullPathName() + " with the hardlink ID: " + hardLink.getHardLinkID() +
             " and reference cnt: " + hardLink.getHardLinkFileInfo().getReferenceCnt());
       }
+    } else if (node instanceof INodeFile && 
+        ((INodeFile)node).getStorageType() == StorageType.RAID_STORAGE) {
+      INodeFile raidFile = (INodeFile)node;
+      INodeRaidStorage storage = (INodeRaidStorage)raidFile.getStorage();
+      out.writeByte(INode.INodeType.RAIDED_INODE.type);
+      WritableUtils.writeString(out, storage.getCodec().id);
     } else {
       // Process the regular files and directory: just store its inode type 
       out.writeByte(INode.INodeType.REGULAR_INODE.type); 
     }
 
     FsPermission filePerm = TL_DATA.get().FILE_PERM;
-    if (!node.isDirectory()) {  // write file inode
+    if (!node.isDirectory()) {  // write file/hardlink inode
       INodeFile fileINode = (INodeFile)node;
       out.writeShort(fileINode.getReplication());
       out.writeLong(fileINode.getModificationTime());
       out.writeLong(fileINode.getAccessTime());
       out.writeLong(fileINode.getPreferredBlockSize());
-      Block[] blocks = fileINode.getBlocks();
-      out.writeInt(blocks.length);
-      for (Block blk : blocks)
-        blk.write(out);
+      writeBlocks(fileINode.getBlocks(), out);
       filePerm.fromShort(fileINode.getFsPermissionShort());
       PermissionStatus.write(out, fileINode.getUserName(),
                              fileINode.getGroupName(),
@@ -207,7 +218,7 @@ public class FSImageSerialization {
   }
 
   @SuppressWarnings("deprecation")
-  static void writeString(String str, DataOutputStream out) throws IOException {
+  static void writeString(String str, DataOutput out) throws IOException {
     UTF8 ustr = TL_DATA.get().U_STR;
     ustr.set(str, true);
     ustr.write(out);
@@ -219,17 +230,27 @@ public class FSImageSerialization {
   }
 
   /** write the long value */
-  static void writeLong(long value, DataOutputStream out) throws IOException {
+  static void writeLong(long value, DataOutput out) throws IOException {
     out.writeLong(value);
   }
   
+  /** read the int value */
+  static int readInt(DataInputStream in) throws IOException {
+    return in.readInt();
+  }
+
+  /** write the int value */
+  static void writeInt(int value, DataOutput out) throws IOException {
+    out.writeInt(value);
+  }
+
   /** read short value */
   static short readShort(DataInputStream in) throws IOException {
     return in.readShort();
   }
 
   /** write short value */
-  static void writeShort(short value, DataOutputStream out) throws IOException {
+  static void writeShort(short value, DataOutput out) throws IOException {
     out.writeShort(value);
   }
   
@@ -242,6 +263,14 @@ public class FSImageSerialization {
     byte[] bytes = new byte[len];
     System.arraycopy(ustr.getBytes(), 0, bytes, 0, len);
     return bytes;
+  }
+
+  public static void writeBlocks(BlockInfo[] blocks, DataOutput out) throws IOException {
+    out.writeInt(blocks.length); 
+    for (BlockInfo blk : blocks) {
+      blk.write(out);
+      out.writeInt(blk.getChecksum());
+    }
   }
 
   /**
@@ -281,6 +310,7 @@ public class FSImageSerialization {
      * Public method that serializes the information about a
      * Datanode to be stored in the fsImage.
      */
+    @Override
     public void write(DataOutput out) throws IOException {
       new DatanodeID(node).write(out);
       out.writeLong(node.getCapacity());
@@ -293,6 +323,7 @@ public class FSImageSerialization {
      * Public method that reads a serialized Datanode
      * from the fsImage.
      */
+    @Override
     public void readFields(DataInput in) throws IOException {
       DatanodeID id = new DatanodeID();
       id.readFields(in);

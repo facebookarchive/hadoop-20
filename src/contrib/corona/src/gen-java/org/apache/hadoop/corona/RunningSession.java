@@ -746,15 +746,15 @@ public class RunningSession implements org.apache.thrift.TBase<RunningSession, R
         case 7: // RUNNING_RESOURCES
           if (field.type == org.apache.thrift.protocol.TType.MAP) {
             {
-              org.apache.thrift.protocol.TMap _map17 = iprot.readMapBegin();
-              this.runningResources = new HashMap<ResourceType,Integer>(2*_map17.size);
-              for (int _i18 = 0; _i18 < _map17.size; ++_i18)
+              org.apache.thrift.protocol.TMap _map26 = iprot.readMapBegin();
+              this.runningResources = new HashMap<ResourceType,Integer>(2*_map26.size);
+              for (int _i27 = 0; _i27 < _map26.size; ++_i27)
               {
-                ResourceType _key19; // required
-                int _val20; // required
-                _key19 = ResourceType.findByValue(iprot.readI32());
-                _val20 = iprot.readI32();
-                this.runningResources.put(_key19, _val20);
+                ResourceType _key28; // required
+                int _val29; // required
+                _key28 = ResourceType.findByValue(iprot.readI32());
+                _val29 = iprot.readI32();
+                this.runningResources.put(_key28, _val29);
               }
               iprot.readMapEnd();
             }
@@ -814,10 +814,10 @@ public class RunningSession implements org.apache.thrift.TBase<RunningSession, R
         oprot.writeFieldBegin(RUNNING_RESOURCES_FIELD_DESC);
         {
           oprot.writeMapBegin(new org.apache.thrift.protocol.TMap(org.apache.thrift.protocol.TType.I32, org.apache.thrift.protocol.TType.I32, this.runningResources.size()));
-          for (Map.Entry<ResourceType, Integer> _iter21 : this.runningResources.entrySet())
+          for (Map.Entry<ResourceType, Integer> _iter30 : this.runningResources.entrySet())
           {
-            oprot.writeI32(_iter21.getKey().getValue());
-            oprot.writeI32(_iter21.getValue());
+            oprot.writeI32(_iter30.getKey().getValue());
+            oprot.writeI32(_iter30.getValue());
           }
           oprot.writeMapEnd();
         }

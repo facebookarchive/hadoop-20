@@ -53,6 +53,8 @@ public abstract class TrashPolicyBase extends TrashPolicy {
 
   protected static final DateFormat CHECKPOINT = new SimpleDateFormat("yyMMddHHmmss");
   public static final int MSECS_PER_MINUTE = 60*1000;
+  
+  protected String tempPathPattern;
 
 
   public TrashPolicyBase() { }
@@ -66,7 +68,7 @@ public abstract class TrashPolicyBase extends TrashPolicy {
     this.fs = fs;
     this.deletionInterval = (long) (conf.getFloat("fs.trash.interval", 60) *
                                     MSECS_PER_MINUTE);
-
+    this.tempPathPattern = DeleteUtils.getTempPathPattern(conf);
   }
   
   /**
@@ -74,6 +76,9 @@ public abstract class TrashPolicyBase extends TrashPolicy {
    * @throws IOException
    */
   protected abstract FileStatus[] getTrashBases() throws IOException;
+  
+  protected abstract Path getExtraTrashPath() throws IOException;
+  
   /**
    * Factory method to create TrashPolicyBase class by a trash base path
    * @param trashBasePath
@@ -122,7 +127,7 @@ public abstract class TrashPolicyBase extends TrashPolicy {
     String qpath = qualifiedPath.toString();
 
     String pathString = path.toUri().getPath();
-    if (pathString.equals("/tmp") || pathString.startsWith("/tmp/")) {
+    if (DeleteUtils.isTempPath(tempPathPattern, pathString)) {
       // temporary files not move to trash
       return false;
     }
@@ -288,7 +293,7 @@ public abstract class TrashPolicyBase extends TrashPolicy {
       }
 
       if ((now - deletionInterval) > time) {
-        if (fs.delete(path, true)) {
+        if (fs.delete(path, true, true)) {
           LOG.info("Deleted trash checkpoint: "+dir);
         } else {
           LOG.warn("Couldn't delete checkpoint: "+dir+" Ignoring.");
@@ -326,6 +331,16 @@ public abstract class TrashPolicyBase extends TrashPolicy {
         this.emptierInterval = deletionInterval;
       }
     }
+    
+    private void manageTrashCheckPoints(Path trashbasePath) {
+      try {
+        TrashPolicyBase trash = getTrashPolicy(trashbasePath, conf);
+        trash.deleteCheckpoint();
+        trash.createCheckpoint();
+      } catch (IOException e) {
+        LOG.warn("Trash caught: " + e + ". Skipping " + trashbasePath + ".");
+      } 
+    }
 
     public void run() {
       try {
@@ -358,13 +373,11 @@ public abstract class TrashPolicyBase extends TrashPolicy {
               for (FileStatus trashBase : trashBases) {         // dump each trash
                 if (!trashBase.isDir())
                   continue;
-                try {
-                  TrashPolicyBase trash = getTrashPolicy(trashBase.getPath(), conf);
-                  trash.deleteCheckpoint();
-                  trash.createCheckpoint();
-                } catch (IOException e) {
-                  LOG.warn("Trash caught: "+e+". Skipping "+trashBase.getPath()+".");
-                } 
+                manageTrashCheckPoints(trashBase.getPath());
+              }
+              Path extraPath = getExtraTrashPath();
+              if (extraPath != null) {
+                manageTrashCheckPoints(extraPath);                
               }
             }
           } catch (Exception e) {

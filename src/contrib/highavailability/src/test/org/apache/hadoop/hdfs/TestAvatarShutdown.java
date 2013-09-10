@@ -234,7 +234,7 @@ public class TestAvatarShutdown {
         while (!stopRPCcalled)
           DFSTestUtil.waitSecond();
         LOG.info("Finished waiting: " + synchronizationPoint);
-      } else if (event == InjectionEvent.NAMENODE_STOP_CLIENT_RPC) {
+      } else if (event == InjectionEvent.NAMENODE_STOP_RPC) {
         stopRPCcalled = true;
       // lease recovery
       } else if (synchronizationPoint == event
@@ -259,7 +259,18 @@ public class TestAvatarShutdown {
       if (event == InjectionEvent.AVATARNODE_SHUTDOWN) {
         totalBlocks = (Long) args[0];
       }
+      if (event == InjectionEvent.LEASEMANAGER_CHECKINTERRUPTION) {
+        return true;
+      }
       return false;
+    }
+    
+    @Override
+    protected boolean _trueCondition(InjectionEventI event, Object... args) {
+      if (event == InjectionEvent.LEASEMANAGER_CHECKINTERRUPTION) {
+        return false;
+      }
+      return true;
     }
   }
 }

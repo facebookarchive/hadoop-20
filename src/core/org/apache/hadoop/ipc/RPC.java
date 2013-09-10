@@ -40,6 +40,7 @@ import javax.security.auth.login.LoginException;
 
 import org.apache.commons.logging.*;
 import org.apache.hadoop.io.*;
+import org.apache.hadoop.ipc.FastProtocolRegister.FastProtocol;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.security.authorize.AuthorizationException;
@@ -73,7 +74,7 @@ public class RPC {
 
 
   /** A method invocation, including the method name and its parameters.*/
-  private static class Invocation implements Writable, Configurable {
+  protected static class Invocation implements Writable, Configurable {
     private String methodName;
     private Class[] parameterClasses;
     private Object[] parameters;
@@ -81,8 +82,8 @@ public class RPC {
 
     public Invocation() {}
 
-    public Invocation(Method method, Object[] parameters) {
-      this.methodName = method.getName();
+    public Invocation(Method method, String methodName, Object[] parameters) {
+      this.methodName = methodName == null ? method.getName() : methodName;
       this.parameterClasses = method.getParameterTypes();
       this.parameters = parameters;
     }
@@ -208,6 +209,7 @@ public class RPC {
     final private long MIN_DNS_CHECK_INTERVAL_MSEC = 120 * 1000 ;
     final private int rpcTimeout;
     final private Class<?> protocol;
+    final private boolean fastProtocol;
 
     public Invoker(InetSocketAddress address, UserGroupInformation ticket, 
                    Configuration conf, SocketFactory factory, int rpcTimeout,
@@ -217,12 +219,13 @@ public class RPC {
       this.client = CLIENTS.getClient(conf, factory);
       this.rpcTimeout = rpcTimeout;
       this.protocol = protocol;
+      this.fastProtocol = FastProtocol.class.isAssignableFrom(protocol);
     }
     
     private synchronized InetSocketAddress getAddress() {
       if (needCheckDnsUpdate
           && address != null
-          && address.getHostName() != null
+          && NetUtils.wasInitializedWithHostname(address.getAddress())
           && System.currentTimeMillis() - this.timeLastDnsCheck > MIN_DNS_CHECK_INTERVAL_MSEC) {
         try {
           InetSocketAddress newAddr = NetUtils.resolveAddress(address);
@@ -240,7 +243,7 @@ public class RPC {
 
     public Object invoke(Object proxy, Method method, Object[] args)
       throws Throwable {
-      final boolean logDebug = LOG.isDebugEnabled();
+      final boolean logDebug = !fastProtocol && LOG.isDebugEnabled();
       long startTime = 0;
       if (logDebug) {
         startTime = System.currentTimeMillis();
@@ -248,8 +251,13 @@ public class RPC {
 
       ObjectWritable value = null;
       try {
-        value = (ObjectWritable) client.call(new Invocation(method, args),
-            getAddress(), protocol, ticket, rpcTimeout);
+        String name = null;
+        if (fastProtocol) {
+          // try to obtain registered name for the method
+          name = FastProtocolRegister.tryGetId(method);
+        } 
+        value = (ObjectWritable) client.call(new Invocation(method, name, args),
+            getAddress(), protocol, ticket, rpcTimeout, fastProtocol);
       } catch (RemoteException re) {
         throw re;
       } catch (ConnectException ce) {
@@ -448,7 +456,7 @@ public class RPC {
    * @return the proxy
    * @throws IOException if the far end through a RemoteException
    */
-  static <T extends VersionedProtocol> ProtocolProxy<T> waitForProtocolProxy(
+  public static <T extends VersionedProtocol> ProtocolProxy<T> waitForProtocolProxy(
                                                Class<T> protocol,
                                                long clientVersion,
                                                InetSocketAddress addr,
@@ -677,7 +685,7 @@ public class RPC {
 
     Invocation[] invocations = new Invocation[params.length];
     for (int i = 0; i < params.length; i++)
-      invocations[i] = new Invocation(method, params[i]);
+      invocations[i] = new Invocation(method, null, params[i]);
     Client client = CLIENTS.getClient(conf);
     try {
     Writable[] wrappedValues =
@@ -733,6 +741,7 @@ public class RPC {
   /** An RPC Server. */
   public static class Server extends org.apache.hadoop.ipc.Server {
     private Object instance;
+    private final boolean fastProtocol;
     private boolean verbose;
     private boolean authorize = false;
 
@@ -783,6 +792,7 @@ public class RPC {
       super(bindAddress, port, Invocation.class, numHandlers, conf,
           classNameBase(instance.getClass().getName()), supportOldJobConf);
       this.instance = instance;
+      this.fastProtocol = instance instanceof FastProtocol;
       this.verbose = verbose;
       this.authorize = 
         conf.getBoolean(ServiceAuthorizationManager.SERVICE_AUTHORIZATION_CONFIG, 
@@ -795,9 +805,16 @@ public class RPC {
         Invocation call = (Invocation)param;
         if (verbose) log("Call: " + call);
 
-        Method method =
-          protocol.getMethod(call.getMethodName(),
-                                   call.getParameterClasses());
+        Method method = null;
+        if (fastProtocol) {
+          // try to obtain method directly from the register of FastProtocol
+          // methods
+          method = FastProtocolRegister.tryGetMethod(call.getMethodName());
+        }
+        if (method == null) {
+          method = protocol.getMethod(call.getMethodName(),
+              call.getParameterClasses());
+        }
         method.setAccessible(true);
 
         int qTime = (int) (System.currentTimeMillis()-receivedTime);
@@ -805,7 +822,7 @@ public class RPC {
         Object value = method.invoke(instance, call.getParameters());
         long processingMicroTime = (System.nanoTime() - startNanoTime) / 1000;
         if (LOG.isDebugEnabled()) {
-          LOG.debug("Served: " + call.getMethodName() +
+          LOG.debug("Served: " + method.getName() +
                     " queueTime (millisec)= " + qTime +
                     " procesingTime (microsec)= " + processingMicroTime);
         }
@@ -813,10 +830,10 @@ public class RPC {
         rpcMetrics.rpcProcessingTime.inc(processingMicroTime);
 
         MetricsTimeVaryingRate m =
-         (MetricsTimeVaryingRate) rpcMetrics.registry.get(call.getMethodName());
+         (MetricsTimeVaryingRate) rpcMetrics.registry.get(method.getName());
       	if (m == null) {
       	  try {
-      	    m = new MetricsTimeVaryingRate(call.getMethodName(),
+      	    m = new MetricsTimeVaryingRate(method.getName(),
       	                                        rpcMetrics.registry);
       	  } catch (IllegalArgumentException iae) {
       	    // the metrics has been registered; re-fetch the handle

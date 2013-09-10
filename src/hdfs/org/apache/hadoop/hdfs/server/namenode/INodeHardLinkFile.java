@@ -40,16 +40,18 @@ public class INodeHardLinkFile extends INodeFile{
     this.hardLinkFileInfo = inodeHardLinkFile.getHardLinkFileInfo();
   }
   
-  protected INodeHardLinkFile(PermissionStatus permissions, BlockInfo[] blocks, 
+  protected INodeHardLinkFile(long id, PermissionStatus permissions, BlockInfo[] blocks, 
       short replication, long modificationTime,  
       long atime, long preferredBlockSize,   
       HardLinkFileInfo hardLinkFileInfo) { 
-     super(permissions,  
+     super(id,
+         permissions,  
          blocks, 
          replication,  
          modificationTime,   
          atime,  
-         preferredBlockSize);  
+         preferredBlockSize,
+         null);  
      this.hardLinkFileInfo = hardLinkFileInfo;
      
    }
@@ -71,10 +73,18 @@ public class INodeHardLinkFile extends INodeFile{
   }
 
   @Override
-  int collectSubtreeBlocksAndClear(List<Block> v, int blocksLimit) {
+  public boolean isHardlinkFile() {
+    return true;
+  }
+
+  @Override
+  int collectSubtreeBlocksAndClear(List<BlockInfo> v, 
+                                   int blocksLimit, 
+                                   List<INode> removedINodes) {
     parent = null;
     this.hardLinkFileInfo.removeLinkedFile(this);
     name = null;
+    removedINodes.add(this);
     return 1;
   }
   
@@ -173,7 +183,7 @@ public class INodeHardLinkFile extends INodeFile{
   }
   
   protected void setModificationTime(long modtime, boolean recursive) {
-    super.setModificationTime(modtime);
+    super.setModificationTimeForce(modtime);
     if (this.hardLinkFileInfo != null && recursive) {
       this.hardLinkFileInfo.setModificationTime(modtime);
     }

@@ -82,7 +82,8 @@
       JspWriter out, NodeManager nm, SessionManager sm, Scheduler scheduler,
       Set<String> userFilterSet,
       Set<String> poolGroupFilterSet, Set<PoolInfo> poolInfoFilterSet,
-      DateFormat dateFormat)
+      DateFormat dateFormat,
+      boolean canKillSessions)
       throws IOException {
     StringBuilder sb = new StringBuilder();
     sb.append("<table id=\"activeTable\" border=\"1\" cellpadding=\"5\" cellspacing=\"0\">\n");
@@ -90,14 +91,19 @@
     // populate header row
     sb.append("<thead><tr>");
    
-    // fixed headers
-    String[] fixedHeaders = { "", "Id", "Start Time", "Name", "User", "Pool Group",
-            "Pool", "Priority" };
+    // fixed headers  
+    String[] fixedHeaders = { "Id", "Start Time", "Name", "User", "Pool Group",
+            "Pool", "Job Priority" };;
+    String[] fixedHeadersCanKill = { "", "Id", "Start Time", "Name", "User", "Pool Group",
+            "Pool", "Job Priority" };
+    if (canKillSessions) {
+      fixedHeaders = fixedHeadersCanKill;
+    } 
     sb.append(generateTableHeaderCells(Arrays.asList(fixedHeaders), 1, 2, false));
-
+    
     // header per type
     Collection<ResourceType> resourceTypes = nm.getResourceTypes();
-    String[] perTypeColumns = { "Running", "Waiting", "Total" };
+    String[] perTypeColumns = { "Running", "Waiting", "Total", "MaxMemory", "MaxInstMemory", "MaxRSSMemory" };
     sb.append(generateTableHeaderCells(
         WebUtils.convertResourceTypesToStrings(resourceTypes),
         perTypeColumns.length, 0, false));
@@ -107,12 +113,20 @@
     // populate sub-header row
     sb.append("<tr>");
     for (ResourceType resourceType : resourceTypes) {
-      for (int i = 0; i < perTypeColumns.length; i++)
+      for (int i = 0; i < perTypeColumns.length; i++) {
         sb.append("<th>" + perTypeColumns[i] + "</th>");
+        if (i == 2 && resourceType == ResourceType.JOBTRACKER) {
+          break;
+        }
+      }
     }
     sb.append("</tr></thead><tbody>\n");
     out.print(sb.toString());
     out.print("</tbody></table><br>");
+    
+    if (canKillSessions) {
+      out.print("<button id=\"killSession\" type=\"button\">Kill Session</button>");
+    }
   }
 
   private String getPoolInfoTableData(Map<PoolInfo, PoolInfo> redirects,
@@ -158,6 +172,7 @@
     sb.append("<th rowspan=2>Scheduling</th>");
     sb.append("<th rowspan=2>Preemptable</th>");
     sb.append("<th rowspan=2>RequestMax</th>");
+    sb.append("<th rowspan=2>PoolPriority</th>");
     sb.append(generateTableHeaderCells(
         WebUtils.convertResourceTypesToStrings(types),
         metricsNames.size(), 0, false));
@@ -208,15 +223,29 @@
 
     // fixed headers
     String[] fixedHeaders = { "Id", "Start Time", "Finished Time",
-        "Name", "User", "Pool Group", "Pool", "Priority", "Status"};
-    sb.append(generateTableHeaderCells(Arrays.asList(fixedHeaders), 1, 0, false));
+        "Name", "User", "Pool Group", "Pool", "Job Priority", "Status"};
+    sb.append(generateTableHeaderCells(Arrays.asList(fixedHeaders), 1, 2, false));
 
     // header per type
     Collection<ResourceType> resourceTypes = nm.getResourceTypes();
+    String[] perTypeColumns = { "Ran", "MaxMemory", "MaxInstMemory", "MaxRSSMemory" };
     sb.append(generateTableHeaderCells(
-        WebUtils.convertResourceTypesToStrings(resourceTypes), 1, 0, false));
-    sb.append("</tr></thead><tbody>\n");
+        WebUtils.convertResourceTypesToStrings(resourceTypes),
+        perTypeColumns.length, 0, false));
 
+    sb.append("</tr>\n");
+
+    // populate sub-header row
+    sb.append("<tr>");
+    for (ResourceType resourceType : resourceTypes) {
+      for (int i = 0; i < perTypeColumns.length; i++) {
+        sb.append("<th>" + perTypeColumns[i] + "</th>");
+        if (resourceType == ResourceType.JOBTRACKER) {
+          break;
+        }
+      }
+    }
+    sb.append("</tr></thead><tbody>\n");
     out.print(sb.toString());
     out.print("</tbody></table><br>");
   }
@@ -237,7 +266,10 @@
   String cmHostName = StringUtils.simpleHostname(cm.getHostName());
 
   String toKillSessionId = request.getParameter("toKillSessionId");
-  if (toKillSessionId != null) {
+  boolean canKillSessions = 
+    WebUtils.isValidKillSessionsToken(request.getParameter("killSessionsToken"));
+  
+  if (toKillSessionId != null && canKillSessions) {
     String[] ids = toKillSessionId.split(" ");
     try {
       KillSessionsArgs killSessionsArgs = new KillSessionsArgs();
@@ -245,8 +277,7 @@
       killSessionsArgs.who = request.getRemoteHost();
       
       cm.killSessions(killSessionsArgs);
-    }
-    catch (Exception e) {
+    } catch (Exception e) {
     }
   }
 %>
@@ -372,10 +403,9 @@
       cm.getSessionManager(), cm.getScheduler(),
       filters.getUserFilterSet(),
       filters.getPoolGroupFilterSet(),
-      filters.getPoolInfoFilterSet(), dateFormat);
+      filters.getPoolInfoFilterSet(), dateFormat,
+      canKillSessions);
 %>
-<button id="killSession" type="button">Kill Session</button>
-
 <h2 id="retired_sessions">Retired Sessions</h2>
 <button id="retiredToggle" type="button">Show/Hide</button>
 <%

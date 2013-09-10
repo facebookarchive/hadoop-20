@@ -27,14 +27,14 @@ public class TestHost2NodesMap extends TestCase {
   private Host2NodesMap map;
   
   private final static DatanodeDescriptor dataNodes[] = new DatanodeDescriptor[] {
-    new DatanodeDescriptor(new DatanodeID("h1:5020"), "/d1/r1"),
-    new DatanodeDescriptor(new DatanodeID("h2:5020"), "/d1/r1"),
-    new DatanodeDescriptor(new DatanodeID("h3:5020"), "/d1/r2"),
-    new DatanodeDescriptor(new DatanodeID("h3:5030"), "/d1/r2"),
+    new DatanodeDescriptor(new DatanodeID("127.0.0.1:5020"), "/d1/r1"),
+    new DatanodeDescriptor(new DatanodeID("127.0.0.1:5021"), "/d1/r1"),
+    new DatanodeDescriptor(new DatanodeID("127.0.0.1:5022"), "/d1/r2"),
+    new DatanodeDescriptor(new DatanodeID("127.0.0.1:5030"), "/d1/r2"),
   };
   private final static DatanodeDescriptor NULL_NODE = null; 
   private final static DatanodeDescriptor NODE = 
-    new DatanodeDescriptor(new DatanodeID("h3:5040"), "/d1/r4");
+    new DatanodeDescriptor(new DatanodeID("127.0.0.1:5040"), "/d1/r4");
   
   @Before
   public void setUp() {
@@ -53,49 +53,26 @@ public class TestHost2NodesMap extends TestCase {
     assertFalse(map.contains(NODE));
   }
 
-  public void testGetDatanodeByHost() throws Exception {
-    assertTrue(map.getDatanodeByHost("h1")==dataNodes[0]);
-    assertTrue(map.getDatanodeByHost("h2")==dataNodes[1]);
-    DatanodeDescriptor node = map.getDatanodeByHost("h3");
-    assertTrue(node==dataNodes[2] || node==dataNodes[3]);
-    assertTrue(null==map.getDatanodeByHost("h4"));
-  }
-
   public void testGetDatanodeByName() throws Exception {
-    assertTrue(map.getDatanodeByName("h1:5020")==dataNodes[0]);
-    assertTrue(map.getDatanodeByName("h1:5030")==null);
-    assertTrue(map.getDatanodeByName("h2:5020")==dataNodes[1]);
-    assertTrue(map.getDatanodeByName("h2:5030")==null);
-    assertTrue(map.getDatanodeByName("h3:5020")==dataNodes[2]);
-    assertTrue(map.getDatanodeByName("h3:5030")==dataNodes[3]);
-    assertTrue(map.getDatanodeByName("h3:5040")==null);
-    assertTrue(map.getDatanodeByName("h4")==null);
-    assertTrue(map.getDatanodeByName(null)==null);
+    assertTrue(map.getDatanodeByName("127.0.0.1:5020")==dataNodes[0]);
+    assertNull(map.getDatanodeByName("h1:5030"));
+    assertTrue(map.getDatanodeByName("127.0.0.1:5021")==dataNodes[1]);
+    assertNull(map.getDatanodeByName("h2:5030"));
+    assertTrue(map.getDatanodeByName("127.0.0.1:5022")==dataNodes[2]);
+    assertTrue(map.getDatanodeByName("127.0.0.1:5030")==dataNodes[3]);
+    assertNull(map.getDatanodeByName("h3:5040"));
+    assertNull(map.getDatanodeByName("127.0.0.1"));
+    assertNull(map.getDatanodeByName(null));
   }
 
   public void testRemove() throws Exception {
     assertFalse(map.remove(NODE));
-    
     assertTrue(map.remove(dataNodes[0]));
-    assertTrue(map.getDatanodeByHost("h1")==null);
-    assertTrue(map.getDatanodeByHost("h2")==dataNodes[1]);
-    DatanodeDescriptor node = map.getDatanodeByHost("h3");
-    assertTrue(node==dataNodes[2] || node==dataNodes[3]);
-    assertTrue(null==map.getDatanodeByHost("h4"));
     
+    assertNull(map.getDatanodeByName("127.0.0.1:5020"));
     assertTrue(map.remove(dataNodes[2]));
-    assertTrue(map.getDatanodeByHost("h1")==null);
-    assertTrue(map.getDatanodeByHost("h2")==dataNodes[1]);
-    assertTrue(map.getDatanodeByHost("h3")==dataNodes[3]);
-    
-    assertTrue(map.remove(dataNodes[3]));
-    assertTrue(map.getDatanodeByHost("h1")==null);
-    assertTrue(map.getDatanodeByHost("h2")==dataNodes[1]);
-    assertTrue(map.getDatanodeByHost("h3")==null);
-    
-    assertFalse(map.remove(NULL_NODE));
-    assertTrue(map.remove(dataNodes[1]));
-    assertFalse(map.remove(dataNodes[1]));
-  }
 
+    assertNull(map.getDatanodeByName("127.0.0.1:5022"));
+    assertTrue(map.getDatanodeByName("127.0.0.1:5021")==dataNodes[1]);
+  }
 }

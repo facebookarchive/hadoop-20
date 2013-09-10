@@ -50,7 +50,7 @@ public class RemoteEditLogManifest implements Writable {
   
   public RemoteEditLogManifest(List<RemoteEditLog> logs, boolean contiguous) {
     this.logs = logs;
-    this.contiguous = false;
+    this.contiguous = contiguous;
     checkState();
   }
   
@@ -76,7 +76,7 @@ public class RemoteEditLogManifest implements Writable {
     RemoteEditLog prev = null;
     for (RemoteEditLog log : logs) {
       if (prev != null) {
-        if (log.getStartTxId() != prev.getEndTxId() + 1) {
+        if (log.getStartTxId() <= prev.getEndTxId()) {
           throw new IllegalStateException("Invalid log manifest:" + this);
         }
       }

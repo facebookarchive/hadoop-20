@@ -17,6 +17,10 @@
  */
 package org.apache.hadoop.ipc;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+
 /**
  * Status of a Hadoop IPC call.
  */
@@ -28,5 +32,17 @@ enum Status {
   int state;
   private Status(int state) {
     this.state = state;
+  }
+  
+  public static byte[] SUCCESSBYTES;
+  static {
+    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+    DataOutputStream dos = new DataOutputStream(bos);
+    try {
+      dos.writeInt(Status.SUCCESS.state);
+    } catch (IOException e) {
+      SUCCESSBYTES = new byte[] { 0, 0, 0, 0 };
+    }
+    SUCCESSBYTES = bos.toByteArray();
   }
 }

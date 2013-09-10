@@ -50,7 +50,7 @@ public class TestAbandonBlock extends junit.framework.TestCase {
       fout.sync();
   
       //try reading the block by someone
-      final DFSClient dfsclient = new DFSClient(NameNode.getAddress(CONF), CONF);
+      final DFSClient dfsclient = new DFSClient(NameNode.getClientProtocolAddress(CONF), CONF);
       LocatedBlocks blocks = dfsclient.namenode.getBlockLocations(src, 0, 1);
       LocatedBlock b = blocks.get(0); 
       try {

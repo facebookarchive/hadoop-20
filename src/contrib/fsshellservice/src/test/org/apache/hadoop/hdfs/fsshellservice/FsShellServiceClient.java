@@ -63,10 +63,10 @@ public class FsShellServiceClient {
         if (command.equals("mkdirs")) {
           System.err.println("result: " + client.mkdirs(tokens[1]));
         } else if (command.equals("copyfromlocal")) {
-          client.copyFromLocal(tokens[1], tokens[2]);
+          client.copyFromLocal(tokens[1], tokens[2], true);
           System.err.println("done");
         } else if (command.equals("copytolocal")) {
-          client.copyToLocal(tokens[1], tokens[2]);
+          client.copyToLocal(tokens[1], tokens[2], true);
           System.err.println("done");
         } else if (command.equals("remove")) {
           System.err.println("result: "
@@ -80,6 +80,8 @@ public class FsShellServiceClient {
           System.err.println("result: " + client.getFileStatus(tokens[1]));
         } else if (command.equals("exists")) {
           System.err.println("result: " + client.exists(tokens[1]));
+        } else if (command.equals("filecrc")) {
+          System.err.println("result: " + client.getFileCrc(tokens[1]));
         } else {
           System.err.println("Invalid Command");
         }

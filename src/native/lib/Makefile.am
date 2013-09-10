@@ -48,7 +48,11 @@ libhadoop_la_SOURCES = $(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descr
                        $(srcdir)/../src/org/apache/hadoop/io/nativeio/errno_enum.c \
                        $(srcdir)/../src/org/apache/hadoop/io/nativeio/NativeIO.c \
                        $(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c \
-                       $(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c
+                       $(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c \
+                       $(srcdir)/../src/org/apache/hadoop/util/galois.c \
+                       $(srcdir)/../src/org/apache/hadoop/util/jerasure.c \
+                       $(srcdir)/../src/org/apache/hadoop/util/reed_sol.c \
+                       $(srcdir)/../src/org/apache/hadoop/util/NativeJerasure.c
 libhadoop_la_LDFLAGS = -version-info 1:0:0
 libhadoop_la_LIBADD = $(HADOOP_OBJS) -ldl -ljvm -lrt
 

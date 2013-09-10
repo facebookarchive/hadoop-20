@@ -91,7 +91,7 @@ public class NamespaceNotifierMetrics implements Updater {
       new MetricsTimeVaryingLong("reached_edit_log_end", registry,
           "The number of times the reader reached the end of the edits log");
  
-  public NamespaceNotifierMetrics(Configuration conf, long serverId) {
+  public NamespaceNotifierMetrics(Configuration conf, String serverId) {
     String sessionId = conf.get("session.id"); 
     JvmMetrics.init("NamespaceNotifier", sessionId);
     

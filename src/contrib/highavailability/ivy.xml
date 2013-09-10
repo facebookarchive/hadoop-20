@@ -87,9 +87,26 @@
       name="mockito-all"
       rev="${mockito-all.version}"
       conf="common->master"/>
+    <dependency org="org.codehaus.jackson"
+      name="jackson-mapper-asl"
+      rev="1.7.9"
+      conf="common->default"/>
     <dependency org="org.apache.bookkeeper"
       name="bookkeeper-server"
       rev="${bookkeeper-server.version}"
+      conf="common->default"/>
+    <!-- swift -->
+    <dependency org="com.facebook.swift"
+      name="swift-codec"
+      rev="${swift.version}"
+      conf="common->default"/>
+    <dependency org="com.facebook.swift"
+      name="swift-service"
+      rev="${swift.version}"
+      conf="common->default"/>
+    <dependency org="com.facebook.swift"
+      name="swift-annotations"
+      rev="${swift.version}"
       conf="common->default"/>
   </dependencies>
 </ivy-module>

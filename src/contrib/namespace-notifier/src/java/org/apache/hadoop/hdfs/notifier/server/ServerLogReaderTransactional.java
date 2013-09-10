@@ -17,12 +17,18 @@
  */
 package org.apache.hadoop.hdfs.notifier.server;
 
+import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+import java.util.List;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
 import org.apache.hadoop.hdfs.notifier.NotifierConfig;
 import org.apache.hadoop.hdfs.notifier.NotifierUtils;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.namenode.EditLogInputStream;
@@ -30,16 +36,12 @@ import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOpCodes;
 import org.apache.hadoop.hdfs.server.namenode.FileJournalManagerReadOnly;
 import org.apache.hadoop.hdfs.server.namenode.JournalManager;
+import org.apache.hadoop.hdfs.server.namenode.JournalSet;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.util.InjectionHandler;
-
-import java.io.File;
-import java.io.IOException;
-import java.net.URI;
-import java.util.List;
 
 public class ServerLogReaderTransactional implements IServerLogReader {
 
@@ -47,14 +49,14 @@ public class ServerLogReaderTransactional implements IServerLogReader {
       .getLog(ServerLogReaderTransactional.class);
 
   // handle to the core
-  private IServerCore core;
-  private final Configuration conf;
+  protected IServerCore core;
+  protected final Configuration conf;
 
   // remote journal from which the reader is consuming transactions
-  private final JournalManager remoteJournalManager;
+  protected JournalManager remoteJournalManager = null;
 
   // transaction id of the currently consumed log segment
-  private long currentSegmentTxId = -1;
+  private long currentSegmentTxId = HdfsConstants.INVALID_TXID;
   private EditLogInputStream currentEditLogInputStream = null;
   private long currentEditLogInputStreamPosition = -1;
 
@@ -83,17 +85,19 @@ public class ServerLogReaderTransactional implements IServerLogReader {
         NotifierConfig.LOG_READER_STREAM_ERROR_SLEEP,
         NotifierConfig.LOG_READER_STREAM_ERROR_SLEEP_DEFAULT);
 
-    if (editsURI.getScheme().equals(NNStorage.LOCAL_URI_SCHEME)) {
-      StorageDirectory sd = new NNStorage(new StorageInfo()).new StorageDirectory(
-          new File(editsURI.getPath()));
-      remoteJournalManager = new FileJournalManagerReadOnly(sd);
-    } else {
-      throw new IOException("Other journals not supported yet.");
+    if (editsURI != null) {
+      if (editsURI.getScheme().equals(NNStorage.LOCAL_URI_SCHEME)) {
+        StorageDirectory sd = new NNStorage(new StorageInfo()).new StorageDirectory(
+            new File(editsURI.getPath()));
+        remoteJournalManager = new FileJournalManagerReadOnly(sd);
+      } else {
+        throw new IOException("Other journals not supported yet.");
+      }
+  
+      LOG.info("Initializing input stream");
+      initialize();
+      LOG.info("Initialization completed");
     }
-
-    LOG.info("Initializing input stream");
-    initialize();
-    LOG.info("Initialization completed");
   }
 
   @Override
@@ -126,16 +130,16 @@ public class ServerLogReaderTransactional implements IServerLogReader {
     // Keep looping until we reach an operation that can be
     // considered a notification.
     while (true) {
-
-      // if the stream is null, we need to setup next stream
-      // if we cannot than this is a fatal failure
-      refreshInputStream();
-
-      // get current position in the stream
-      currentEditLogInputStreamPosition = currentEditLogInputStream
-          .getPosition();
-
+      
       try {
+        // if the stream is null, we need to setup next stream
+        // if we cannot than this is a fatal failure
+        refreshInputStream();
+
+        // get current position in the stream
+        currentEditLogInputStreamPosition = currentEditLogInputStream
+            .getPosition();
+        
         // try reading a transaction
         op = currentEditLogInputStream.readOp();
         InjectionHandler.processEventIO(InjectionEvent.SERVERLOGREADER_READOP);
@@ -160,11 +164,17 @@ public class ServerLogReaderTransactional implements IServerLogReader {
         continue;
       }
 
+      if (ServerLogReaderUtil.shouldSkipOp(mostRecentlyReadTransactionTxId, op)){
+        updateState(op, false);
+        continue;
+      }
       // update internal state, and check for progress
-      updateState(op);
+      updateState(op, true);
 
-      LOG.info("Read operation: " + op + " with txId="
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Read operation: " + op + " with txId="
           + (op == null ? "null" : op.getTransactionId()));
+      }
 
       // Test if it can be considered a notification
       notification = ServerLogReaderUtil.createNotification(op);
@@ -198,6 +208,10 @@ public class ServerLogReaderTransactional implements IServerLogReader {
     // set the position to last good position
     refreshStreamPosition();
   }
+  
+  protected void detectJournalManager() throws IOException {
+    // do nothing
+  }
 
   /**
    * If we cannot read anything for some time, we can check if new segment
@@ -206,6 +220,9 @@ public class ServerLogReaderTransactional implements IServerLogReader {
    */
   private void checkProgress() throws IOException {
     if (now() - mostRecentlyReadTransactionTime > nothingReadCheckTimeout) {
+      // check the journal manager
+      detectJournalManager();
+      
       // we haven't read anything in a while
       if (segmentExists(mostRecentlyReadTransactionTxId + 1) &&
           mostRecentlyReadTransactionTxId != -1) {
@@ -233,12 +250,14 @@ public class ServerLogReaderTransactional implements IServerLogReader {
    * We also mark that this is the most recent time, we read something valid
    * from the input.
    */
-  private void updateState(FSEditLogOp op) throws IOException {
+  private void updateState(FSEditLogOp op, boolean checkTxnId) throws IOException {
     InjectionHandler.processEvent(InjectionEvent.SERVERLOGREADER_UPDATE, op);
     
-    mostRecentlyReadTransactionTxId = ServerLogReaderUtil.checkTransactionId(
+    if (checkTxnId) {
+      mostRecentlyReadTransactionTxId = ServerLogReaderUtil.checkTransactionId(
         mostRecentlyReadTransactionTxId, op);
-
+    }
+    
     updateStreamPosition();
 
     // read a valid operation
@@ -272,7 +291,8 @@ public class ServerLogReaderTransactional implements IServerLogReader {
   private void refreshStreamPosition() throws IOException {
     if (currentEditLogInputStreamPosition != -1) {
       // stream was reopened
-      currentEditLogInputStream.refresh(currentEditLogInputStreamPosition);
+      currentEditLogInputStream.refresh(currentEditLogInputStreamPosition,
+          mostRecentlyReadTransactionTxId);
     } else {
       // freshly opened stream
       currentEditLogInputStreamPosition = currentEditLogInputStream.getPosition();
@@ -318,8 +338,9 @@ public class ServerLogReaderTransactional implements IServerLogReader {
     // if we are re-opening stream previously consumed
     // set correct position
     if (currentEditLogInputStreamPosition != -1) {
-      currentEditLogInputStream.refresh(currentEditLogInputStreamPosition);
-    } 
+      currentEditLogInputStream.refresh(currentEditLogInputStreamPosition,
+          mostRecentlyReadTransactionTxId);
+    }
   }
 
   /**
@@ -327,11 +348,14 @@ public class ServerLogReaderTransactional implements IServerLogReader {
    * times, as there is potential race between finding the txid and then setting
    * up the stream.
    */
-  private void initialize() throws IOException {
+  protected void initialize() throws IOException {
     for (int i = 0; i < 3; i++) {
       try {
-        LOG.info("Finding latest segment txid - attempt " + i);
-        currentSegmentTxId = findLatestLogSegmentTxid();
+        LOG.info("Detecting current primary node - attempt " + i);
+        detectJournalManager();
+        
+        LOG.info("Finding oldest segment txid - attempt " + i);
+        currentSegmentTxId = findOldestLogSegmentTxid();
 
         LOG.info("Setting up input stream for txid: " + currentSegmentTxId
             + " - attempt " + i);
@@ -374,7 +398,8 @@ public class ServerLogReaderTransactional implements IServerLogReader {
    */
   private void setupCurrentEditStream(long txid) throws IOException {
     // get new stream
-    currentEditLogInputStream = remoteJournalManager.getInputStream(txid, false);
+    currentEditLogInputStream = JournalSet.getInputStream(remoteJournalManager,
+        txid);
     // we just started a new log segment
     currentSegmentTxId = txid;
     // indicate that we successfully reopened the stream
@@ -405,6 +430,11 @@ public class ServerLogReaderTransactional implements IServerLogReader {
     List<RemoteEditLog> segments = getManifest();
     return (segments.get(segments.size() - 1).getStartTxId());
   }
+  
+  long findOldestLogSegmentTxid() throws IOException {
+    List<RemoteEditLog> segments = getManifest();
+    return segments.get(0).getStartTxId();
+  }
 
   /**
    * Get all available log segments present in the underlying storage directory.
@@ -425,7 +455,7 @@ public class ServerLogReaderTransactional implements IServerLogReader {
    * @param ms
    * @throws IOException
    */
-  private void sleep(long ms) throws IOException {
+  protected void sleep(long ms) throws IOException {
     try {
       Thread.sleep(ms);
     } catch (InterruptedException e) {

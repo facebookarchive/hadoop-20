@@ -57,6 +57,7 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
   private final static String MIN_TIME = "MinTime";
   private final static String MAX_TIME = "MaxTime";
   private final static String NUM_OPS = "NumOps";
+  private final static String NUM_OPS_CURRENT = "NumOpsCurrent";
   private final static String RESET_ALL_MIN_MAX_OP = "resetAllMinMax";
   private MetricsRegistry metricsRegistry;
   private MBeanInfo mbeanInfo;
@@ -88,6 +89,8 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
         // For each of the metrics there are 3 different attributes
         attributesInfo.add(new MBeanAttributeInfo(o.getName() + NUM_OPS, "java.lang.Integer",
             o.getDescription(), true, false, false));
+        attributesInfo.add(new MBeanAttributeInfo(o.getName() + NUM_OPS_CURRENT, "java.lang.Integer",
+            o.getDescription(), true, false, false));
         attributesInfo.add(new MBeanAttributeInfo(o.getName() + AVG_TIME, "java.lang.Long",
             o.getDescription(), true, false, false));
         attributesInfo.add(new MBeanAttributeInfo(o.getName() + MIN_TIME, "java.lang.Long",
@@ -99,6 +102,7 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
         // Note the special attributes (AVG_TIME, MIN_TIME, ..) are derived from metrics 
         // Rather than check for the suffix we store them in a map.
         metricsRateAttributeMod.put(o.getName() + NUM_OPS, o);
+        metricsRateAttributeMod.put(o.getName() + NUM_OPS_CURRENT, o);
         metricsRateAttributeMod.put(o.getName() + AVG_TIME, o);
         metricsRateAttributeMod.put(o.getName() + MIN_TIME, o);
         metricsRateAttributeMod.put(o.getName() + MAX_TIME, o);
@@ -150,6 +154,8 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
       return ((MetricsTimeVaryingLong) o).getPreviousIntervalValue();
     else if (o instanceof MetricsTimeVaryingRate) {
       MetricsTimeVaryingRate or = (MetricsTimeVaryingRate) o;
+      if (attributeName.endsWith(NUM_OPS_CURRENT))
+        return or.getCurrentIntervalNumOps();
       if (attributeName.endsWith(NUM_OPS))
         return or.getPreviousIntervalNumOps();
       else if (attributeName.endsWith(AVG_TIME))

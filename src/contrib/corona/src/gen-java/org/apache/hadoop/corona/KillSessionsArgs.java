@@ -340,13 +340,13 @@ public class KillSessionsArgs implements org.apache.thrift.TBase<KillSessionsArg
         case 1: // SESSION_IDS
           if (field.type == org.apache.thrift.protocol.TType.LIST) {
             {
-              org.apache.thrift.protocol.TList _list22 = iprot.readListBegin();
-              this.sessionIds = new ArrayList<String>(_list22.size);
-              for (int _i23 = 0; _i23 < _list22.size; ++_i23)
+              org.apache.thrift.protocol.TList _list31 = iprot.readListBegin();
+              this.sessionIds = new ArrayList<String>(_list31.size);
+              for (int _i32 = 0; _i32 < _list31.size; ++_i32)
               {
-                String _elem24; // required
-                _elem24 = iprot.readString();
-                this.sessionIds.add(_elem24);
+                String _elem33; // required
+                _elem33 = iprot.readString();
+                this.sessionIds.add(_elem33);
               }
               iprot.readListEnd();
             }
@@ -380,9 +380,9 @@ public class KillSessionsArgs implements org.apache.thrift.TBase<KillSessionsArg
       oprot.writeFieldBegin(SESSION_IDS_FIELD_DESC);
       {
         oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRING, this.sessionIds.size()));
-        for (String _iter25 : this.sessionIds)
+        for (String _iter34 : this.sessionIds)
         {
-          oprot.writeString(_iter25);
+          oprot.writeString(_iter34);
         }
         oprot.writeListEnd();
       }

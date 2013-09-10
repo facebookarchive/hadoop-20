@@ -125,6 +125,10 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   int rushReduceMaps = 5;
   float speculativeMapUnfininshedThreshold = 0.001F;
   float speculativeReduceUnfininshedThreshold = 0.001F;
+  float speculativeMapLogRateThreshold = 0.001F;
+  int speculativeMapLogNumThreshold = 3;
+  float speculativeReduceLogRateThreshold = 0.001F;
+  int speculativeReduceLogNumThreshold = 3;
 
   Set<TaskInProgress> runningMaps = new LinkedHashSet<TaskInProgress>();
   Set<TaskInProgress> runningReduces = new LinkedHashSet<TaskInProgress>();
@@ -186,6 +190,8 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     "mapreduce.job.speculative.slownodethreshold";
   public static final String SPECULATIVE_REFRESH_TIMEOUT =
     "mapreduce.job.speculative.refresh.timeout";
+  public static final String LOG_CANNOTSPECULATIVE_INTERVAL =
+    "mapreduce.job.log.cannotspeculative.interval";
   public static final String SPECULATIVE_STDDEVMEANRATIO_MAX =
     "mapreduce.job.speculative.stddevmeanratio.max";
 
@@ -194,7 +200,9 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   float speculativeCap;
   float slowNodeThreshold;
   private long lastSpeculativeMapRefresh, lastSpeculativeReduceRefresh;
+  private long lastTimeCannotspeculativeMapLog, lastTimeCannotspeculativeReduceLog;
   private final long speculativeRefreshTimeout;
+  private final long logCannotspeculativeInterval;
   private final float speculativeStddevMeanRatioMax;
   volatile private boolean hasSpeculativeMaps;
   volatile private boolean hasSpeculativeReduces;
@@ -230,6 +238,10 @@ public class CoronaJobInProgress extends JobInProgressTraits {
 
   private final Object lockObject;
   private final CoronaJobHistory jobHistory;
+  
+  private String jobTrackerId;
+
+  private int terminated = -1;
 
 
   @SuppressWarnings("deprecation")
@@ -239,7 +251,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     CoronaJobTracker.TaskLookupTable taskLookupTable,
     TaskStateChangeListener taskStateChangeListener,
     TopologyCache topologyCache,
-    CoronaJobHistory jobHistory, String url)
+    CoronaJobHistory jobHistory, String url, String jobTrackerId)
     throws IOException {
     this.lockObject = lockObject;
     this.clock = JobTracker.getClock();
@@ -249,6 +261,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     this.taskLookupTable = taskLookupTable;
     this.taskStateChangeListener = taskStateChangeListener;
     this.jobHistory = jobHistory;
+    this.jobTrackerId = jobTrackerId;
 
     // Status.
     this.startTime = clock.getTime();
@@ -298,6 +311,8 @@ public class CoronaJobInProgress extends JobInProgressTraits {
         CoronaJobInProgress.SPECULATIVE_SLOWNODE_THRESHOLD,1.0f);
     this.speculativeRefreshTimeout = jobConf.getLong(
         CoronaJobInProgress.SPECULATIVE_REFRESH_TIMEOUT, 5000L);
+    this.logCannotspeculativeInterval = jobConf.getLong(
+        CoronaJobInProgress.LOG_CANNOTSPECULATIVE_INTERVAL, 150000L);
     this.speculativeStddevMeanRatioMax = jobConf.getFloat(
         CoronaJobInProgress.SPECULATIVE_STDDEVMEANRATIO_MAX, 0.33f);
 
@@ -464,7 +479,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
         LOG.info(reason + " for " + mapAttemptId + " ... killing it");
 
         final boolean isFailed = true;
-        TaskTrackerStatus ttStatus = null;
+        TaskTrackerInfo ttStatus = null;
         jobStats.incNumMapTasksFailedByFetchFailures();
         failedTask(tip, mapAttemptId, reason,
             (tip.isMapTask() ? TaskStatus.Phase.MAP : TaskStatus.Phase.REDUCE),
@@ -487,12 +502,16 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     return 0; // No maximum.
   }
 
-  public void close() throws InterruptedException {
+  public void close() {
     localityStats.stop();
     localityStatsThread.interrupt();
     // The thread may be stuck in DNS lookups. This thread is a daemon,
     // so it will not prevent process exit.
-    localityStatsThread.join(1000);
+    try {
+      localityStatsThread.join(1000);
+    } catch (InterruptedException e) {
+      LOG.warn("localityStatsThread.join interrupted");
+    }
   }
 
   /**
@@ -500,7 +519,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
    */
   public void initTasks() throws IOException {
     // log job info
-    jobHistory.logSubmitted(jobFile.toString(), this.startTime);
+    jobHistory.logSubmitted(jobFile.toString(), this.startTime, this.jobTrackerId);
     // log the job priority
     JobClient.RawSplit[] splits = null;
     splits = JobClient.getAndRemoveCachedSplits(jobId);
@@ -688,6 +707,37 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       return result;
     }
   }
+  
+  /**
+   * Registers new task attempt for given task
+   * @param taskTrackerName name of destination tracker
+   * @param hostName hostname of tracker
+   * @param forcedTip task in progress to run
+   * @return task to run
+   */
+  public Task forceNewMapTaskForTip(String taskTrackerName, String hostName,
+      TaskInProgress forcedTip) {
+    synchronized (lockObject) {
+      Task result = obtainTaskCleanupTask(taskTrackerName, forcedTip);
+      if (result != null) {
+        return result;
+      }
+
+      removeMatchingTipUnprotectedUnconditional(nonRunningMaps, forcedTip);
+      LOG.info("Running task " + forcedTip.getTIPId() + " on "
+          + taskTrackerName + "(" + hostName + ")");
+      scheduleMapUnprotected(forcedTip);
+      result = forcedTip.getTaskToRun(taskTrackerName);
+      if (result != null) {
+        addRunningTaskToTIPUnprotected(forcedTip, result.getTaskID(),
+            taskTrackerName, hostName, true);
+        // Handle cleanup task
+        setJobCleanupTaskState(result);
+      }
+      return result;
+    }
+  }
+
 
   @Override
   public boolean hasSpeculativeMaps() { return hasSpeculativeMaps; }
@@ -869,6 +919,24 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     }
     return null;
   }
+  
+  /**
+   * Removes matching TIP without checking any conditions
+   * @param taskList list of tasks to remove from
+   * @param intendedTip tip to remove
+   * @return removed tip
+   */
+  private TaskInProgress removeMatchingTipUnprotectedUnconditional(
+      List<TaskInProgress> taskList, TaskInProgress intendedTip) {
+    for (Iterator<TaskInProgress> iter = taskList.iterator(); iter.hasNext();) {
+      TaskInProgress t = iter.next();
+      if (t.getTIPId().equals(intendedTip.getTIPId())) {
+        iter.remove();
+        return t;
+      }
+    }
+    return null;
+  }
 
   /**
    * Find a non-running task in the passed list of TIPs
@@ -956,6 +1024,36 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       return result;
     }
   }
+  
+  /**
+   * Registers new task attempt for given task
+   * @param taskTrackerName name of destination tracker
+   * @param hostName hostname of tracker
+   * @param forcedTip task in progress to run
+   * @return task to run
+   */
+  public Task forceNewReduceTaskForTip(String taskTrackerName, String hostName,
+      TaskInProgress forcedTip) {
+    synchronized (lockObject) {
+      Task result = obtainTaskCleanupTask(taskTrackerName, forcedTip);
+      if (result != null) {
+        return result;
+      }
+
+      removeMatchingTipUnprotectedUnconditional(nonRunningMaps, forcedTip);
+      LOG.info("Running task " + forcedTip.getTIPId() + " on "
+          + taskTrackerName + "(" + hostName + ")");
+      scheduleReduceUnprotected(forcedTip);
+      result = forcedTip.getTaskToRun(taskTrackerName);
+      if (result != null) {
+        addRunningTaskToTIPUnprotected(forcedTip, result.getTaskID(),
+            taskTrackerName, hostName, true);
+        // Handle cleanup task
+        setJobCleanupTaskState(result);
+      }
+      return result;
+    }
+  }
 
   private void refreshCandidateSpeculativeReducesUnprotected() {
     long now = clock.getTime();
@@ -1017,21 +1115,32 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       if (result != null) {
         addRunningTaskToTIPUnprotected(tip, result.getTaskID(), taskTrackerName, hostName,
             true);
-        if (jobFailed) {
-          result.setJobCleanupTaskState
-          (org.apache.hadoop.mapreduce.JobStatus.State.FAILED);
-        } else if (jobKilled) {
-          result.setJobCleanupTaskState
-          (org.apache.hadoop.mapreduce.JobStatus.State.KILLED);
-        } else {
-          result.setJobCleanupTaskState
-          (org.apache.hadoop.mapreduce.JobStatus.State.SUCCEEDED);
-        }
+        // Handle cleanup task
+        setJobCleanupTaskState(result);
       }
       return result;
     }
   }
   
+  /**
+   * Sets task state according to job state if given task is cleanup one
+   * @param task task to handle
+   */
+  private void setJobCleanupTaskState(Task task) {
+    if (task.isJobCleanupTask()) {
+      if (jobFailed) {
+        task.setJobCleanupTaskState(
+            org.apache.hadoop.mapreduce.JobStatus.State.FAILED);
+      } else if (jobKilled) {
+        task.setJobCleanupTaskState(
+            org.apache.hadoop.mapreduce.JobStatus.State.KILLED);
+      } else {
+        task.setJobCleanupTaskState(
+            org.apache.hadoop.mapreduce.JobStatus.State.SUCCEEDED);
+      }
+    }
+  }
+ 
   @SuppressWarnings("deprecation")
   public boolean needsTaskCleanup(TaskInProgress tip) {
     synchronized (lockObject) {
@@ -1140,29 +1249,68 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   }
 
   public void updateTaskStatus(TaskInProgress tip, TaskStatus status,
-      TaskTrackerStatus ttStatus) {
+      TaskTrackerInfo ttStatus) {
     synchronized (lockObject) {
       updateTaskStatusUnprotected(tip, status, ttStatus);
     }
   }
   
-  private boolean isTaskKilledWithHighMemory(TaskStatus status) {
+  private boolean isTaskKilledHighMemory(TaskStatus status, String keyword) {
     String diagnosticInfo = status.getDiagnosticInfo();
     if (diagnosticInfo == null) {
       return false;
     }
     String[] splitdiagnosticInfo = diagnosticInfo.split("\\s+");
     for (String info : splitdiagnosticInfo) { 
-      if (TaskMemoryManagerThread.HIGH_MEMORY_KEYWORD.equals(info)) {
+      if (keyword.equals(info)) {
         return true;
       }
     }
     return false;
   }
   
+  private boolean isTaskKilledWithHighMemory(TaskStatus status) {
+    return isTaskKilledHighMemory(status,
+      TaskMemoryManagerThread.HIGH_MEMORY_KEYWORD);
+  }
+  
+  private boolean isTaskKilledWithCGroupMemory(TaskStatus status) {
+    return isTaskKilledHighMemory(status,
+      CGroupMemoryWatcher.CGROUPHIGH_MEMORY_KEYWORD);
+  }
+  
+  private void updateCGResourceCounters(TaskStatus status, boolean isMap) {
+    Counters taskCounters = status.getCounters();
+    long maxMem = taskCounters.getCounter(Task.Counter.MAX_MEMORY_BYTES);
+    long rssMem = taskCounters.getCounter(Task.Counter.MAX_RSS_MEMORY_BYTES);
+    long instMem = taskCounters.getCounter(Task.Counter.INST_MEMORY_BYTES);
+    
+    if (isMap) {
+     if (jobCounters.getCounter(Counter.MAX_MAP_MEM_BYTES) < maxMem) {
+       jobCounters.findCounter(Counter.MAX_MAP_MEM_BYTES).setValue(maxMem);
+     }
+     if (jobCounters.getCounter(Counter.MAX_MAP_RSS_MEM_BYTES) < rssMem) {
+       jobCounters.findCounter(Counter.MAX_MAP_RSS_MEM_BYTES).setValue(rssMem);
+     }
+     if (jobCounters.getCounter(Counter.MAX_MAP_INST_MEM_BYTES) < instMem) {
+       jobCounters.findCounter(Counter.MAX_MAP_INST_MEM_BYTES).setValue(instMem);
+     }
+    } else {
+      if (jobCounters.getCounter(Counter.MAX_REDUCE_MEM_BYTES) < maxMem) {
+        jobCounters.findCounter(Counter.MAX_REDUCE_MEM_BYTES).setValue(maxMem);
+      }
+      if (jobCounters.getCounter(Counter.MAX_REDUCE_RSS_MEM_BYTES) < rssMem) {
+        jobCounters.findCounter(Counter.MAX_REDUCE_RSS_MEM_BYTES).setValue(rssMem);
+      }
+      if (jobCounters.getCounter(Counter.MAX_REDUCE_INST_MEM_BYTES) < instMem) {
+        jobCounters.findCounter(Counter.MAX_REDUCE_INST_MEM_BYTES).setValue(instMem);
+      }
+    }
+  }
+  
   @SuppressWarnings("deprecation")
   private void updateTaskStatusUnprotected(TaskInProgress tip, TaskStatus status,
-      TaskTrackerStatus ttStatus) {
+      TaskTrackerInfo ttStatus) {
     double oldProgress = tip.getProgress();   // save old progress
     boolean wasRunning = tip.isRunning();
     boolean wasComplete = tip.isComplete();
@@ -1194,7 +1342,10 @@ public class CoronaJobInProgress extends JobInProgressTraits {
         status.setRunState(TaskStatus.State.KILLED);
       }
     }
-
+    
+    // aggregate the task tracker reported cgroup resource counters in job
+    updateCGResourceCounters(status, tip.isMapTask());
+    
     boolean change = tip.updateStatus(status);
     if (change) {
       TaskStatus.State state = status.getRunState();
@@ -1239,6 +1390,17 @@ public class CoronaJobInProgress extends JobInProgressTraits {
         } else {
           reduceCleanupTasks.add(taskid);
         }
+        if (isTaskKilledWithCGroupMemory(status)) {
+          //Increment the High Memory killed count for Reduce and Map Tasks
+          if (status.getIsMap()) {
+            jobCounters.incrCounter(
+              Counter.TOTAL_CGROUP_MEMORY_MAP_TASK_KILLED, 1);
+          }
+          else {
+            jobCounters.incrCounter(
+              Counter.TOTAL_CGROUP_MEMORY_REDUCE_TASK_KILLED, 1);
+          }
+        }
       }
       //For a failed task update the JT datastructures.
       else if (state == TaskStatus.State.FAILED ||
@@ -1250,6 +1412,17 @@ public class CoronaJobInProgress extends JobInProgressTraits {
           }
           else {
             jobCounters.incrCounter(Counter.TOTAL_HIGH_MEMORY_REDUCE_TASK_KILLED, 1);
+          }
+        }
+        if (isTaskKilledWithCGroupMemory(status)) {
+          //Increment the High Memory killed count for Reduce and Map Tasks
+          if (status.getIsMap()) {
+            jobCounters.incrCounter(
+              Counter.TOTAL_CGROUP_MEMORY_MAP_TASK_KILLED, 1);
+          }
+          else {
+            jobCounters.incrCounter(
+              Counter.TOTAL_CGROUP_MEMORY_REDUCE_TASK_KILLED, 1);
           }
         }
         // Get the event number for the (possibly) previously successful
@@ -1342,7 +1515,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   }
 
   public boolean completedTask(TaskInProgress tip, TaskStatus status,
-      TaskTrackerStatus ttStatus) {
+      TaskTrackerInfo ttStatus) {
     synchronized (lockObject) {
       return completedTaskUnprotected(tip, status, ttStatus);
     }
@@ -1353,7 +1526,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
    */
   @SuppressWarnings("deprecation")
   private boolean completedTaskUnprotected(TaskInProgress tip, TaskStatus status,
-      TaskTrackerStatus ttStatus) {
+      TaskTrackerInfo ttStatus) {
     int oldNumAttempts = tip.getActiveTasks().size();
     // Metering
     meterTaskAttemptUnprotected(tip, status);
@@ -1484,7 +1657,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     TaskStatus.Phase phase,
     boolean isFailed,
     String trackerName,
-    TaskTrackerStatus ttStatus) {
+    TaskTrackerInfo ttStatus) {
     TaskStatus.State state =
       isFailed ? TaskStatus.State.FAILED: TaskStatus.State.KILLED;
     TaskStatus status = TaskStatus.createTaskStatus(tip.isMapTask(),
@@ -1521,7 +1694,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
 
   @SuppressWarnings("deprecation")
   public void failedTask(TaskInProgress tip, TaskAttemptID taskid,
-                          TaskStatus status, TaskTrackerStatus taskTrackerStatus,
+                          TaskStatus status, TaskTrackerInfo taskTrackerStatus,
                           boolean wasRunning, boolean wasComplete,
                           boolean wasAttemptRunning) {
     synchronized (lockObject) {
@@ -1544,7 +1717,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
    */
   @SuppressWarnings("deprecation")
   private void failedTaskUnprotected(TaskInProgress tip, TaskAttemptID taskid,
-                          TaskStatus status, TaskTrackerStatus taskTrackerStatus,
+                          TaskStatus status, TaskTrackerInfo taskTrackerStatus,
                           boolean wasRunning, boolean wasComplete,
                           boolean wasAttemptRunning) {
     taskErrorCollector.collect(tip, taskid, clock.getTime());
@@ -1822,7 +1995,11 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   private void jobCompleteUnprotected() {
     //
     // All tasks are complete, then the job is done!
-    //
+    
+    if(this.terminated == JobStatus.FAILED 
+        || this.terminated == JobStatus.KILLED) {
+      terminate(this.terminated);
+    }
     if (this.status.getRunState() == JobStatus.RUNNING ||
         this.status.getRunState() == JobStatus.PREP) {
       changeStateTo(JobStatus.SUCCEEDED);
@@ -1972,6 +2149,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
   }
 
   private void terminate(int jobTerminationState) {
+    this.terminated = jobTerminationState;
     synchronized (lockObject) {
       terminateUnprotected(jobTerminationState);
     }
@@ -1986,6 +2164,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
    * @param jobTerminationState job termination state
    */
   private void terminateUnprotected(int jobTerminationState) {
+    this.terminated = jobTerminationState;
     if(!tasksInited) {
       //init could not be done, we just terminate directly.
       terminateJob(jobTerminationState);
@@ -2016,7 +2195,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       }
       for (int i = 0; i < maps.length; i++) {
         maps[i].kill();
-        TreeMap<TaskAttemptID, String> activeTasks = maps[i].getActiveTasks();
+        TreeMap<TaskAttemptID, String> activeTasks = maps[i].getActiveTasksCopy();
         for (TaskAttemptID attempt : activeTasks.keySet()) {
           TaskStatus status = maps[i].getTaskStatus(attempt);
           if (status != null) {
@@ -2030,7 +2209,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
       }
       for (int i = 0; i < reduces.length; i++) {
         reduces[i].kill();
-        TreeMap<TaskAttemptID, String> activeTasks = reduces[i].getActiveTasks();
+        TreeMap<TaskAttemptID, String> activeTasks = reduces[i].getActiveTasksCopy();
         for (TaskAttemptID attempt : activeTasks.keySet()) {
           TaskStatus status = reduces[i].getTaskStatus(attempt);
           if (status != null) {
@@ -2340,7 +2519,7 @@ public class CoronaJobInProgress extends JobInProgressTraits {
     return tasksInited;
   }
 
-  private void updateTaskTrackerStats(TaskInProgress tip, TaskTrackerStatus ttStatus,
+  private void updateTaskTrackerStats(TaskInProgress tip, TaskTrackerInfo ttStatus,
       Map<String,DataStatistics> trackerStats, DataStatistics overallStats) {
     synchronized (lockObject) {
       float tipDuration = tip.getExecFinishTime() -
@@ -2399,6 +2578,34 @@ public class CoronaJobInProgress extends JobInProgressTraits {
 
   public Configuration getConf() {
     return jobConf;
+  }
+
+  @Override
+  public boolean shouldLogCannotspeculativeMaps() {
+    long now = clock.getTime();
+    if ((now - lastTimeCannotspeculativeMapLog) <= logCannotspeculativeInterval)
+        return false;
+    int unfinished = numMapTasks - finishedMapTasks;
+    if (unfinished <= numMapTasks * speculativeMapLogRateThreshold ||
+        unfinished <= speculativeMapLogNumThreshold) {
+        lastTimeCannotspeculativeMapLog = now; 
+        return true;
+    }
+    return false;
+  }
+
+  @Override
+  public boolean shouldLogCannotspeculativeReduces() {
+    long now = clock.getTime();
+    if ((now - lastTimeCannotspeculativeReduceLog) <= logCannotspeculativeInterval)
+      return false;
+    int unfinished = numReduceTasks - finishedReduceTasks;
+    if (unfinished <= numReduceTasks * speculativeReduceLogRateThreshold ||
+        unfinished <= speculativeReduceLogNumThreshold) {
+        lastTimeCannotspeculativeReduceLog = now; 
+        return true;
+    }
+    return false;
   }
 
   @Override

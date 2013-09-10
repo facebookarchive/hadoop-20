@@ -38,7 +38,7 @@ public class TestFileCreationClient extends junit.framework.TestCase {
   static final String DIR = "/" + TestFileCreationClient.class.getSimpleName() + "/";
 
   {
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+    DataNode.LOG.getLogger().setLevel(Level.ALL);
     ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)InterDatanodeProtocol.LOG).getLogger().setLevel(Level.ALL);

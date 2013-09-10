@@ -13,6 +13,17 @@
 </property>
 
 <property>
+  <name>dfs.client.shutdownhook.enable</name>
+  <value>true</value>
+  <description>If true, the HDFS FileSystem will register a shutdown hook
+    to close all file systems if a shutdown occurs.  This is the default.
+    Set this to false if your application is registering its own shutdown
+    hook; in this case, HDFS will not register one, so the application
+    shutdown should include calling FileSystem.closeAll().
+  </description>
+</property>
+
+<property>
   <name>dfs.replication</name>
   <value>1</value>
 </property>

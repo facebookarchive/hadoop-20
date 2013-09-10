@@ -17,18 +17,22 @@
  */
 package org.apache.hadoop.hdfs.notifier.server;
 
-import java.util.HashSet;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Queue;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hdfs.notifier.EventType;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.notifier.NamespaceEvent;
 import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
 import org.apache.hadoop.hdfs.notifier.NotifierUtils;
@@ -46,15 +50,12 @@ public class ServerHistory implements IServerHistory {
   // true if in the ramp-up phase
   private volatile boolean rampUp = true;
   
-  // The actual history. It's a 2-level tree:
-  // * On the top level the tree is split by the event's path
-  // * On the 2nd level the tree is split by the event's type
-  // The leaf nodes contain a list of transaction id's for the events
-  // that occurred in the last historyLength milliseconds.
-  ConcurrentMap<String, ConcurrentMap<Byte, List<HistoryTreeEntry>>> history;
-  
-  // Used for synchronization when parts of the history tree must be removed
-  Object historyLock = new Object();
+  // store the timestamp/transaction_id order of the history entries.
+  final ArrayList<HistoryTreeEntry> orderedHistoryList;
+  // the root of the history tree.
+  final HistoryNode historyTree;
+
+  ReentrantReadWriteLock historyLock = new ReentrantReadWriteLock();
   
   private IServerCore core;
   
@@ -68,20 +69,21 @@ public class ServerHistory implements IServerHistory {
   private volatile long historyLimit;
   private volatile boolean historyLimitDisabled = false;
   
-  // The number of stored notifications
-  AtomicLong notificationsCount = new AtomicLong(0);
+  // compare by transaction id
+  private final HistoryTreeEntryComparatorById comparatorByID = 
+      new HistoryTreeEntryComparatorById();
   
-  // The ordered by timestamp history tree entries
-  List<HistoryTreeEntry> orderedEntries = 
-      new LinkedList<ServerHistory.HistoryTreeEntry>();
+  // compare by the timestamp when we store the event.
+  private final HistoryTreeEntryComparatorByTS comparatorByTS = 
+      new HistoryTreeEntryComparatorByTS();
   
   public ServerHistory(IServerCore core, boolean initialRampUp)
       throws ConfigurationException {
     this.core = core;
     historyLength = core.getConfiguration().getLong(HISTORY_LENGTH, -1);
     historyLimit = core.getConfiguration().getLong(HISTORY_LIMIT, -1);
-    history = new ConcurrentHashMap<String, 
-        ConcurrentMap<Byte,List<HistoryTreeEntry>>>();
+    historyTree = new HistoryNode("");
+    orderedHistoryList = new ArrayList<HistoryTreeEntry>();
     rampUp = initialRampUp;
     
     if (historyLength == -1) {
@@ -92,14 +94,21 @@ public class ServerHistory implements IServerHistory {
       LOG.warn("Starting history without any physical limit ...");
       historyLimitDisabled = true;
     }
+    
+   
   }
   
+  /**
+   * Set the length in time 
+   */
   @Override
   public void setHistoryLength(long newHistoryLength) {
     historyLength = newHistoryLength;
   }
   
-  
+  /**
+   * set the number of transactions kept in history
+   */
   @Override
   public void setHistoryLimit(long newHistoryLimit) {
     if (newHistoryLimit > 0) {
@@ -126,95 +135,127 @@ public class ServerHistory implements IServerHistory {
     }
   }
   
-  
-  /**
-   * Does not guarantee any synchronization mechanisms. (historyLock must be
-   * hold when calling it).
-   * @param path 
-   * @return the number of notifications stored in the history at path
-   */
-  long getNotificationsCountForPath(String path) {
-    long count = 0;
-    if (!history.containsKey(path)) {
-      return 0;
-    }
-    for (Byte type : history.get(path).keySet()) {
-      count += history.get(path).get(type).size();
-    }
-    return count;
-  }
-
-
   /**
    * Checks if there are notifications in our tree which are older than
    * historyLength. It removes does which are older.
    */
   private void cleanUpHistory() {
-    Set<String> toBeRemovedPaths = new HashSet<String>();
     long oldestAllowedTimestamp = System.currentTimeMillis() - historyLength;
     int trashedNotifications = 0;
     
     if (LOG.isDebugEnabled()) {
-      LOG.debug("Checking old notifications to remove from history tree ...");
+      LOG.debug("History cleanup: Checking old notifications to remove from history list ...");
     }
     
-    synchronized (historyLock) {
-      int deletedElements = 0;
+    HistoryTreeEntry key = new HistoryTreeEntry(oldestAllowedTimestamp, 0, (byte)0);
+    int notificationsCount = 0;
+    historyLock.writeLock().lock();
+    try {
+      notificationsCount = orderedHistoryList.size();
+      LOG.warn("History cleanup: size of the history before cleanup: " + notificationsCount);
 
-      if (!historyLimitDisabled && notificationsCount.get() > historyLimit) {
-        LOG.warn("Reached physical limit. Number of stored notifications: " + 
+      if (!historyLimitDisabled && notificationsCount > historyLimit) {
+        LOG.warn("History cleanup: Reached physical limit. Number of stored notifications: " + 
             notificationsCount + ". Clearing ...");
       }
       
+      int index = Collections.binarySearch(orderedHistoryList, key, comparatorByTS);
+      int toDeleteByTS = index >= 0 ? index : - (index + 1);
+      int toDeleteByLimit = historyLimitDisabled ? 0 : notificationsCount - (int)historyLimit;
+      toDeleteByLimit = toDeleteByLimit > 0 ? toDeleteByLimit : 0;
+      
+      int toDelete = Math.max(toDeleteByTS, toDeleteByLimit);
+      
       // Delete items which are too old
-      for (HistoryTreeEntry entry : orderedEntries) {
-        if (entry.timestamp > oldestAllowedTimestamp &&
-            (historyLimitDisabled || notificationsCount.get() <= historyLimit)) {
-          // We stop removing items if the entry is new enough and
-          // if we haven't reached the physical limit (if enabled)
-          break;
+      if (toDelete > 0) {
+        LOG.warn("History cleanup: number of the history to cleanup: " + toDelete);
+        for (int i = 0; i < toDelete; i++) {
+          orderedHistoryList.get(i).removeFromTree();
         }
         
-        if (entry.timestamp > oldestAllowedTimestamp) {
+        orderedHistoryList.subList(0, toDelete).clear();
+        
+        if (toDeleteByLimit > toDeleteByTS) {
           // If we delete a notification because we don't have space left
           trashedNotifications ++;
         }
+        notificationsCount = orderedHistoryList.size();
+        LOG.warn("History cleanup: size of the history after cleanup: " + notificationsCount);
         
-        // entry is the first element in the list which holds it
-        entry.backPointer.remove(0);
-        deletedElements ++;
-        notificationsCount.decrementAndGet();
+        // clean up history tree, remove the node that has no children and
+        // no notifications associated with them.
+        cleanUpHistoryTree(historyTree);
       }
-      orderedEntries.subList(0, deletedElements).clear();
-    }
-
-    // Clear lists for paths which don't have any elements left
-    for (String path : history.keySet()) {
-      synchronized (historyLock) {
-        // If we don't have any notifications left for this path, remove it
-        if (getNotificationsCountForPath(path) == 0) {
-          toBeRemovedPaths.add(path);
-        }
-      }
-    }
-    
-    // Remove the paths marked for removal
-    for (String path : toBeRemovedPaths) {
-      synchronized (historyLock) {
-        // Make sure no notifications were added meanwhile
-        if (getNotificationsCountForPath(path) > 0) {
-          continue;
-        }
-        historyQueuesCount -= history.get(path).size();
-        history.remove(path);
-      }
+      
+    } finally {
+      historyLock.writeLock().unlock();
     }
     
     core.getMetrics().trashedHistoryNotifications.inc(trashedNotifications);
-    core.getMetrics().historySize.set(notificationsCount.get());
+    core.getMetrics().historySize.set(notificationsCount);
     core.getMetrics().historyQueues.set(historyQueuesCount);
   }
   
+  /**
+   * Clean up the Tree by DFS traversal.
+   * 
+   * Remove the node that has no children and no notifications associated
+   * with them.
+   * @param node
+   */
+  private void cleanUpHistoryTree(HistoryNode node) {
+    if (node == null || node.children == null) {
+      return;
+    }
+    
+    Iterator<HistoryNode> iterator = node.children.iterator();
+    while (iterator.hasNext()) {
+      HistoryNode child = iterator.next();
+      
+      // clean up child
+      cleanUpHistoryTree(child);
+      
+      // clean up current node;
+      if (shouldRemoveNode(child)) {
+        iterator.remove();
+      }
+    }
+  }
+  
+  /**
+   * Should remove the node from the history tree if both the notifications 
+   * and children list are empty.
+   * @param node
+   * @return
+   */
+  private boolean shouldRemoveNode(HistoryNode node) {
+    if (node == null) {
+      return true;
+    }
+    
+    int sizeOfChildren = 0;
+    if (node.children != null) {
+      sizeOfChildren = node.children.size();
+    }
+    
+    if (sizeOfChildren > 0) {
+      return false;
+    }
+    
+    int sizeOfNotifications = 0;
+    if (node.notifications != null) {
+      for (List<HistoryTreeEntry> notiList : node.notifications.values()) {
+        if (notiList != null) {
+          sizeOfNotifications += notiList.size();
+          if (sizeOfNotifications > 0) {
+            return false;
+          }
+        }
+      }
+    }
+    
+    return true;
+  }
   
   /**
    * Should be called when the server starts to start recording the history
@@ -254,38 +295,45 @@ public class ServerHistory implements IServerHistory {
    */
   @Override
   public void storeNotification(NamespaceNotification notification) {
-    ConcurrentMap<Byte, List<HistoryTreeEntry>> typeMap;
-    List<HistoryTreeEntry> historyTreeEntryList;
-    String basePath = NotifierUtils.getBasePath(notification),
-        additionalPath = NotifierUtils.getAdditionalPath(notification);
-    
-    synchronized (historyLock) {
-      history.putIfAbsent(basePath,
-          new ConcurrentHashMap<Byte, List<HistoryTreeEntry>>());
-      typeMap = history.get(basePath);
-      
-      if (!typeMap.containsKey(notification.getType())) {
-        typeMap.put(notification.getType(), new LinkedList<HistoryTreeEntry>());
-        historyQueuesCount ++;
-      }
-      historyTreeEntryList = typeMap.get(notification.getType());
-      
+    int notificationsCount = 0;
+    historyLock.writeLock().lock();
+    try {
       if (LOG.isDebugEnabled()) {
-        LOG.debug("Storing into history: " + NotifierUtils.asString(notification) +
-            " with basePath='" + basePath + "' and additionalPath='" +
-            additionalPath +"'");
+        LOG.debug("Storing into history: " + NotifierUtils.asString(notification));
       }
+      
+      String[] paths = DFSUtil.split(notification.path, Path.SEPARATOR_CHAR);
+      
+      long timestamp = System.currentTimeMillis();
+      HistoryTreeEntry entry = new HistoryTreeEntry(timestamp, notification.txId, notification.type);
       
       // Store the notification
-      HistoryTreeEntry entry = new HistoryTreeEntry(System.currentTimeMillis(),
-          notification.getTxId(), additionalPath);
-      entry.backPointer = historyTreeEntryList;
-      historyTreeEntryList.add(entry);
-      orderedEntries.add(entry);
+      HistoryNode node = historyTree;
+      for (String path : paths) {
+        if (path.trim().length() == 0) {
+          continue;
+        }
+        
+        node = node.addOrGetChild(path);
+      }
+      
+      if (node.notifications == null) {
+        node.notifications = new HashMap<Byte, List<HistoryTreeEntry>>();
+      }
+      if (!node.notifications.containsKey(notification.type)) {
+        node.notifications.put(notification.type, new LinkedList<HistoryTreeEntry>());
+      }
+      
+      entry.node = node;
+      node.notifications.get(notification.type).add(entry);
+      
+      orderedHistoryList.add(entry);
+      notificationsCount = orderedHistoryList.size();
+    } finally {
+      historyLock.writeLock().unlock();
     }
 
-    notificationsCount.incrementAndGet();
-    core.getMetrics().historySize.set(notificationsCount.get());
+    core.getMetrics().historySize.set(notificationsCount);
     core.getMetrics().historyQueues.set(historyQueuesCount);
     
     if (LOG.isDebugEnabled()) {
@@ -314,59 +362,27 @@ public class ServerHistory implements IServerHistory {
   public void addNotificationsToQueue(NamespaceEvent event, long txId,
       Queue<NamespaceNotification> notifications)
           throws TransactionIdTooOldException {
-    ConcurrentMap<Byte, List<HistoryTreeEntry>> typeMap;
-    List<HistoryTreeEntry> historyTreeEntryList;
     
     if (LOG.isDebugEnabled()) {
       LOG.debug("Got addNotificationsToQueue for: " +
           NotifierUtils.asString(event) + " and txId: " + txId);
     }
     
-    synchronized (historyLock) {
-      typeMap = history.get(event.getPath());
-      if (typeMap == null) {
-        throw new TransactionIdTooOldException("No data in history for path " +
-            event.getPath());
+    historyLock.readLock().lock();
+    try {
+      if (orderedHistoryList == null || orderedHistoryList.size() == 0) {
+        throw new TransactionIdTooOldException("No data in history.");
       }
       
-      historyTreeEntryList = typeMap.get(event.getType());
-      if (historyTreeEntryList == null) {
-        throw new TransactionIdTooOldException("No data in history for type.");
+      if (orderedHistoryList.get(0).txnId > txId || 
+          orderedHistoryList.get(orderedHistoryList.size() - 1).txnId < txId) {
+        throw new TransactionIdTooOldException("No data in history for txId " + txId);
       }
       
-      if (historyTreeEntryList.isEmpty()) {
-        throw new TransactionIdTooOldException("No events recently.");
-      }
-      if (historyTreeEntryList.get(0).transactionId > txId) {
-        throw new TransactionIdTooOldException("No data in history for txId.");
-      }
- 
-      boolean foundTransaction = false;
-      for (HistoryTreeEntry entry : historyTreeEntryList) {
-        if (foundTransaction) {
-          String notificationPath = event.path;
-          if (entry.additionalPath != null && entry.additionalPath.length() > 0) {
-            if (event.path.trim().equals("/")) {
-              notificationPath += entry.additionalPath;
-            } else {
-              notificationPath += "/" + entry.additionalPath;
-            }
-          }
-          if (LOG.isDebugEnabled()) {
-            LOG.debug("addNotificationsToQueue - adding: [" + notificationPath + ", " +
-                EventType.fromByteValue(event.type).name() + "]" +
-                " and txId: " + entry.transactionId);
-          }
-          notifications.add(new NamespaceNotification(notificationPath,
-              event.type, entry.transactionId));
-        }
-        
-        if (entry.transactionId == txId) {
-          foundTransaction = true;
-        }
-      }
+      int index = Collections.binarySearch(orderedHistoryList, new HistoryTreeEntry(0, txId, event.type), 
+            comparatorByID);
       
-      if (!foundTransaction) {
+      if (index < 0) {
         // If we got here, there are 2 possibilities:
         // * The client gave us a bad transaction id.
         // * We missed one (or more) transaction(s)
@@ -375,27 +391,120 @@ public class ServerHistory implements IServerHistory {
         throw new TransactionIdTooOldException(
             "Potentially corrupt server history");
       }
+      
+      String dirFormatPath = event.path;
+      if (!dirFormatPath.endsWith(Path.SEPARATOR)) {
+        dirFormatPath += Path.SEPARATOR;
+      }
+      for (int i = index + 1; i < orderedHistoryList.size(); i++) {
+        HistoryTreeEntry entry = orderedHistoryList.get(i);
+        if (event.type != entry.type) {
+          continue;
+        }
+        
+        String entryPath = entry.getFullPath();
+        if (entryPath.startsWith(dirFormatPath)) {
+          notifications.add(new NamespaceNotification(entryPath, entry.type, entry.txnId));
+        }
+      }
+    } finally {
+      historyLock.readLock().unlock();
     }
   }
-
   
-  private class HistoryTreeEntry {
-    // The time when the entry was added
-    long timestamp;
-    
-    // The Edit Log transaction id associated with this entry
-    long transactionId;
-    
-    // Additional path (if needed by the type)
-    String additionalPath;
-    
-    List<HistoryTreeEntry> backPointer; 
-    
-    public HistoryTreeEntry(long timestamp, long transactionId,
-        String additionalPath) {
-      this.timestamp = timestamp;
-      this.transactionId = transactionId;
-      this.additionalPath = additionalPath;
+  private class HistoryTreeEntryComparatorById implements Comparator<HistoryTreeEntry> {
+
+    @Override
+    public int compare(HistoryTreeEntry o1, HistoryTreeEntry o2) {
+      return (int) (o1.txnId - o2.txnId);
     }
   }
+  
+  private class HistoryTreeEntryComparatorByTS implements Comparator<HistoryTreeEntry> {
+
+    @Override
+    public int compare(HistoryTreeEntry o1, HistoryTreeEntry o2) {
+      return (int) (o1.timestamp - o2.timestamp);
+    }
+  }
+  
+  protected class HistoryNode implements Comparable<String> {
+    final String name;
+    Map<Byte, List<HistoryTreeEntry>> notifications = null;
+    final ArrayList<HistoryNode> children;
+    HistoryNode parent = null;
+    
+    public HistoryNode(String name) {
+      this.name = name;
+      this.children = new ArrayList<HistoryNode>();
+    }
+    
+    public HistoryNode addOrGetChild(String childName) {
+      int index = Collections.binarySearch(children, childName);
+      if (index >= 0) {
+        return children.get(index);
+      }
+      
+      index = -(index + 1);
+      HistoryNode child = new HistoryNode(childName);
+      child.parent = this;
+      children.add(index, child);
+      return child;
+    }
+
+    @Override
+    public int hashCode() {
+      return name.hashCode();
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+      if (obj == null || !(obj instanceof HistoryNode)) {
+        return false;
+      }
+      return this.name.equals(((HistoryNode)obj).name);
+    }
+
+    @Override
+    public int compareTo(String name2) {
+      return this.name.compareTo(name2);
+    }
+  }
+  
+  protected class HistoryTreeEntry {
+    long timestamp;
+    long txnId;
+    byte type;
+    HistoryNode node;
+    
+    public HistoryTreeEntry(long timestamp, long txnId, byte type) {
+      this.timestamp = timestamp;
+      this.txnId = txnId;
+      this.type = type;
+    }
+    
+    /**
+     * Get the full event path.
+     * @return
+     */
+    public String getFullPath() {
+      if (node == null) {
+        return null;
+      }
+      
+      StringBuilder sb = new StringBuilder();
+      HistoryNode t = node;
+      sb.append(t.name);
+      while (t.parent != null) {
+        t = t.parent;
+        sb.insert(0, t.name + Path.SEPARATOR);
+      }
+      return sb.toString();
+    }
+    
+    public boolean removeFromTree() {
+      return node.notifications.get(type).remove(this);
+    }
+  }
+  
 }

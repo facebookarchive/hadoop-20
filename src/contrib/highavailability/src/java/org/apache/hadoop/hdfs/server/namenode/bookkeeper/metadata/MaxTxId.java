@@ -31,8 +31,8 @@ import org.apache.zookeeper.data.Stat;
 
 import java.io.IOException;
 
-import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.metadata.BookKeeperJournalMetadataManager.interruptedException;
-import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.metadata.BookKeeperJournalMetadataManager.keeperException;
+import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZkUtil.interruptedException;
+import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZkUtil.keeperException;
 
 /**
  * Used by {@link BookKeeperJournalManager} to indicate the latest known

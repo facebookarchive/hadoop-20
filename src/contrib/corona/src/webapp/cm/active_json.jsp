@@ -17,6 +17,8 @@
       request.getParameter("users"),
       request.getParameter("poolGroups"),
       request.getParameter("poolInfos"));
+  boolean canKillSessions = WebUtils.isValidKillSessionsToken(
+    request.getParameter("killSessionsToken"));
 
   DateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");
   ClusterManager cm = (ClusterManager) application.getAttribute("cm");
@@ -51,10 +53,13 @@
         continue;
       }
 
-      String checkCase = "<input type=\"checkbox\" class=\"case\" name=\"case\" value=\"" + s.getSessionId() + "\">";
-
       JSONArray row = new JSONArray();
-      row.put(checkCase);
+      if (canKillSessions) {
+        String checkCase = 
+          "<input type=\"checkbox\" class=\"case\" name=\"case\" value=\"" + 
+          s.getSessionId() + "\">";
+        row.put(checkCase);
+      }
       row.put(url);
       row.put(dateFormat.format(new Date(s.getStartTime())));
       row.put("<a href=\"jobresources.jsp?id=" + id + "\">" +
@@ -63,11 +68,27 @@
       row.put(poolInfo.getPoolGroupName());
       row.put(poolInfo.getPoolName());
       row.put(SessionPriority.findByValue(s.getPriority()));
-
+      
       for (ResourceType resourceType : resourceTypes) {
         row.put(s.getGrantedRequestForType(resourceType).size());
         row.put(s.getPendingRequestForType(resourceType).size());
         row.put(s.getRequestCountForType(resourceType));
+        
+        if (resourceType == ResourceType.JOBTRACKER) {
+          continue;
+        }
+        
+        List<Long> resourceUsage = s.getResourceUsageForType(resourceType);
+        if (resourceUsage != null) {
+          for (long val:resourceUsage) {
+            row.put(StringUtils.humanReadableInt(val));
+          }
+        } else {
+          row.put("0 B");
+          row.put("0 B");
+          row.put("0 B");
+        }
+        
       }
       array.put(row);
     }

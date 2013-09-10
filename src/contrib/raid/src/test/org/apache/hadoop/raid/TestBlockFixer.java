@@ -20,6 +20,7 @@ package org.apache.hadoop.raid;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -29,6 +30,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
+
+import javax.management.MBeanServer;
+import javax.management.ObjectName;
 
 import junit.framework.TestCase;
 
@@ -47,13 +51,18 @@ import org.apache.hadoop.hdfs.TestRaidDfs;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.JobID;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Priority;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Worker.LostFileInfo;
 import org.apache.hadoop.raid.LogUtils.LOGRESULTS;
 import org.apache.hadoop.raid.LogUtils.LOGTYPES;
+import org.apache.hadoop.raid.RaidHistogram.Point;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 import org.junit.Test;
 
@@ -68,7 +77,7 @@ public class TestBlockFixer extends TestCase {
   final static String CONFIG_FILE = new File(TEST_DIR, 
       "test-raid.xml").getAbsolutePath();
   final static long RELOAD_INTERVAL = 1000;
-  final static int NUM_DATANODES = 3;
+  final static int NUM_DATANODES = 4;
   Configuration conf;
   String namenode = null;
   MiniDFSCluster dfsCluster = null;
@@ -82,25 +91,43 @@ public class TestBlockFixer extends TestCase {
     ParityFilePair.disableCacheUsedInTestOnly();
   }
   
-  public static void verifyMetrics(FileSystem fileSys, 
-      RaidNode cnode, boolean local, long expectedFixedFiles,
-      long expectedFixBlocks) {
-    assertEquals("file not fixed", expectedFixedFiles,
-        cnode.blockIntegrityMonitor.getNumFilesFixed());
-    if (!local) {
-      verifyMetrics(fileSys, cnode, LOGTYPES.OFFLINE_RECONSTRUCTION_BLOCK,
-          LOGRESULTS.SUCCESS, null, expectedFixBlocks);
+  class TestSendRecoveryTimeInjectionHandler extends InjectionHandler {
+    @Override
+    public void _processEvent(InjectionEventI event, Object... args) {
+      if (event == InjectionEvent.RAID_SEND_RECOVERY_TIME) {
+        if (cnode == null) {
+          return;
+        }
+        RaidHistogram histogram = (RaidHistogram)args[0];
+        String p = (String)args[1];
+        Long value = (Long)args[2];
+        ArrayList<Point> points =
+            histogram.getPointsWithGivenRecoveryTime(value);
+        boolean match = false;
+        for (Point pt: points) {
+          if (pt.path.equals(p)) {
+            match = true;
+            assertEquals(value, (Long)pt.value);
+            String trackingUrl = CorruptFileCounterServlet.getTrackingUrl(
+                (String)args[3], cnode);
+            assertTrue("Should get a tracking url", trackingUrl.length() > 0);
+            break;
+          }
+        }
+        assertTrue("We should find path " + p + " in the histogram", match);
+      }
     }
   }
   
   public static void verifyMetrics(FileSystem fileSys, 
-      RaidNode cnode, LOGTYPES type, LOGRESULTS result, long expected) {
-    verifyMetrics(fileSys, cnode, type, result, null, expected, false);
-  }
-  
-  public static void verifyMetrics(FileSystem fileSys, 
-      RaidNode cnode, LOGTYPES type, LOGRESULTS result, String tag, long expected) {
-    verifyMetrics(fileSys, cnode, type, result, tag, expected, false);
+      RaidNode cnode, boolean local, long expectedFixedFiles,
+      long expectedFixBlocks) {
+    assertTrue("Fewer expected fixed files", 
+        cnode.blockIntegrityMonitor.getNumFilesFixed() >= expectedFixedFiles);
+    if (!local) {
+      verifyMetrics(fileSys, cnode, LOGTYPES.OFFLINE_RECONSTRUCTION_BLOCK,
+          LOGRESULTS.SUCCESS, null, expectedFixBlocks, true);
+    }
   }
   
   public static void verifyMetrics(FileSystem fileSys, 
@@ -122,7 +149,8 @@ public class TestBlockFixer extends TestCase {
         if (greater == false) {
           assertTrue(message, !logMetrics.containsKey(counterName));
         } else {
-          actual = logMetrics.get(counterName).getCurrentIntervalValue();
+          actual = logMetrics.containsKey(counterName)?logMetrics.get(counterName).getCurrentIntervalValue():
+                0;
           assertTrue(message + " but " + actual, actual >= 0L);
         }
       } else {
@@ -170,7 +198,7 @@ public class TestBlockFixer extends TestCase {
   }
 
   @Test
-  public void testFilterUnfixableFiles() throws IOException {
+  public void testFilterUnfixableFiles() throws Exception {
     conf = new Configuration();
     dfsCluster = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
     dfsCluster.waitActive();
@@ -179,7 +207,8 @@ public class TestBlockFixer extends TestCase {
     Utils.loadTestCodecs(conf);
     try {
       Configuration testConf = fs.getConf();
-      BlockIntegrityMonitor blockFixer = new LocalBlockIntegrityMonitor(testConf);
+      BlockIntegrityMonitor blockFixer =
+          new LocalBlockIntegrityMonitor(testConf, false);
 
       String p1 = "/user/foo/f1";
       String p2 = "/user/foo/f2";
@@ -250,6 +279,24 @@ public class TestBlockFixer extends TestCase {
   public void testBlockFixLocal() throws Exception {
     implBlockFix(true, false);
   }
+  
+  private void verifyMXBean(RaidNode cnode) throws Exception {
+    MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
+    ObjectName mxbeanName = new ObjectName(
+        "hadoop:service=RaidNode,name=RaidNodeState");
+    Long timeSinceLastSuccessfulFix = 
+        (Long) mbs.getAttribute(mxbeanName, "TimeSinceLastSuccessfulFix");
+    assertNotNull(timeSinceLastSuccessfulFix);
+    if (timeSinceLastSuccessfulFix == 0) {
+      assertEquals("No files need to fix", 0,
+          cnode.blockIntegrityMonitor.approximateNumRecoverableFiles);
+    }
+    LOG.info("timeSinceLastSuccessfulFix:" + timeSinceLastSuccessfulFix +
+             "\t" + "approximateNumRecoverableFiles:" +
+             cnode.blockIntegrityMonitor.approximateNumRecoverableFiles + 
+             "\t" + "lastSuccessfulFixTime:" + 
+             cnode.blockIntegrityMonitor.lastSuccessfulFixTime);
+  }
 
   /**
    * Create a file with three stripes, corrupt a block each in two stripes,
@@ -276,15 +323,19 @@ public class TestBlockFixer extends TestCase {
     } else {
       localConf.set("raid.blockfix.classname",
                     "org.apache.hadoop.raid.DistBlockIntegrityMonitor");
+      InjectionHandler h = new TestSendRecoveryTimeInjectionHandler();
+      InjectionHandler.set(h);
     }
     localConf.setLong("raid.blockfix.filespertask", 2L);
     if (hasChecksumStore) {
       TestBlockFixer.setChecksumStoreConfig(localConf);
     }
-
+    
     try {
       cnode = RaidNode.createRaidNode(null, localConf);
       TestRaidDfs.waitForFileRaided(LOG, fileSys, file1, destPath);
+      LOG.info("Startup raidnode");
+      verifyMXBean(cnode);
       cnode.stop(); cnode.join();
       
       FileStatus srcStat = fileSys.getFileStatus(file1);
@@ -313,17 +364,24 @@ public class TestBlockFixer extends TestCase {
 
       cnode = RaidNode.createRaidNode(null, localConf);
       long start = System.currentTimeMillis();
-      while (cnode.blockIntegrityMonitor.getNumFilesFixed() < 1 &&
+      while ((cnode.blockIntegrityMonitor.getNumFilesFixed() < 1 || 
+              cnode.blockIntegrityMonitor.getNumberOfPoints("/") < 1) && 
              System.currentTimeMillis() - start < 120000) {
         LOG.info("Test testBlockFix waiting for files to be fixed.");
+        verifyMXBean(cnode);
         Thread.sleep(1000);
       }
+      LOG.info("Files should be fixed");
+      verifyMXBean(cnode);
+      assertTrue("Raidnode should record more than 1 point", 
+          cnode.blockIntegrityMonitor.getNumberOfPoints("/") >= 1);
       verifyMetrics(fileSys, cnode, local, 1L, corruptBlockIdxs.length);
       
       dfs = getDFS(conf, dfs);
       assertTrue("file not fixed",
                  TestRaidDfs.validateFile(dfs, file1, file1Len, crc1));
-
+      LOG.info("Finish checking");
+      verifyMXBean(cnode);
     } catch (Exception e) {
       LOG.info("Test testBlockFix Exception " + e +
                StringUtils.stringifyException(e));
@@ -392,12 +450,15 @@ public class TestBlockFixer extends TestCase {
       
       cnode = RaidNode.createRaidNode(null, localConf);
       long start = System.currentTimeMillis();
-      while (cnode.blockIntegrityMonitor.getNumFilesFixed() < 1 &&
+      while ((cnode.blockIntegrityMonitor.getNumFilesFixed() < 1 ||
+              cnode.blockIntegrityMonitor.getNumberOfPoints("/") < 1) &&
              System.currentTimeMillis() - start < 120000) {
         LOG.info("Test " + testName + " waiting for files to be fixed.");
         Thread.sleep(1000);
       }
       verifyMetrics(fileSys, cnode, local, 1L, 1L);
+      assertTrue("Raidnode should record more than 1 point",
+          cnode.blockIntegrityMonitor.getNumberOfPoints("/") >= 1);
       
       // Stop RaidNode
       cnode.stop(); cnode.join(); cnode = null;
@@ -476,7 +537,7 @@ public class TestBlockFixer extends TestCase {
   public void testGeneratedLastBlockLocal() throws Exception {
     generatedBlockTestCommon("testGeneratedLastBlock", 6, true, false);
   }
-
+  
   @Test
   public void testParityBlockFixDist() throws Exception {
     implParityBlockFix("testParityBlockFixDist", false, false);
@@ -551,11 +612,14 @@ public class TestBlockFixer extends TestCase {
       }
       cnode = RaidNode.createRaidNode(null, localConf);
       long start = System.currentTimeMillis();
-      while (cnode.blockIntegrityMonitor.getNumFilesFixed() < 1 &&
+      while ((cnode.blockIntegrityMonitor.getNumFilesFixed() < 1 || 
+              cnode.blockIntegrityMonitor.getNumberOfPoints("/") < 1) &&
              System.currentTimeMillis() - start < 120000) {
         LOG.info("Test " + testName + " waiting for files to be fixed.");
         Thread.sleep(1000);
       }
+      assertTrue("Raidnode should record more than 1 point",
+          cnode.blockIntegrityMonitor.getNumberOfPoints("/") >= 1);
 
       long checkCRC = RaidDFSUtil.getCRC(fileSys, parityFile);
 
@@ -660,11 +724,14 @@ public class TestBlockFixer extends TestCase {
 
       cnode = RaidNode.createRaidNode(null, localConf);
       start = System.currentTimeMillis();
-      while (cnode.blockIntegrityMonitor.getNumFilesFixed() < 1 &&
+      while ((cnode.blockIntegrityMonitor.getNumFilesFixed() < 1 || 
+              cnode.blockIntegrityMonitor.getNumberOfPoints("/") < 1) &&
              System.currentTimeMillis() - start < 120000) {
         LOG.info("Test " + testName + " waiting for files to be fixed.");
         Thread.sleep(1000);
       }
+      assertTrue("Raidnode should record more than 1 point", 
+          cnode.blockIntegrityMonitor.getNumberOfPoints("/") >= 1);
 
       long checkCRC = RaidDFSUtil.getCRC(fileSys, partFile);
 
@@ -768,7 +835,8 @@ public class TestBlockFixer extends TestCase {
       }
       assertTrue(blockFixer.jobsRunning() >= 2);
       
-      while (blockFixer.getNumFilesFixed() < 2 &&
+      while ((blockFixer.getNumFilesFixed() < 2 ||
+              blockFixer.getNumberOfPoints("/") < 2) &&
              System.currentTimeMillis() - start < 240000) {
         LOG.info("Test testBlockFix waiting for files to be fixed.");
         Thread.sleep(10);
@@ -780,17 +848,17 @@ public class TestBlockFixer extends TestCase {
         LOG.info("Test testBlockFix waiting for block fixer jobs to finish.");
         Thread.sleep(10);
       }
-      
-      assertTrue("files not fixed", blockFixer.getNumFilesFixed() >= 2);
-      verifyMetrics(fileSys, cnode, LOGTYPES.OFFLINE_RECONSTRUCTION_BLOCK,
-          LOGRESULTS.SUCCESS, corruptBlockIdxs.length * 2, true);
-
       dfs = getDFS(conf, dfs);
       
       try {
         Thread.sleep(5*1000);
       } catch (InterruptedException ignore) {
       }
+      assertTrue("files not fixed", blockFixer.getNumFilesFixed() >= 2);
+      assertTrue("fixed files not recorded",
+          blockFixer.getNumberOfPoints("/") >= 2);
+      verifyMetrics(fileSys, cnode, LOGTYPES.OFFLINE_RECONSTRUCTION_BLOCK,
+          LOGRESULTS.SUCCESS, corruptBlockIdxs.length * 2, true);
       assertTrue("file not fixed",
                  TestRaidDfs.validateFile(dfs, file1, file1Len, crc1));
       assertTrue("file not fixed",
@@ -881,7 +949,8 @@ public class TestBlockFixer extends TestCase {
       corruptFiles = DFSUtil.getCorruptFiles(dfs);
       
       // wait until both files are fixed
-      while (blockFixer.getNumFilesFixed() < 2 &&
+      while ((blockFixer.getNumFilesFixed() < 2 || 
+              blockFixer.getNumberOfPoints("/") < 2) &&
              System.currentTimeMillis() - start < 240000) {
         // make sure the block fixer does not start a second job while
         // the first one is still running
@@ -889,6 +958,8 @@ public class TestBlockFixer extends TestCase {
         Thread.sleep(10);
       }
       assertTrue("files not fixed", blockFixer.getNumFilesFixed() >= 2);
+      assertTrue("files fixed not record",
+          blockFixer.getNumberOfPoints("/") >= 2);
       verifyMetrics(fileSys, cnode, LOGTYPES.OFFLINE_RECONSTRUCTION_BLOCK,
           LOGRESULTS.SUCCESS, corruptBlockIdxs.length * 2, true);
       dfs = getDFS(conf, dfs);
@@ -914,22 +985,21 @@ public class TestBlockFixer extends TestCase {
   static class FakeDistBlockIntegrityMonitor extends DistBlockIntegrityMonitor {
     Map<String, List<String>> submittedJobs =
       new HashMap<String, List<String>>();
-    FakeDistBlockIntegrityMonitor(Configuration conf) {
+    FakeDistBlockIntegrityMonitor(Configuration conf) throws Exception {
       super(conf);
     }
 
     @Override
     void submitJob(Job job, List<String> filesInJob, Priority priority,
-        Map<Job, List<LostFileInfo>> jobIndex) {
-
+        Map<Job, List<LostFileInfo>> jobIndex, 
+        Map<JobID, TrackingUrlInfo> idToTrackingUrlMap) {
       LOG.info("Job " + job.getJobName() + " was submitted ");
       submittedJobs.put(job.getJobName(), filesInJob);
     }
   }
   
-
-
   public void testMultiplePriorities() throws Exception {
+    LOG.info("Test testMultiplePriorities started.");
     Path srcFile = new Path("/home/test/file1");
     int repl = 1;
     int numBlocks = 8;
@@ -960,13 +1030,17 @@ public class TestBlockFixer extends TestCase {
       FakeDistBlockIntegrityMonitor distBlockFixer = new FakeDistBlockIntegrityMonitor(conf);
       assertEquals(0, distBlockFixer.submittedJobs.size());
 
-      // One job should be submitted.
-      distBlockFixer.getCorruptionMonitor().checkAndReconstructBlocks();
-      assertEquals(1, distBlockFixer.submittedJobs.size());
-
-      // No new job should be submitted since we already have one.
-      distBlockFixer.getCorruptionMonitor().checkAndReconstructBlocks();
-      assertEquals(1, distBlockFixer.submittedJobs.size());
+      // waiting for one job to submit
+      long startTime = System.currentTimeMillis();
+      while (System.currentTimeMillis() - startTime < 120000 &&
+             distBlockFixer.submittedJobs.size() == 0) { 
+        distBlockFixer.getCorruptionMonitor().checkAndReconstructBlocks();
+        LOG.info("Waiting for jobs to submit");
+        Thread.sleep(10000);
+      }
+      int submittedJob = distBlockFixer.submittedJobs.size();
+      LOG.info("Already Submitted " + submittedJob + " jobs");
+      assertTrue("Should submit more than 1 jobs", submittedJob >= 1);
 
       // Corrupt one more block.
       blockIdxToCorrupt = 4;
@@ -977,13 +1051,21 @@ public class TestBlockFixer extends TestCase {
       RaidDFSUtil.reportCorruptBlocks(fileSys, srcFile, new int[]{4}, blockSize);
 
       // A new job should be submitted since two blocks are corrupt.
-      distBlockFixer.getCorruptionMonitor().checkAndReconstructBlocks();
-      assertEquals(2, distBlockFixer.submittedJobs.size());
+      startTime = System.currentTimeMillis();
+      while (System.currentTimeMillis() - startTime < 120000 &&
+             distBlockFixer.submittedJobs.size() == submittedJob) { 
+        distBlockFixer.getCorruptionMonitor().checkAndReconstructBlocks();
+        LOG.info("Waiting for more jobs to submit");
+        Thread.sleep(10000);
+      }
+      LOG.info("Already Submitted " + distBlockFixer.submittedJobs.size()  + " jobs");
+      assertTrue("Should submit more than 1 jobs",
+          distBlockFixer.submittedJobs.size() - submittedJob >= 1);
     } finally {
       myTearDown();
     }
   }
-
+  
   public static DistributedFileSystem getDFS(
         Configuration conf, FileSystem dfs) throws IOException {
     Configuration clientConf = new Configuration(conf);
@@ -1013,7 +1095,7 @@ public class TestBlockFixer extends TestCase {
 
     // do not use map-reduce cluster for Raiding
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
-    conf.set("raid.server.address", "localhost:0");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
     conf.set("mapred.raid.http.address", "localhost:0");
     // Make sure initial repl is smaller than NUM_DATANODES
     conf.setInt(RaidNode.RAID_PARITY_INITIAL_REPL_KEY, 1);
@@ -1033,7 +1115,7 @@ public class TestBlockFixer extends TestCase {
     hftp = "hftp://localhost.localdomain:" + dfsCluster.getNameNodePort();
 
     FileSystem.setDefaultUri(conf, namenode);
-    conf.set("mapred.job.tracker", jobTrackerName);
+    conf.set("mapred.job.tracker" + "." + DistBlockIntegrityMonitor.BLOCKFIXER, jobTrackerName);
     
     FileWriter fileWriter = new FileWriter(CONFIG_FILE);
     fileWriter.write("<?xml version=\"1.0\"?>\n");
@@ -1082,7 +1164,7 @@ public class TestBlockFixer extends TestCase {
     if (cnode != null) { cnode.stop(); cnode.join(); }
     if (mr != null) { mr.shutdown(); }
     if (dfsCluster != null) { dfsCluster.shutdown(); }
-    
+    InjectionHandler.clear();
   }
 
   private LocatedBlocks getBlockLocations(Path file, long length)

@@ -17,7 +17,9 @@
  */
 package org.apache.hadoop.corona;
 
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -51,6 +53,8 @@ public class RetiredSession {
     private final int fulfilledRequestCount;
     /** The number of revoked requests for the session */
     private final int revokedRequestCount;
+    
+    private List<Long> resourceUsages = null;
 
     /**
      * A default private constructor
@@ -70,11 +74,15 @@ public class RetiredSession {
      */
     private Context(int maxConcurrentRequestCount,
                    int fulfilledRequestCount,
-                   int revokedRequestCount) {
+                   int revokedRequestCount,
+                   List<Long> resourceUsages) {
 
       this.maxConcurrentRequestCount = maxConcurrentRequestCount;
       this.fulfilledRequestCount = fulfilledRequestCount;
       this.revokedRequestCount = revokedRequestCount;
+      if (resourceUsages != null) {
+        this.resourceUsages = new ArrayList<Long>(resourceUsages);
+      }
     }
   }
 
@@ -101,7 +109,8 @@ public class RetiredSession {
       typeToContext.put(type,
           new Context(session.getMaxConcurrentRequestCountForType(type),
                            session.getFulfilledRequestCountForType(type),
-                           session.getRevokedRequestCountForType(type)));
+                           session.getRevokedRequestCountForType(type),
+                           session.getResourceUsageForType(type)));
     }
   }
 
@@ -183,5 +192,9 @@ public class RetiredSession {
   
   public SessionStatus getStatus() {
     return status;
+  }
+  
+  public List<Long> getResourceUsageForType(ResourceType type) {
+    return this.getContext(type).resourceUsages;
   }
 }

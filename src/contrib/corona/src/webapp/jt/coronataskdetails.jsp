@@ -267,6 +267,13 @@
           } else {
             out.print("<br>Speculative");
           }
+          if (taskLogUrl != null) {
+            String stackTracingUrl = taskLogUrl + "&stacktracing=true&start=-10240&filter=stdout";
+            if (hasCleanupAttempt) {
+            	stackTracingUrl += "&cleanup=true";
+            }
+          	out.print("<br><a href=\"" + stackTracingUrl + "\" > StackTrace </a>");
+          }
         } else if (status.getRunState() == TaskStatus.State.SUCCEEDED) {
           // Allow failing succeeded tasks.
           out.print("<a href=\"" + getProxyUrl(detailsUrl, "action=confirm"

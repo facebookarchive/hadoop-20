@@ -114,7 +114,7 @@ public class TestBlockCopier extends TestCase {
 
     // do not use map-reduce cluster for Raiding
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
-    conf.set("raid.server.address", "localhost:0");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
 
     Utils.loadTestCodecs(conf, STRIPE_LENGTH, 1, 3, "/raid", "/raidrs");
 
@@ -275,7 +275,7 @@ public class TestBlockCopier extends TestCase {
     
     // Un-decommission those nodes and test the data source again.
     writeExcludesFileAndRefresh(null);
-    assertEquals(0, bc.getLostFiles().size());
+    assertEquals(0, bc.getLostFiles(fileSys).size());
     
     // Done.
     teardown();
@@ -629,7 +629,7 @@ public class TestBlockCopier extends TestCase {
 
   static class DistBlockRegeneratorFake extends DistBlockIntegrityMonitor {
     
-    public DistBlockRegeneratorFake(Configuration conf) {
+    public DistBlockRegeneratorFake(Configuration conf) throws Exception {
       super(conf);
     }
     

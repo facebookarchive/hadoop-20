@@ -379,6 +379,13 @@ public class SessionManager implements Configurable {
     Session session = getSession(handle);
     session.heartbeat();
   }
+  
+  public void heartbeatV2(String handle, HeartbeatArgs jtInfo) throws InvalidSessionHandle {
+    Session session = getSession(handle);
+    
+    session.heartbeat();
+    session.storeResourceUsages(jtInfo.resourceUsages);
+  }
 
   public void requestResource(
     String handle, List<ResourceRequestInfo> requestList)

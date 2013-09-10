@@ -130,6 +130,7 @@ struct SessionInfo {
 struct HeartbeatArgs{
   1: required ResourceRequestId requestId,
   2: required ResourceRequestId grantId,
+  3: required map<ResourceType, list<i64>> resourceUsages
 }
 
 struct ClusterManagerInfo {
@@ -156,6 +157,11 @@ struct RunningSession {
 struct ActualPoolInfoArgs {
   1: required PoolInfoStrings poolInfoString,
   2: required i64 jobInputSize
+}
+
+struct ActualPoolInfoResponse {
+  1: required PoolInfoStrings poolInfoString,
+  2: required string whitelist
 }
 
 struct NodeHeartbeatResponse{
@@ -213,6 +219,10 @@ service ClusterManagerService {
   // Get the redirect pool info given the user specified pool info
   PoolInfoStrings getActualPoolInfo(1: ActualPoolInfoArgs a) throws (1: InvalidPoolInfo e, 2: SafeModeException f),
 
+  // Get the redirect pool info and related info given the user specified pool info
+  ActualPoolInfoResponse getActualPoolInfoV2(1: ActualPoolInfoArgs a) 
+    throws (1: InvalidPoolInfo e, 2: SafeModeException f),
+
   // Get a unique session id.
   SessionHandle getNextSessionId() throws (1: SafeModeException e),
 
@@ -256,6 +266,9 @@ service ClusterManagerService {
   // Get the list of currently running sessions
   list<RunningSession> getSessions() throws (1: SafeModeException e),
 
+  // Return session information
+  SessionInfo getSessionInfo(1: SessionHandle handle) throws (1: InvalidSessionHandle e, 2: SafeModeException f),
+
   // Kill one of the currently running sessions
   void killSession(1: string sessionId) throws (1: SafeModeException e),
   
@@ -285,8 +298,14 @@ service CoronaTaskTrackerService {
  */
 service CoronaProxyJobTrackerService {
   // Set the clusterManagerSafeMode flag appropriately on the CPJT
-  void setClusterManagerSafeModeFlag(1: bool flagValue)
+  void setClusterManagerSafeModeFlag(1: bool flagValue),
 
   // Get the clusterManagerSafeMode flag
-  bool getClusterManagerSafeModeFlag()
+  bool getClusterManagerSafeModeFlag(),
+  
+  // Get the job tracker system directory
+  string getSystemDir(),
+  
+  // Clean the job history cache. it is used for job tracker failover
+  void cleanJobHistoryCache(1: string jobId),
 }

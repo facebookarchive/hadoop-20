@@ -146,7 +146,7 @@ class ClusterJspHelper {
       URISyntaxException {
     if (localnn != null) {
       Configuration runningConf = localnn.getConf();
-      InetSocketAddress nameNodeAddr = NameNode.getAddress(runningConf); 
+      InetSocketAddress nameNodeAddr = NameNode.getClientProtocolAddress(runningConf); 
       if (nameNodeAddr.equals(isa)) {
         return new NamenodeMXBeanHelper(isa, conf, localnn);
       }
@@ -437,7 +437,7 @@ class ClusterJspHelper {
       httpAddress = DFSUtil.getInfoServer(namenode, conf, isAvatar);
       InetSocketAddress infoSocAddr = NetUtils.createSocketAddr(httpAddress);
       String nameNodeMXBeanContent = DFSUtil.getHTMLContent(
-          new URI("http", null, infoSocAddr.getHostName(), 
+          new URI("http", null, infoSocAddr.getAddress().getHostAddress(), 
               infoSocAddr.getPort(), "/namenodeMXBean", null, null));
       TypeReference<Map<String, Object>> type = 
           new TypeReference<Map<String, Object>>() { };

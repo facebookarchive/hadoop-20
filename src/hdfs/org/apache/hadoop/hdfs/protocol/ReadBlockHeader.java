@@ -17,9 +17,15 @@
  */
 package org.apache.hadoop.hdfs.protocol;
 
-import java.io.*;
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
 
-import org.apache.hadoop.io.*;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.io.ReadOptions;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.Writable;
+import org.apache.hadoop.util.InjectionHandler;
 
 /**
  * The header for the OP_READ_BLOCK datanode operation.
@@ -33,6 +39,8 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
   private long len;
   private String clientName;
   private boolean reuseConnection = false;
+  private boolean shouldProfile = false;
+  private ReadOptions options = new ReadOptions();
 
   public ReadBlockHeader(final VersionAndOpcode versionAndOp) {
     super(versionAndOp);
@@ -41,14 +49,15 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
   public ReadBlockHeader(final int dataTransferVersion,
       final int namespaceId, final long blockId, final long genStamp,
       final long startOffset, final long len, final String clientName,
-      final boolean reuseConnection) {
+      final boolean reuseConnection, final boolean shouldProfile) {
     super(dataTransferVersion, DataTransferProtocol.OP_READ_BLOCK);
     set(namespaceId, blockId, genStamp, startOffset, len, clientName,
-        reuseConnection);
+        reuseConnection, shouldProfile);
   }
 
   public void set(int namespaceId, long blockId, long genStamp,
-      long startOffset, long len, String clientName, boolean reuseConnection) {
+      long startOffset, long len, String clientName, boolean reuseConnection,
+      boolean shouldProfile) {
     this.namespaceId = namespaceId;
     this.blockId = blockId;
     this.genStamp = genStamp;
@@ -56,6 +65,18 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
     this.len = len;
     this.clientName = clientName;
     this.reuseConnection = reuseConnection;
+    this.shouldProfile = shouldProfile;
+  }
+
+  public void setReadOptions(ReadOptions options) {
+    if (options == null) {
+      throw new IllegalArgumentException("options cannot be null");
+    }
+    this.options = options;
+  }
+
+  public ReadOptions getReadOptions() {
+    return options;
   }
 
   public int getNamespaceId() {
@@ -85,11 +106,17 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
   public boolean getReuseConnection() {
     return reuseConnection;
   }
+  
+  public boolean getShouldProfile() {
+    return shouldProfile;
+  }
 
   // ///////////////////////////////////
   // Writable
   // ///////////////////////////////////
   public void write(DataOutput out) throws IOException {
+    InjectionHandler.processEvent(InjectionEvent.READ_BLOCK_HEAD_BEFORE_WRITE);
+    
     if (getDataTransferVersion() >= DataTransferProtocol.FEDERATION_VERSION) {
       out.writeInt(namespaceId);
     }
@@ -100,6 +127,13 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
     Text.writeString(out, clientName);
     if (getDataTransferVersion() >= DataTransferProtocol.READ_REUSE_CONNECTION_VERSION) {
       out.writeBoolean(reuseConnection);
+    }
+    
+    if (getDataTransferVersion() >= DataTransferProtocol.READ_PROFILING_VERSION) {
+      out.writeBoolean(shouldProfile);
+    }
+    if (getDataTransferVersion() >= DataTransferProtocol.BITSETOPTIONS_READ_VERSION) {
+      options.write(out);
     }
   }
 
@@ -112,6 +146,13 @@ public class ReadBlockHeader extends DataTransferHeader implements Writable {
     clientName = Text.readString(in);
     if (getDataTransferVersion() >= DataTransferProtocol.READ_REUSE_CONNECTION_VERSION) {
       reuseConnection = in.readBoolean();
+    }
+    
+    if (getDataTransferVersion() >= DataTransferProtocol.READ_PROFILING_VERSION) {
+      shouldProfile = in.readBoolean();
+    }
+    if (getDataTransferVersion() >= DataTransferProtocol.BITSETOPTIONS_READ_VERSION) {
+      options.readFields(in);
     }
   }
 }

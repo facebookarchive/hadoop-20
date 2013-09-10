@@ -20,6 +20,7 @@ package org.apache.hadoop.streaming;
 
 import java.io.IOException;
 
+import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.util.LineReader;
 
@@ -62,6 +63,22 @@ public class StreamKeyValUtil {
    * @param separatorLength the length of the separator between key and value
    * @throws IOException
    */
+  public static void splitKeyVal(byte[] utf, int start, int length, 
+                                 BytesWritable key, BytesWritable val, int splitPos,
+                                 int separatorLength) throws IOException {
+    if (splitPos<start || splitPos >= (start+length))
+      throw new IllegalArgumentException("splitPos must be in the range " +
+                                         "[" + start + ", " + (start+length) + "]: " + splitPos);
+    int keyLen = (splitPos-start);
+    byte [] keyBytes = new byte[keyLen];
+    System.arraycopy(utf, start, keyBytes, 0, keyLen);
+    int valLen = (start+length)-splitPos-separatorLength;
+    byte [] valBytes = new byte[valLen];
+    System.arraycopy(utf, splitPos+separatorLength, valBytes, 0, valLen);
+    key.set(keyBytes, 0, keyBytes.length);
+    val.set(valBytes, 0, valBytes.length);
+  }
+
   public static void splitKeyVal(byte[] utf, int start, int length, 
                                  Text key, Text val, int splitPos,
                                  int separatorLength) throws IOException {

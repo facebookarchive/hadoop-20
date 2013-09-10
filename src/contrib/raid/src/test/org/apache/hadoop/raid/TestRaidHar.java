@@ -92,8 +92,10 @@ public class TestRaidHar extends TestCase {
     conf.set("raid.blockfix.classname",
              "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
 
-    conf.set("raid.server.address", "localhost:0");
-
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
+    // set the purge monitor sleep time to 1 min.
+    conf.setLong(PurgeMonitor.PURGE_MONITOR_SLEEP_TIME_KEY, 60000L);
+    
     // create a dfs and map-reduce cluster
     final int taskTrackers = 4;
 

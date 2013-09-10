@@ -268,7 +268,7 @@ public class JMXGet {
    * @param args
    */
   public static void main(String[] args) {
-
+    org.apache.hadoop.hdfs.DnsMonitorSecurityManager.setTheManager();
     int res = -1;
 
     // parse arguments

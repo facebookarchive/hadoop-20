@@ -20,7 +20,7 @@ package org.apache.hadoop.hdfs.protocol;
 import java.io.*;
 
 import org.apache.hadoop.io.*;
-import org.apache.hadoop.util.DataChecksum;
+
 
 /**
  * The header for the OP_WRITE_BLOCK datanode operation.
@@ -32,11 +32,8 @@ public class WriteBlockHeader extends DataTransferHeader implements Writable {
   private long genStamp;
   private int pipelineDepth;
   private boolean recoveryFlag;
-  private boolean hasSrcDataNode;
-  private DatanodeInfo srcDataNode = null;
-  private int numTargets;
-  private DatanodeInfo[] nodes;
-  private String clientName;
+
+  final private WritePipelineInfo writePipelineInfo = new WritePipelineInfo();
 
   public WriteBlockHeader(final VersionAndOpcode versionAndOp) {
     super(versionAndOp);
@@ -46,7 +43,8 @@ public class WriteBlockHeader extends DataTransferHeader implements Writable {
       final int namespaceId, final long blockId, final long genStamp,
       final int pipelineDepth, final boolean recoveryFlag,
       final boolean hasSrcDataNode, final DatanodeInfo srcDataNode,
-      final int numTargets, final DatanodeInfo[] nodes, final String clientName) {
+      final int numTargets, final DatanodeInfo[] nodes,
+      final String clientName) {
     super(dataTransferVersion, DataTransferProtocol.OP_WRITE_BLOCK);
     set(namespaceId, blockId, genStamp, pipelineDepth, recoveryFlag,
         hasSrcDataNode, srcDataNode, numTargets, nodes, clientName);
@@ -61,11 +59,12 @@ public class WriteBlockHeader extends DataTransferHeader implements Writable {
     this.genStamp = genStamp;
     this.pipelineDepth = pipelineDepth;
     this.recoveryFlag = recoveryFlag;
-    this.hasSrcDataNode = hasSrcDataNode;
-    this.srcDataNode = srcDataNode;
-    this.numTargets = numTargets;
-    this.nodes = nodes;
-    this.clientName = clientName;
+
+    writePipelineInfo.set(hasSrcDataNode, srcDataNode, numTargets, nodes, clientName);
+  }
+  
+  public WritePipelineInfo getWritePipelineInfo() {
+    return writePipelineInfo;
   }
 
   public int getNamespaceId() {
@@ -88,25 +87,6 @@ public class WriteBlockHeader extends DataTransferHeader implements Writable {
     return recoveryFlag;
   }
 
-  public boolean isHasSrcDataNode() {
-    return hasSrcDataNode;
-  }
-
-  public DatanodeInfo getSrcDataNode() {
-    return srcDataNode;
-  }
-
-  public int getNumTargets() {
-    return numTargets;
-  }
-
-  public DatanodeInfo[] getNodes() {
-    return nodes;
-  }
-
-  public String getClientName() {
-    return clientName;
-  }
 
   // ///////////////////////////////////
   // Writable
@@ -119,15 +99,7 @@ public class WriteBlockHeader extends DataTransferHeader implements Writable {
     out.writeLong(genStamp);
     out.writeInt(pipelineDepth);
     out.writeBoolean(recoveryFlag); // recovery flag
-    Text.writeString(out, clientName);
-    out.writeBoolean(hasSrcDataNode); // Not sending src node information
-    if (hasSrcDataNode) { // pass src node information
-      srcDataNode.write(out);
-    }
-    out.writeInt(numTargets);
-    for (int i = 1; i <= numTargets; i++) {
-      nodes[i].write(out);
-    }
+    getWritePipelineInfo().write(getDataTransferVersion(), out);
   }
 
   public void readFields(DataInput in) throws IOException {
@@ -136,21 +108,6 @@ public class WriteBlockHeader extends DataTransferHeader implements Writable {
     genStamp = in.readLong();
     pipelineDepth = in.readInt(); // num of datanodes in entire pipeline
     recoveryFlag = in.readBoolean(); // is this part of recovery?
-    clientName = Text.readString(in); // working on behalf of this client
-    hasSrcDataNode = in.readBoolean(); // is src node info present
-    if (hasSrcDataNode) {
-      srcDataNode = new DatanodeInfo();
-      srcDataNode.readFields(in);
-    }
-    numTargets = in.readInt();
-    if (numTargets < 0) {
-      throw new IOException("Mislabelled incoming datastream.");
-    }
-    nodes = new DatanodeInfo[numTargets];
-    for (int i = 0; i < nodes.length; i++) {
-      DatanodeInfo tmp = new DatanodeInfo();
-      tmp.readFields(in);
-      nodes[i] = tmp;
-    }
+    getWritePipelineInfo().readFields(getDataTransferVersion(), in);
   }
 }

@@ -48,6 +48,16 @@
 "description" : "Directory XORCode code",
 "simulate_block_fix": false,
 "dir_raid" : true
+},
+{
+"id" : "jerasure",
+"parity_dir" : "/jerasure",
+"stripe_length" : 10,
+"parity_length" : 4,
+"priority" : 100,
+"erasure_code" : "org.apache.hadoop.raid.JerasureCode",
+"description" : "Jerasure code",
+"simulate_block_fix": false
 }
 ]</value>
   <description>JSon string that contains all Raid codecs</description>

@@ -24,6 +24,7 @@ import org.apache.hadoop.fs.OpenFileInfo;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.namenode.DatanodeDescriptor;
+import org.apache.hadoop.hdfs.server.protocol.BlockSynchronizationProtocol;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.security.AccessControlException;
@@ -37,7 +38,8 @@ import org.apache.hadoop.fs.FileStatus;
  * as well as open/close file streams, etc.
  *
  **********************************************************************/
-public interface ClientProtocol extends VersionedProtocol {
+public interface ClientProtocol extends VersionedProtocol,
+    BlockSynchronizationProtocol {
 
   public static final long OPTIMIZE_FILE_STATUS_VERSION = 42L;
   public static final long ITERATIVE_LISTING_VERSION = 43L;
@@ -195,6 +197,23 @@ public interface ClientProtocol extends VersionedProtocol {
    * @throws IOException if other errors occur.
    */
   public LocatedBlockWithMetaInfo appendAndFetchMetaInfo(String src, String clientName) throws IOException;
+  
+  /**
+   * Append to the end of the file. 
+   * @param src path of the file being created.
+   * @param clientName name of the current client.
+   * @return information about the last partial block if any.
+   * @throws AccessControlException if permission to append file is 
+   * denied by the system. As usually on the client side the exception will 
+   * be wrapped into {@link org.apache.hadoop.ipc.RemoteException}.
+   * Allows appending to an existing file if the server is
+   * configured with the parameter dfs.support.append set to true, otherwise
+   * Return the LocatedBlock with namespace id and old generation stamp.
+   * 
+   * throws an IOException.
+   * @throws IOException if other errors occur.
+   */
+  public LocatedBlockWithOldGS appendAndFetchOldGS(String src, String clientName) throws IOException;
   
   /**
    * Start lease recovery
@@ -575,6 +594,17 @@ public interface ClientProtocol extends VersionedProtocol {
    *                                any quota restriction
    */
   public void concat(String trg, String [] srcs, boolean restricted) throws IOException;
+  
+  /**
+   * Merge parity file and source file into one Raided file 
+   * @param parity - parity file
+   * @param source - source file
+   * @param codecId - the codec id of raid codec
+   * @param checksums - list of checksums of source blocks 
+   * @throws IOException
+   */
+  public void merge(String parity, String source, String codecId, 
+      int[] checksums) throws IOException;
 
   /**
    * Delete the given file or directory from the file system.
@@ -837,6 +867,11 @@ public interface ClientProtocol extends VersionedProtocol {
    * @throws IOException
    */
   public void metaSave(String filename) throws IOException;
+  
+  /**
+   * Enable/Disable Block Replication.
+   */
+  public void blockReplication(boolean isEnable) throws IOException;
 
   /**
    * @return Array of FileStatus objects referring to corrupted files.
@@ -920,6 +955,19 @@ public interface ClientProtocol extends VersionedProtocol {
    *              by this call.
    */
   public void setTimes(String src, long mtime, long atime) throws IOException;
+  
+  /**
+   * Update a pipeline for a block under construction
+   * 
+   * @param clientName   the name of the client
+   * @param oldBlock    the old block
+   * @param newBlock    the new block containing new generation stamp and length
+   * @param newNodes    datanodes in the pipeline
+   * @throws IOException  if any error happens
+   */
+  public void updatePipeline(String clientName, Block oldBlock, 
+        Block newBlock, DatanodeID[] newNodes) 
+      throws IOException;
 
   /**
    * Get the datanode's data transfer protocol version
@@ -948,4 +996,19 @@ public interface ClientProtocol extends VersionedProtocol {
   
   /** Re-populate the namespace and diskspace count of every node with quota */
   public void recount() throws IOException;
+  
+  /**
+   * Raid a file with given codec 
+   * No guarantee file will be raided when the call returns.
+   * Namenode will schedule raiding asynchronously. 
+   * If raiding is done when raidFile is called again, namenode will set 
+   * replication of source blocks to expectedSourceRepl 
+   * 
+   * @param source 
+   * @param codecId
+   * @param expectedSourceRepl 
+   * @throws IOException
+   */
+  public boolean raidFile(String source, String codecId, short expectedSourceRepl) 
+      throws IOException;
 }

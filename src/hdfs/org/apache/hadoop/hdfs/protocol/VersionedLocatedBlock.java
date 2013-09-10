@@ -20,7 +20,11 @@ package org.apache.hadoop.hdfs.protocol;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.List;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
@@ -28,8 +32,9 @@ import org.apache.hadoop.io.WritableFactory;
 /**
  * A block with its location and data transfer version number.
  */
+@ThriftStruct
 public class VersionedLocatedBlock extends LocatedBlock {
-  private int dataProtocolVersion = -1;  // data transfer version number
+  protected int dataProtocolVersion = -1;  // data transfer version number
 
   VersionedLocatedBlock() {
   }
@@ -40,9 +45,18 @@ public class VersionedLocatedBlock extends LocatedBlock {
     this.dataProtocolVersion = dataProtocolVersion;
   }
 
+  @ThriftConstructor
+  public VersionedLocatedBlock(@ThriftField(1) Block block,
+      @ThriftField(2) List<DatanodeInfo> datanodes, @ThriftField(3) long startOffset,
+      @ThriftField(4) boolean corrupt, @ThriftField(5) int dataProtocolVersion) {
+    super(block, datanodes, startOffset, corrupt);
+    this.dataProtocolVersion = dataProtocolVersion;
+  }
+
   /**
    * Get data transfer version number
    */
+  @ThriftField(5)
   public int getDataProtocolVersion() {
     return this.dataProtocolVersion;
   }

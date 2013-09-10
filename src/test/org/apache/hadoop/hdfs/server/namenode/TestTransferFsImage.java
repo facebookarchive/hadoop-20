@@ -24,6 +24,7 @@ import java.io.IOException;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.junit.Test;
 import org.mockito.Mockito;
@@ -49,11 +50,12 @@ public class TestTransferFsImage {
     };
        
     try {
-      String fsName = NameNode.getHostPortString(
-          cluster.getNameNode().getHttpAddress());
+      String fsName = NetUtils.toIpPort(cluster.getNameNode().getHttpAddress());
       String id = "getimage=1&txid=-1";
 
-      TransferFsImage.getFileClient(fsName, id, localPath, mockStorage, false);      
+      TransferFsImage.getFileClient(fsName, id,
+          ImageSet.convertFilesToStreams(localPath, mockStorage, ""),
+          mockStorage, false);      
       fail("Didn't get an exception!");
     } catch (IOException ioe) {
       Mockito.verify(mockStorage).reportErrorOnFile(localPath[0]);
@@ -80,11 +82,12 @@ public class TestTransferFsImage {
     };
        
     try {
-      String fsName = NameNode.getHostPortString(
-          cluster.getNameNode().getHttpAddress());
+      String fsName = NetUtils.toIpPort(cluster.getNameNode().getHttpAddress());
       String id = "getimage=1&txid=-1";
-
-      TransferFsImage.getFileClient(fsName, id, localPaths, mockStorage, false);      
+  
+      TransferFsImage.getFileClient(fsName, id,
+          ImageSet.convertFilesToStreams(localPaths, mockStorage, ""),
+          mockStorage, false);
       Mockito.verify(mockStorage).reportErrorOnFile(localPaths[0]);
       assertTrue("The valid local file should get saved properly",
           localPaths[1].length() > 0);

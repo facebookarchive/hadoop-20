@@ -67,6 +67,14 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
   private Daemon safeModeMonitor;
   private final float outStandingReportThreshold;
   
+  // for fast failover, we do not wait until all datanodes report
+  // primaryCleared, we only care about informing all datanodes
+  // that failover is in progress
+  private final boolean fastFailover;
+  
+  // we can manually trigger actions before the actual failover
+  private volatile boolean prepareFailover = false;
+  
   private long lastStatusReportTime;
 
   public StandbySafeMode(Configuration conf, FSNamesystem namesystem) {
@@ -83,7 +91,13 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
           "Invalid dfs.standbysafemode.outstanding.threshold : "
               + this.outStandingReportThreshold + " should be between [0, 1.0]");
     }
-    safeModeState = SafeModeState.BEFORE_FAILOVER;
+    this.fastFailover = conf.getBoolean("dfs.standbysafemode.fastfailover",
+        false);
+    
+    LOG.info("Standby safemode: outstanding report threshold: "
+        + outStandingReportThreshold);
+    LOG.info("Standby safemode: fast failover: " + fastFailover);
+    this.safeModeState = SafeModeState.BEFORE_FAILOVER;
   }
 
   /**
@@ -95,7 +109,8 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
    *          the datanode that has reported
    */
   protected void reportRegister(DatanodeID node) {
-    if (node != null && safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
+    if (node != null
+        && shouldUpdateNodes()) {
       if (!liveDatanodes.contains(node)) {
         // A new node has checked in, we want to send a ClearPrimary command to
         // it as well.
@@ -103,6 +118,16 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
         liveDatanodes.add(node);
       }
     }
+  }
+  
+  /**
+   * Check if the outstanding datanode queues shoudl be updated.
+   */
+  private boolean shouldUpdateNodes() {
+    // either failover is still in progress, or we are after
+    // but the failover did not clean up the datanodes (fast option)
+    return (safeModeState == SafeModeState.FAILOVER_IN_PROGRESS 
+        || (fastFailover && safeModeState == SafeModeState.AFTER_FAILOVER));
   }
 
   /**
@@ -115,8 +140,7 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
    *         datanode
    */
   protected boolean reportHeartBeat(DatanodeID node) {
-    if (node != null 
-        && safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
+    if (node != null && shouldUpdateNodes()) {
       reportRegister(node);
       synchronized(this) {
         if (outStandingHeartbeats.remove(node)) {
@@ -137,8 +161,10 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
    *          the datanode that has reported
    */
   protected void reportPrimaryCleared(DatanodeID node) {
-    if (node != null && safeModeState == SafeModeState.FAILOVER_IN_PROGRESS) {
-      outStandingReports.remove(node);
+    if (node != null && shouldUpdateNodes()) {
+      if (outStandingReports.remove(node)) {
+        LOG.info("Failover: Outstanding reports: " + outStandingReports.size());
+      }
     }
   }
 
@@ -150,6 +176,11 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
    */
   protected void triggerFailover() throws IOException {
     clearDataStructures();
+    
+    // stop sending PREPARE_FAILOVER command
+    // we are performing failover now
+    prepareFailover = false;
+    
     for (DatanodeInfo node : namesystem.datanodeReport(DatanodeReportType.LIVE)) {
       liveDatanodes.add(node);
       outStandingHeartbeats.add(node);
@@ -205,8 +236,13 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
           ? " Replication queues have been initialized manually. "
           : "";
       
+      String prepFailoverState = prepareFailover 
+          ? " Processed prepare failover - standby will not checkpoint. "
+          : "";
+      
       String safeBlockRatioMsg = String.format(
-        initReplicationQueues
+        initReplicationQueues 
+        + prepFailoverState
         + "The ratio of reported blocks %.8f has "
               + (!blocksSafe() ? "not " : "")
         + "reached the threshold %.8f. ", namesystem.getSafeBlockRatio(),
@@ -228,13 +264,14 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
       boolean received = this.getDatanodeReportRatio() >=
           this.outStandingReportThreshold;
       
+      String ff = fastFailover ? " (Fast failover)" : "";
+      
       String datanodeReportMsg = "All datanode reports ratio "
-          + getDatanodeReportRatio() + " have "
-          + (!received ? "not " : "")
+          + getDatanodeReportRatio() + " have " + (!received ? "not " : "")
           + "reached threshold : " + this.outStandingReportThreshold
-          + ", <a href=\"/outstandingnodes\"> Outstanding Heartbeats"
-          + " : " + outStandingHeartbeats.size() + " Outstanding Reports : "
-          + outStandingReports.size() + "</a><br><br>";
+          + ", <a href=\"/outstandingnodes\"> Outstanding Heartbeats" + " : "
+          + outStandingHeartbeats.size() + " Outstanding Reports : "
+          + outStandingReports.size() + ff + "</a><br><br>";
       return safeBlockRatioMsg + datanodeReportMsg;
     } catch (Exception e) {
       LOG.warn("Exception when obtaining safemode status", e);
@@ -264,7 +301,8 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
     // during failover
     try {
       synchronized (this) {
-        if (safeModeState != SafeModeState.FAILOVER_IN_PROGRESS) {
+        if (safeModeState != SafeModeState.FAILOVER_IN_PROGRESS &&
+            safeModeState != SafeModeState.BEFORE_FAILOVER) {
           throw new RuntimeException(
               "Cannot initialize replication queues since Standby is "
                   + "in state : " + safeModeState);
@@ -299,7 +337,7 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
 
         // These datanodes have not reported, we are not sure about their state
         // remove them.
-        removeOutStandingDatanodes();
+        removeOutStandingDatanodes(fastFailover);
         if (avatarnode.enableTestFramework && 
             avatarnode.enableTestFrameworkFsck) {
           try {
@@ -322,6 +360,9 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
         // We need to renew all leases, since client has been renewing leases only
         // on the primary.
         renewAllLeases();
+        // if we are in fast failover mode, inform the namesystem to delay processing
+        // over-replicated blocks
+        delayOverreplicationMonitor();
         safeModeState = SafeModeState.AFTER_FAILOVER;
       }
     } finally {
@@ -331,6 +372,16 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
         safeModeState = SafeModeState.FAILOVER_IN_PROGRESS;
       }
       namesystem.writeUnlock();
+    }
+  }
+  
+  private void delayOverreplicationMonitor() {
+    if (fastFailover) {
+      long now = AvatarNode.now();
+      long delay = 2 * namesystem.getHeartbeatExpireInterval();
+      namesystem.delayOverreplicationProcessing(now + delay);
+      LOG.info("Failover: Delaying overreplication processing by: "
+          + (delay / 1000) + " seconds");
     }
   }
   
@@ -378,29 +429,37 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
    * This function as a whole need to be synchronized since it is invoked by
    * leave().
    */
-  private void removeOutStandingDatanodes() {
+  void removeOutStandingDatanodes(boolean logOutStandingOnly) {
     try {
-      removeOutstandingDatanodesInternal(outStandingHeartbeats);
-      removeOutstandingDatanodesInternal(outStandingReports);
+      removeOutstandingDatanodesInternal(outStandingHeartbeats, logOutStandingOnly);
+      removeOutstandingDatanodesInternal(outStandingReports, logOutStandingOnly);
     } catch (Exception e) {
       LOG.warn(
           "Failover - caught exception when removing outstanding datanodes", e);
     }
   }
   
-  private void removeOutstandingDatanodesInternal(Set<DatanodeID> nodes)
-      throws IOException {
+  private void removeOutstandingDatanodesInternal(Set<DatanodeID> nodes,
+      boolean logOutStandingOnly) throws IOException {
     synchronized (nodes) {
       for (DatanodeID node : nodes) {
-        try {
-          LOG.info("Failover - removing outstanding node: " + node);
-          namesystem.removeDatanode(node);
-          setDatanodeDead(node);
-        } catch (Exception e) {
-          LOG.warn(
-              "Failover - caught exception when removing outstanding datanode "
-                  + node, e);
+        if (logOutStandingOnly) {
+          LOG.info("Failover - outstanding node: " + node
+              + " - node is not removed (fast failover)");
+        } else {
+          try {
+            LOG.info("Failover - removing outstanding node: " + node);
+            namesystem.removeDatanode(node);
+            setDatanodeDead(node);
+          } catch (Exception e) {
+            LOG.warn(
+                "Failover - caught exception when removing outstanding datanode "
+                    + node, e);
+          }
         }
+      }
+      if (!logOutStandingOnly) {
+        nodes.clear();
       }
     }
   }
@@ -530,5 +589,15 @@ public class StandbySafeMode extends NameNodeSafeModeInfo {
     // Primary namenode always processed RBW reports.
     return safeModeState != SafeModeState.BEFORE_FAILOVER;
   }
-
+  
+  /**
+   * Indicate whether we should prepare for failover.
+   */
+  void setPrepareFailover(boolean prepareFailover) {
+    this.prepareFailover = prepareFailover;
+  }
+  
+  boolean getPrepareFailover() {
+    return prepareFailover;
+  }
 }

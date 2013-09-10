@@ -27,6 +27,7 @@ import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.AddOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.CloseOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.DeleteOp;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.MkdirOp;
 
 public class ServerLogReaderUtil {
 
@@ -53,9 +54,26 @@ public class ServerLogReaderUtil {
       case OP_DELETE:
         return new NamespaceNotification(((DeleteOp)op).path,
             EventType.NODE_DELETED.getByteValue(), op.getTransactionId());
+        
+      case OP_MKDIR:
+        return new NamespaceNotification(((MkdirOp)op).path,
+            EventType.DIR_ADDED.getByteValue(), op.getTransactionId());
       default:
         return null;
     }
+  }
+
+  /**
+   * We would skip the transaction if its id is less than or equal to current
+   * transaction id.
+   */
+  static boolean shouldSkipOp(long currentTransactionId, FSEditLogOp op) {
+    if (currentTransactionId == -1 
+        || op.getTransactionId() > currentTransactionId) {
+      return false;
+    }
+    
+    return true;
   }
   
   /**

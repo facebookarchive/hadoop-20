@@ -202,7 +202,7 @@ public class TestDecommissioningStatus {
       decommissionedNodes.add(downnode);
       Thread.sleep(5000);
       ArrayList<DatanodeDescriptor> decommissioningNodes = fsn
-          .getDecommissioningNodes();
+          .getDecommissioningNodesList();
       if (iteration == 0) {
         assertEquals(decommissioningNodes.size(), 1);
         DatanodeDescriptor decommNode = decommissioningNodes.get(0);

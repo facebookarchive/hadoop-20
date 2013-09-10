@@ -73,6 +73,8 @@ public class PoolSchedulable extends Schedulable {
   private long starvingTimeForMinimum;
   /** Pool info names for this pool */
   private final PoolInfo poolInfo;
+  /** Priority for this pool */
+  private int priority;
 
   /**
    * Create a PoolSchedulable for a given pool and a resource type with a
@@ -149,6 +151,7 @@ public class PoolSchedulable extends Schedulable {
       maximum = configManager.getPoolMaximum(poolInfo, getType());
       minimum = configManager.getPoolMinimum(poolInfo, getType());
       weight = configManager.getWeight(poolInfo);
+      priority = configManager.getPriority(poolInfo);
       preemptable = configManager.isPoolPreemptable(poolInfo);
       shareStarvingRatio = configManager.getShareStarvingRatio();
       minPreemptPeriod = configManager.getMinPreemptPeriod();
@@ -180,8 +183,7 @@ public class PoolSchedulable extends Schedulable {
 
   @Override
   public int getPriority() {
-    // Pools have the same priority
-    return 0;
+    return priority;
   }
 
   /**
@@ -213,7 +215,7 @@ public class PoolSchedulable extends Schedulable {
   public Queue<SessionSchedulable> getScheduleQueue() {
     if (scheduleQueue == null) {
       scheduleQueue =
-          createSessionQueue(configManager.getComparator(poolInfo));
+          createSessionQueue(configManager.getPoolComparator(poolInfo));
     }
     return scheduleQueue;
   }
@@ -226,7 +228,7 @@ public class PoolSchedulable extends Schedulable {
     if (preemptQueue == null) {
 
       ScheduleComparator comparator = null;
-      switch (configManager.getComparator(poolInfo)) {
+      switch (configManager.getPoolComparator(poolInfo)) {
       case FIFO:
         comparator = ScheduleComparator.FIFO_PREEMPT;
         break;
@@ -265,7 +267,8 @@ public class PoolSchedulable extends Schedulable {
    */
   public void distributeShare() {
     if (needRedistributed) {
-      ScheduleComparator comparator = configManager.getComparator(poolInfo);
+      ScheduleComparator comparator =
+          configManager.getPoolComparator(poolInfo);
       Schedulable.distributeShare(getShare(), snapshotSessions, comparator);
     }
     needRedistributed = false;

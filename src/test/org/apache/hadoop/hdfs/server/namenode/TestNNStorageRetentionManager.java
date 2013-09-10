@@ -290,7 +290,7 @@ public class TestNNStorageRetentionManager {
         if (!root.type.isOfType(NameNodeDirType.EDITS)) continue;
         
         FileJournalManager fjm = new FileJournalManager(
-            root.mockStorageDir(), null);
+            root.mockStorageDir(), null, null);
         fjm.purger = purger;
         jms.add(fjm);
       }

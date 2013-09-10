@@ -109,6 +109,7 @@ public class UpgradeUtilities {
     }
     createEmptyDirs(new String[] {TEST_ROOT_DIR.toString()});
     config.set("dfs.name.dir", namenodeStorage.toString());
+    config.set("dfs.name.edits.dir", namenodeStorage.toString());
     config.set("dfs.data.dir", datanodeStorage.toString());
     MiniDFSCluster cluster = null;
     try {
@@ -117,8 +118,8 @@ public class UpgradeUtilities {
       
       if (federation) {
         // format and start NameNode and start DataNode
-        cluster = new MiniDFSCluster(0, config, 1, true, false,
-            null, numNameNodes);
+        cluster = new MiniDFSCluster(0, config, 1, true, false, null,
+            numNameNodes);
       } else {
         NameNode.format(config); 
         cluster = new MiniDFSCluster(config, 1, StartupOption.REGULAR);
@@ -212,6 +213,7 @@ public class UpgradeUtilities {
       conf = new Configuration();
     }
     conf.set("dfs.name.dir", nameNodeDirs.toString());
+    conf.set("dfs.name.edits.dir", nameNodeDirs.toString());
     conf.set("dfs.data.dir", dataNodeDirs.toString());
     conf.setInt("dfs.blockreport.intervalMsec", 10000);
     return conf;
@@ -258,21 +260,44 @@ public class UpgradeUtilities {
     return datanodeNSStorageChecksums[nnIndex];
   }
   
+  public static long checksumContents(NodeType nodeType, File dir) throws IOException {
+    return checksumContents(nodeType, dir, null);
+  }
+
+  private static boolean inList(String[] list, String search) {
+    if (list == null) {
+      return false;
+    }
+    for (String file : list) {
+      if (file.equals(search)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
-   * Compute the checksum of all the files in the specified directory.
-   * The contents of subdirectories are not included. This method provides
-   * an easy way to ensure equality between the contents of two directories.
+   * Compute the checksum of all the files in the specified directory. The
+   * contents of subdirectories are not included. This method provides an easy
+   * way to ensure equality between the contents of two directories.
    *
-   * @param nodeType if DATA_NODE then any file named "VERSION" is ignored.
-   *    This is because this file file is changed every time
-   *    the Datanode is started.
-   * @param dir must be a directory. Subdirectories are ignored.
+   * @param nodeType
+   *          if DATA_NODE then any file named "VERSION" is ignored. This is
+   *          because this file file is changed every time the Datanode is
+   *          started.
+   * @param dir
+   *          must be a directory. Subdirectories are ignored.
+   * @param skipFiles
+   *          files to be skipped
    *
-   * @throws IllegalArgumentException if specified directory is not a directory
-   * @throws IOException if an IOException occurs while reading the files
+   * @throws IllegalArgumentException
+   *           if specified directory is not a directory
+   * @throws IOException
+   *           if an IOException occurs while reading the files
    * @return the computed checksum value
    */
-  public static long checksumContents(NodeType nodeType, File dir) throws IOException {
+  public static long checksumContents(NodeType nodeType, File dir,
+      String[] skipFiles) throws IOException {
     if (!dir.isDirectory()) {
       throw new IllegalArgumentException(
                                          "Given argument is not a directory:" + dir);
@@ -281,9 +306,10 @@ public class UpgradeUtilities {
     Arrays.sort(list);
     CRC32 checksum = new CRC32();
     for (int i = 0; i < list.length; i++) {
-      if (!list[i].isFile()) {
+      if (!list[i].isFile() || inList(skipFiles, list[i].getName())) {
         continue;
       }
+
       // skip VERSION file for DataNodes
       if (nodeType == DATA_NODE && list[i].getName().equals("VERSION")) {
         continue; 

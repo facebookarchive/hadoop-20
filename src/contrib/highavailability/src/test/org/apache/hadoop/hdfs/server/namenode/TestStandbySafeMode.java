@@ -88,7 +88,7 @@ public class TestStandbySafeMode {
       conf.setBoolean("fs.ha.retrywrites", true);
       conf.setInt("fs.avatar.failover.checkperiod", 200);
     }
-    cluster = new MiniAvatarCluster(conf, numDatanodes, true, null, null);
+    cluster = new MiniAvatarCluster.Builder(conf).numDataNodes(numDatanodes).enableQJM(false).build();
     fs = cluster.getFileSystem();
     pass = true;
     clearPrimaryCount = 0;
@@ -96,6 +96,9 @@ public class TestStandbySafeMode {
 
   @After
   public void tearDown() throws Exception {
+    if(h != null) {
+      h.stallBlockReport = false;
+    }
     cluster.shutDown();
     InjectionHandler.clear();
   }
@@ -104,8 +107,12 @@ public class TestStandbySafeMode {
   public static void tearDownAfterClass() throws Exception {
     MiniAvatarCluster.shutDownZooKeeper();
   }
-
+  
   private void waitAndVerifyBlocks() throws Exception {
+    waitAndVerifyBlocks(0);
+  }
+
+  private void waitAndVerifyBlocks(int safeCountDiff) throws Exception {
     FSNamesystem standbyNS = cluster.getStandbyAvatar(0).avatar.namesystem;
     FSNamesystem primaryNS = cluster.getPrimaryAvatar(0).avatar.namesystem;
     assertTrue(standbyNS.isInSafeMode());
@@ -116,7 +123,8 @@ public class TestStandbySafeMode {
 
     // Wait for standby safe mode to catch up to all blocks.
     while (System.currentTimeMillis() - start <= MAX_WAIT_TIME
-        && (primaryBlocks != standbyBlocks || standbySafeBlocks != primaryBlocks)) {
+        && (primaryBlocks != standbyBlocks
+        || standbySafeBlocks - safeCountDiff != primaryBlocks)) {
       LOG.info("Verifying blocks...");
       primaryBlocks = primaryNS.getBlocksTotal();
       standbyBlocks = standbyNS.getBlocksTotal();
@@ -126,7 +134,7 @@ public class TestStandbySafeMode {
 
     // Final verification of block counts.
     assertEquals(primaryBlocks, standbyBlocks);
-    assertEquals(primaryBlocks, standbySafeBlocks);
+    assertEquals(primaryBlocks - safeCountDiff, standbySafeBlocks);
   }
 
   private void createTestFiles(String topDir) throws Exception {
@@ -651,10 +659,10 @@ public class TestStandbySafeMode {
     cluster.getStandbyAvatar(0).avatar.getStandbySafeMode()
         .setSafeModeStateForTesting(SafeModeState.LEAVING_SAFEMODE);
     cluster.restartDataNode(true, 0);
-    waitAndVerifyBlocks();
+    waitAndVerifyBlocks(1);
 
     FSNamesystem ns = cluster.getStandbyAvatar(0).avatar.namesystem;
-
+    
     // Now enable finalized block reports and verify counts.
     h.stallBlockReport = false;
     long start = System.currentTimeMillis();
@@ -662,6 +670,26 @@ public class TestStandbySafeMode {
         System.currentTimeMillis() - start < 10000) {
       DFSTestUtil.waitSecond();
     }
-    assertEquals(2, ns.getSafeBlocks());
+    assertEquals(1, ns.getSafeBlocks());
+    
+    // close the file
+    out.close();
+
+    // wait until the file is closed on standby
+    start = System.currentTimeMillis();
+    while (System.currentTimeMillis() - start < 10000) {
+      if (!cluster.getStandbyAvatar(0).avatar.namesystem.dir.getFileINode(
+          "/" + name).isUnderConstruction()) {
+        break;
+      }
+      DFSTestUtil.waitNMilliSecond(500);
+    }
+    
+    // check if standby does not have any targets
+    // within the datanode descriptors
+    for (DatanodeDescriptor d : cluster.getStandbyAvatar(0).avatar.namesystem.heartbeats
+        .toArray(new DatanodeDescriptor[3])) {
+      assertEquals(0, d.getOpenINodes().size());
+    }
   }
 }

@@ -39,7 +39,6 @@ import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
 import org.apache.hadoop.raid.Codec;
-import org.apache.hadoop.raid.RaidNode;
 
 /**
  * Maintains information about one policy

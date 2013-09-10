@@ -30,11 +30,13 @@ import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumReader;
 import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumReader.GenStampAndChecksum;
 import org.apache.hadoop.hdfs.server.datanode.BlockMetadataHeader;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.LRUCache;
-import org.apache.hadoop.util.PureJavaCrc32;
+import org.apache.hadoop.util.NativeCrc32;
 import org.apache.hadoop.hdfs.BlockReader;
 
 import java.io.*;
@@ -105,6 +107,9 @@ public abstract class BlockReaderLocalBase extends BlockReader {
         DatanodeInfo node,
         Configuration conf
     ) throws IOException {
+      InjectionHandler
+          .processEventIO(InjectionEvent.BLOCK_READ_LOCAL_GET_PATH_INFO);
+
       LocalBlockKey blockKey = new LocalBlockKey(namespaceid, block);
       BlockPathInfo pathinfo = cache.get(blockKey);
       if (pathinfo != null) {
@@ -244,7 +249,7 @@ public abstract class BlockReaderLocalBase extends BlockReader {
         checksumInChannel = checksumIn.getChannel();
         // read and handle the common header here. For now just a version
         BlockMetadataHeader header = BlockMetadataHeader.readHeader(
-            new DataInputStream(checksumIn), new PureJavaCrc32());
+            new DataInputStream(checksumIn), new NativeCrc32());
         short version = header.getVersion();
 
         if (version != FSDataset.FORMAT_VERSION_NON_INLINECHECKSUM) {
@@ -337,7 +342,7 @@ public abstract class BlockReaderLocalBase extends BlockReader {
     if (bytesPerChecksum > 10*1024*1024 && bytesPerChecksum > blockLength){
       checksum = DataChecksum.newDataChecksum(checksum.getChecksumType(),
           Math.max((int)blockLength, 10*1024*1024),
-          new PureJavaCrc32());
+          new NativeCrc32());
       bytesPerChecksum = checksum.getBytesPerChecksum();
     }
 

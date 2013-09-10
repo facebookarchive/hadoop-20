@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.metrics.FSNamesystemMetrics;
 import org.apache.hadoop.util.*;
 import java.io.*;
@@ -38,8 +39,8 @@ import java.sql.Time;
  ***************************************************/
 class PendingReplicationBlocks {
   // order the map in insertion order
-  private LinkedHashMap<Block, PendingBlockInfo> pendingReplications;
-  private ArrayList<Block> timedOutItems;
+  private LinkedHashMap<BlockInfo, PendingBlockInfo> pendingReplications;
+  private ArrayList<BlockInfo> timedOutItems;
   Daemon timerThread = null;
   private volatile boolean fsRunning = true;
   private FSNamesystemMetrics fsnamesystemMetrics;
@@ -76,8 +77,8 @@ class PendingReplicationBlocks {
   }
 
   void init() {
-    pendingReplications = new LinkedHashMap<Block, PendingBlockInfo>();
-    timedOutItems = new ArrayList<Block>();
+    pendingReplications = new LinkedHashMap<BlockInfo, PendingBlockInfo>();
+    timedOutItems = new ArrayList<BlockInfo>();
     this.timerThread = new Daemon(new PendingReplicationMonitor());
     timerThread.start();
   }
@@ -85,7 +86,7 @@ class PendingReplicationBlocks {
   /**
    * Add a block to the list of pending Replications
    */
-  void add(Block block, int numReplicas) {
+  void add(BlockInfo block, int numReplicas) {
     synchronized (pendingReplications) {
       PendingBlockInfo found = pendingReplications.get(block);
       if (found == null) {
@@ -143,13 +144,13 @@ class PendingReplicationBlocks {
    * replication requests. Returns null if no blocks have
    * timed out.
    */
-  Block[] getTimedOutBlocks() {
+  BlockInfo[] getTimedOutBlocks() {
     synchronized (timedOutItems) {
       if (timedOutItems.size() <= 0) {
         return null;
       }
-      Block[] blockList = timedOutItems.toArray(
-                                                new Block[timedOutItems.size()]);
+      BlockInfo[] blockList = timedOutItems.toArray(
+                              new BlockInfo[timedOutItems.size()]);
       timedOutItems.clear();
       return blockList;
     }
@@ -221,8 +222,8 @@ class PendingReplicationBlocks {
       synchronized (pendingReplications){
         totalPendingBlocks = pendingReplications.size();
       }
-      List<Map.Entry<Block, PendingBlockInfo>> blocksToCheck = 
-        new LinkedList<Map.Entry<Block, PendingBlockInfo>>();
+      List<Map.Entry<BlockInfo, PendingBlockInfo>> blocksToCheck = 
+        new LinkedList<Map.Entry<BlockInfo, PendingBlockInfo>>();
       while (totalPendingBlocks > 0) {
         synchronized (pendingReplications) {
           // At most maxBlocksToCheck items per iteration
@@ -235,7 +236,7 @@ class PendingReplicationBlocks {
           totalPendingBlocks -= numBlocksToCheck;
           
           // remove the number of blocks from pendingReplications
-          Iterator<Entry<Block, PendingBlockInfo>> iter = 
+          Iterator<Entry<BlockInfo, PendingBlockInfo>> iter = 
             pendingReplications.entrySet().iterator();
           while (numBlocksToCheck-- > 0) {
             blocksToCheck.add(iter.next());
@@ -248,9 +249,9 @@ class PendingReplicationBlocks {
           // Check if timeout
           long now = FSNamesystem.now();
           for (iter = blocksToCheck.iterator(); iter.hasNext(); ) {
-            Entry<Block, PendingBlockInfo> entry = iter.next();
+            Entry<BlockInfo, PendingBlockInfo> entry = iter.next();
             PendingBlockInfo pendingBlock = entry.getValue();
-            Block block = entry.getKey();
+            BlockInfo block = entry.getKey();
             if (now < pendingBlock.getTimeStamp() + timeout) {
               // not timeout; reinsert into end of pendingReplications 
               // so it will be checked in future batches
@@ -272,7 +273,7 @@ class PendingReplicationBlocks {
         StringBuilder logMsg = new StringBuilder(
             "PendingReplicationMonitor timed out blocks");
         while (!blocksToCheck.isEmpty()) {
-          Block timeoutBlock = blocksToCheck.remove(0).getKey();
+          BlockInfo timeoutBlock = blocksToCheck.remove(0).getKey();
           logMsg.append(" ").append(timeoutBlock);
           synchronized (timedOutItems) {
             timedOutItems.add(timeoutBlock);
@@ -306,11 +307,12 @@ class PendingReplicationBlocks {
     synchronized (pendingReplications) {
       out.println("Metasave: Blocks being replicated: " +
                   pendingReplications.size());
-      Iterator<Map.Entry<Block, PendingBlockInfo>> iter = pendingReplications.entrySet().iterator();
+      Iterator<Map.Entry<BlockInfo, PendingBlockInfo>> iter = 
+          pendingReplications.entrySet().iterator();
       while (iter.hasNext()) {
-        Map.Entry<Block, PendingBlockInfo> entry = iter.next();
+        Map.Entry<BlockInfo, PendingBlockInfo> entry = iter.next();
         PendingBlockInfo pendingBlock = entry.getValue();
-        Block block = entry.getKey();
+        BlockInfo block = entry.getKey();
         out.println(block + 
                     " StartTime: " + new Time(pendingBlock.timeStamp) +
                     " NumReplicaInProgress: " + 

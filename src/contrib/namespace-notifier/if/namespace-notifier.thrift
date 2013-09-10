@@ -67,16 +67,16 @@ exception ClientNotSubscribedException {
 service ClientHandler
 {
   // Called by the server to raise a notification
-  void handleNotification(1:NamespaceNotification notification, 2:i64 serverId)
+  void handleNotification(1:NamespaceNotification notification, 2:string serverId)
       throws (1:InvalidServerIdException invalidServerId),
 
   // Called periodically by the server to inform the client that he is
   // still alive
-  void heartbeat(1:i64 serverId)
+  void heartbeat(1:string serverId)
       throws (1:InvalidServerIdException invalidServerId),
 
   // Called by the server to associate the client with its id
-  void registerServer(1:i64 clientId, 2:i64 serverId, 3:i64 token)
+  void registerServer(1:i64 clientId, 2:string serverId, 3:i64 token)
       throws (1:InvalidTokenException invalidToken),
 }
 

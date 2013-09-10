@@ -17,19 +17,21 @@
  */
 package org.apache.hadoop.hdfs;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
 import java.io.EOFException;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.net.URI;
-import java.util.Collection;
-import java.util.ArrayList;
 import java.util.Random;
 import java.util.zip.CRC32;
 
-import junit.framework.TestCase;
+import org.apache.commons.logging.impl.Log4JLogger;
 
+import org.apache.log4j.Level;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -43,6 +45,7 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.raid.Codec;
 import org.apache.hadoop.raid.ParityFilePair;
 import org.apache.hadoop.raid.RaidNode;
@@ -50,8 +53,9 @@ import org.apache.hadoop.raid.RaidUtils;
 import org.apache.hadoop.raid.TestDirectoryRaidDfs;
 import org.apache.hadoop.raid.Utils;
 import org.apache.hadoop.util.StringUtils;
+import org.junit.Test;
 
-public class TestRaidDfs extends TestCase {
+public class TestRaidDfs {
   final static String TEST_DIR = new File(System.getProperty("test.build.data",
       "build/contrib/raid/test/data")).getAbsolutePath();
   final static long RELOAD_INTERVAL = 1000;
@@ -325,19 +329,23 @@ public class TestRaidDfs extends TestCase {
     DistributedRaidFileSystem raidfs = getRaidFS();
     assertTrue(validateFile(raidfs, srcFile, length, crc));
   }
-  
+ 
+  @Test
   public void testRaidDfsXorSpecialBufferSize() throws Exception {
     testRaidDfsXorCore(false, true);
   }
   
+  @Test
   public void testRaidDfsDirXorSpecialBufferSize() throws Exception {
     testRaidDfsXorCore(true, true);
   }
   
+  @Test
   public void testRaidDfsRsSpecialBufferSize() throws Exception {
     testRaidDfsRsCore(false, true);
   }
   
+  @Test
   public void testRaidDfsDirRsSpecialBufferSize() throws Exception {
     testRaidDfsRsCore(true, true);
   }
@@ -372,11 +380,13 @@ public class TestRaidDfs extends TestCase {
     }
     LOG.info("Test testRaidDfs completed.");
   }
-  
+ 
+  @Test
   public void testRaidDfsRs() throws Exception {
     testRaidDfsRsCore(false, false);
   }
   
+  @Test
   public void testRaidDfsDirRs() throws Exception {
     testRaidDfsRsCore(true, false);
   }
@@ -384,6 +394,7 @@ public class TestRaidDfs extends TestCase {
   /**
    * Test DistributedRaidFileSystem with relative path 
    */
+  @Test
   public void testRelativePath() throws Exception {
     stripeLength = 3;
     mySetup("xor", 1);
@@ -461,14 +472,17 @@ public class TestRaidDfs extends TestCase {
     }
   }
   
+  @Test
   public void testReadFully() throws Exception {
     testReadFullyCore(false);
   }
   
+  @Test
   public void testDirReadFully() throws Exception {
     testReadFullyCore(true);
   }
 
+  @Test
   public void testSeek() throws Exception {
     stripeLength = 3;
     mySetup("xor", 1);
@@ -548,14 +562,17 @@ public class TestRaidDfs extends TestCase {
     LOG.info("Test testRaidDfs completed.");
   }
   
+  @Test
   public void testRaidDfsXor() throws Exception {
     testRaidDfsXorCore(false, false);
   }
   
+  @Test
   public void testRaidDfsDirXor() throws Exception {
     testRaidDfsXorCore(true, false);
   }
   
+  @Test
   public void testRead() throws Exception {
     mySetup("xor", 1);
     try {
@@ -583,6 +600,7 @@ public class TestRaidDfs extends TestCase {
     }
   }
 
+  @Test
   public void testZeroLengthFile() throws Exception {
     mySetup("xor", 1);
     try {
@@ -624,10 +642,12 @@ public class TestRaidDfs extends TestCase {
     }
   }
   
+  @Test
   public void testTooManyErrorsDecodeXOR() throws Exception {
     testTooManyErrorsDecodeXORCore(false);
   }
   
+  @Test
   public void testTooManyErrorsDecodeDirXOR() throws Exception {
     testTooManyErrorsDecodeXORCore(true);
   }
@@ -655,10 +675,12 @@ public class TestRaidDfs extends TestCase {
     }
   }
   
+  @Test
   public void testTooManyErrorsDecodeRS() throws Exception {
     testTooManyErrorsDecodeRSCore(false);
   }
   
+  @Test
   public void testTooManyErrorsDecodeDirRS() throws Exception {
     testTooManyErrorsDecodeRSCore(true);
   }
@@ -704,10 +726,12 @@ public class TestRaidDfs extends TestCase {
     }
   }
   
+  @Test
   public void testTooManyErrorsEncode() throws Exception {
     testTooManyErrorsEncodeCore(false);
   }
   
+  @Test
   public void testTooManyErrorsDirEncode() throws Exception {
     testTooManyErrorsEncodeCore(true);
   }
@@ -752,10 +776,12 @@ public class TestRaidDfs extends TestCase {
     }
   }
   
+  @Test
   public void testTooManyErrorsEncodeRS() throws Exception {
     testTooManyErrorsEncodeRSCore(false);
   }
   
+  @Test
   public void testTooManyErrorsEncodeDirRS() throws Exception {
     testTooManyErrorsEncodeRSCore(true);
   }
@@ -969,9 +995,9 @@ public class TestRaidDfs extends TestCase {
 
       for (int j = 0; j < dirs.length; j++) {
         File[] blocks = dirs[j].listFiles();
-        LOG.info("blocks under " + dirs[j]);
         assertTrue("Blocks do not exist in data-dir", (blocks != null) && (blocks.length >= 0));
         for (int idx = 0; idx < blocks.length; idx++) {
+          LOG.info("block file: " + blocks[idx]);
           if (blocks[idx].getName().startsWith("blk_" + id) &&
               !blocks[idx].getName().endsWith(".meta")) {
             if (delete) {

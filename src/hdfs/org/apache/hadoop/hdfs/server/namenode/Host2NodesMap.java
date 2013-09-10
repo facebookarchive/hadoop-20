@@ -17,16 +17,19 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.net.InetSocketAddress;
 import java.util.*;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+import org.apache.hadoop.net.NetUtils;
 
 class Host2NodesMap {
   private HashMap<String, DatanodeDescriptor[]> map
     = new HashMap<String, DatanodeDescriptor[]>();
   private Random r = new Random();
   private ReadWriteLock hostmapLock = new ReentrantReadWriteLock();
-                      
+  
   /** Check if node is already in the map. */
   boolean contains(DatanodeDescriptor node) {
     if (node==null) {
@@ -125,8 +128,10 @@ class Host2NodesMap {
   }
     
   /** get a data node by its host.
+   * @deprecated use {@link #getDataNodeByIpPort(String)}
    * @return DatanodeDescriptor if found; otherwise null.
    */
+  @Deprecated
   DatanodeDescriptor getDatanodeByHost(String host) {
     if (host==null) {
       return null;
@@ -149,17 +154,39 @@ class Host2NodesMap {
       hostmapLock.readLock().unlock();
     }
   }
-    
+
+  DatanodeDescriptor getDataNodeByIpPort(String ipPort) {
+    if (ipPort == null) {
+      return null;
+    }
+    hostmapLock.readLock().lock();
+    try {
+      InetSocketAddress address = NetUtils.createSocketAddr(ipPort);
+      DatanodeDescriptor[] all = map.get(address.getAddress().getHostAddress());
+      if (all != null) {
+        for (DatanodeDescriptor aDatanode : all) {
+          if (aDatanode.getPort() == address.getPort()) {
+            return aDatanode;
+          }
+        }
+      }
+      return null;
+    } finally {
+      hostmapLock.readLock().unlock();
+    }
+  }
+
   /**
    * Find data node by its name.
    * 
+   * @deprecated use {@link #getDataNodeByIpPort(String)}
    * @return DatanodeDescriptor if found or null otherwise 
    */
+  @Deprecated
   public DatanodeDescriptor getDatanodeByName(String name) {
-    if (name==null) {
+    if (name == null) {
       return null;
     }
-      
     int colon = name.indexOf(":");
     String host;
     if (colon < 0) {
@@ -167,15 +194,14 @@ class Host2NodesMap {
     } else {
       host = name.substring(0, colon);
     }
-
     hostmapLock.readLock().lock();
     try {
       DatanodeDescriptor[] nodes = map.get(host);
       // no entry
-      if (nodes== null) {
+      if (nodes == null) {
         return null;
       }
-      for(DatanodeDescriptor containedNode:nodes) {
+      for (DatanodeDescriptor containedNode : nodes) {
         if (name.equals(containedNode.getName())) {
           return containedNode;
         }

@@ -15,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-usage="Usage: start-namespace-notifier.sh"
+usage="Usage: start-namespace-notifier.sh [-service service_id]"
 
 params=$#
 bin=`dirname "$0"`
@@ -26,12 +26,26 @@ bin=`cd "$bin"; pwd`
 
 # get arguments
 if [ $# -ge 1 ]; then
-    echo $usage
+    startArg=$1
+    case $startArg in 
+      (-service)
+        if [ $# -ge 2 ]; then
+          service_id=$2
+        else 
+          echo $usage
+          exit 1
+        fi
+        ;;
+      (*)
+        echo $usage
+        exit 1
+        ;;
+    esac
 fi
 
 export NOTIFIER_JMX_OPTS=" -Dcom.sun.management.jmxremote.port=$NOTIFIER_JMX_PORT -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false"
 
-# use the thrift 0.7.0 jar in the class path
-export HADOOP_CLASSPATH=${HADOOP_HOME}/contrib/namespace-notifier/lib/libthrift-0.7.0.jar:${HADOOP_CLASSPATH}
+# use the thrift 0.9.0 jar in the class path
+export HADOOP_CLASSPATH=${HADOOP_HOME}/contrib/namespace-notifier/lib/libthrift-0.9.0.jar:${HADOOP_CLASSPATH}
 
-"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start notifier
+"$bin"/hadoop-daemon.sh --config $HADOOP_CONF_DIR start notifier $startArg $service_id

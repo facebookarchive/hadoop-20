@@ -126,7 +126,7 @@ public class CrcConcat {
       //
       int initial = CrcConcatLookupTables.initCrcMap[orderRemained];
 
-      PureJavaCrc32 pjc = new PureJavaCrc32();
+      NativeCrc32 pjc = new NativeCrc32();
       pjc.setValue(crcForCrc1);
       byte[] zeros = new byte[orderRemained];
       pjc.update(zeros, 0, zeros.length);

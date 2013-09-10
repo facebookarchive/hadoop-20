@@ -22,6 +22,9 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.util.List;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
@@ -30,21 +33,25 @@ import org.apache.hadoop.io.WritableFactory;
  * Collection of blocks with their locations, the file length, and
  * data transfer version number.
  */
+@ThriftStruct
 public class VersionedLocatedBlocks extends LocatedBlocks {
   private int dataProtocolVersion = -1;  // data transfer version number
 
   VersionedLocatedBlocks() {
   }
   
-  public VersionedLocatedBlocks(long flength, List<LocatedBlock> blks,
-      boolean isUnderConstruction, int dataProtocolVersion) {
-    super(flength, blks, isUnderConstruction);
+  @ThriftConstructor
+  public VersionedLocatedBlocks(@ThriftField(1) long fileLength,
+      @ThriftField(2) List<LocatedBlock> locatedBlocks, @ThriftField(3) boolean isUnderConstuction,
+      @ThriftField(4) int dataProtocolVersion) {
+    super(fileLength, locatedBlocks, isUnderConstuction);
     this.dataProtocolVersion = dataProtocolVersion;
   }
-  
+
   /**
    * Get data transfer version number
    */
+  @ThriftField(4)
   public int getDataProtocolVersion() {
     return this.dataProtocolVersion;
   }

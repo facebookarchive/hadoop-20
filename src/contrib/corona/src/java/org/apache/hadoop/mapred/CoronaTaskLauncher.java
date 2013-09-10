@@ -153,7 +153,8 @@ public class CoronaTaskLauncher {
    */
   public void launchTask(Task task, String trackerName, InetAddress addr) {
     CoronaSessionInfo info = new CoronaSessionInfo(
-      coronaJT.getSessionId(), coronaJT.getJobTrackerAddress());
+      coronaJT.getSessionId(), coronaJT.getJobTrackerAddress(),
+      coronaJT.getSecondaryTrackerAddress());
     LaunchTaskAction action = new LaunchTaskAction(task, info);
     String description = "LaunchTaskAction " + action.getTask().getTaskID();
     ActionToSend actionToSend =
@@ -362,7 +363,8 @@ public class CoronaTaskLauncher {
 
       // Fill in the job tracker information.
       CoronaSessionInfo info = new CoronaSessionInfo(
-        coronaJT.getSessionId(), coronaJT.getJobTrackerAddress());
+        coronaJT.getSessionId(), coronaJT.getJobTrackerAddress(),
+        coronaJT.getSecondaryTrackerAddress());
       for (ActionToSend actionToSend: actions) {
         actionToSend.ttAction.setExtensible(info);
       }

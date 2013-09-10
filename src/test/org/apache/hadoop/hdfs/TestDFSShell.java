@@ -1002,10 +1002,12 @@ public class TestDFSShell extends TestCase {
       Path parent = new Path("/tmp");
       Path root = new Path("/");
       TestDFSShell.writeFile(dstFs, path);
+      FileStatus oldStatus = dstFs.getFileStatus(path);
       runCmd(shell, "-chgrp", "-R", "herbivores", dstFs.getUri().toString() +"/*");
-      confirmOwner(null, "herbivores", dstFs, parent, path);
+      confirmOwner(null, "herbivores", oldStatus, dstFs, parent, path);
+      oldStatus = dstFs.getFileStatus(root);
       runCmd(shell, "-chown", "-R", ":reptiles", dstFs.getUri().toString() + "/");
-      confirmOwner(null, "reptiles", dstFs, root, parent, path);
+      confirmOwner(null, "reptiles", oldStatus, dstFs, root, parent, path);
       //check if default hdfs:/// works
       argv[0] = "-cat";
       argv[1] = "hdfs:///furi";
@@ -1417,14 +1419,19 @@ public class TestDFSShell extends TestCase {
     }
   }
 
-  private void confirmOwner(String owner, String group,
+  private void confirmOwner(String owner, String group, FileStatus oldStatus,
                             FileSystem fs, Path... paths) throws IOException {
     for(Path path : paths) {
+      FileStatus newStatus= fs.getFileStatus(path);
       if (owner != null) {
-        assertEquals(owner, fs.getFileStatus(path).getOwner());
+        assertEquals(owner, newStatus.getOwner());
+      } else {
+        assertEquals(oldStatus.getOwner(), newStatus.getOwner()); // should not change
       }
       if (group != null) {
-        assertEquals(group, fs.getFileStatus(path).getGroup());
+        assertEquals(group, newStatus.getGroup());
+      } else {
+        assertEquals(oldStatus.getGroup(), newStatus.getGroup()); // should not change
       }
     }
   }
@@ -1463,34 +1470,42 @@ public class TestDFSShell extends TestCase {
       Path root = new Path("/");
       TestDFSShell.writeFile(fs, path);
 
+      FileStatus oldStatus = fs.getFileStatus(path);
       runCmd(shell, "-chgrp", "-R", "herbivores", "/*", "unknownFile*");
-      confirmOwner(null, "herbivores", fs, parent, path);
+      confirmOwner(null, "herbivores", oldStatus, fs, parent, path);
 
+      oldStatus = fs.getFileStatus(path);
       runCmd(shell, "-chgrp", "mammals", file);
-      confirmOwner(null, "mammals", fs, path);
+      confirmOwner(null, "mammals", oldStatus, fs, path);
 
+      oldStatus = fs.getFileStatus(path);
       runCmd(shell, "-chown", "-R", ":reptiles", "/");
-      confirmOwner(null, "reptiles", fs, root, parent, path);
+      confirmOwner(null, "reptiles", oldStatus, fs, root, parent, path);
 
+      oldStatus = fs.getFileStatus(path);
       runCmd(shell, "-chown", "python:", "/nonExistentFile", file);
-      confirmOwner("python", "reptiles", fs, path);
+      confirmOwner("python", "reptiles", oldStatus, fs, path);
 
+      oldStatus = fs.getFileStatus(path);
       runCmd(shell, "-chown", "-R", "hadoop:toys", "unknownFile", "/");
-      confirmOwner("hadoop", "toys", fs, root, parent, path);
+      confirmOwner("hadoop", "toys", oldStatus, fs, root, parent, path);
 
       // Test different characters in names
-
+      oldStatus = fs.getFileStatus(path);
       runCmd(shell, "-chown", "hdfs.user", file);
-      confirmOwner("hdfs.user", null, fs, path);
+      confirmOwner("hdfs.user", null, oldStatus, fs, path);
 
+      oldStatus = fs.getFileStatus(path);
       runCmd(shell, "-chown", "_Hdfs.User-10:_hadoop.users--", file);
-      confirmOwner("_Hdfs.User-10", "_hadoop.users--", fs, path);
+      confirmOwner("_Hdfs.User-10", "_hadoop.users--", oldStatus, fs, path);
 
+      oldStatus = fs.getFileStatus(path);
       runCmd(shell, "-chown", "hdfs/hadoop-core@apache.org:asf-projects", file);
-      confirmOwner("hdfs/hadoop-core@apache.org", "asf-projects", fs, path);
+      confirmOwner("hdfs/hadoop-core@apache.org", "asf-projects", oldStatus, fs, path);
 
+      oldStatus = fs.getFileStatus(path);
       runCmd(shell, "-chgrp", "hadoop-core@apache.org/100", file);
-      confirmOwner(null, "hadoop-core@apache.org/100", fs, path);
+      confirmOwner(null, "hadoop-core@apache.org/100", oldStatus, fs, path);
 
     } finally {
       cluster.shutdown();
@@ -1622,6 +1637,41 @@ public class TestDFSShell extends TestCase {
     } finally {
       try {
         fs.close();
+      } catch (Exception e) {
+      }
+      cluster.shutdown();
+    }
+  }
+
+  // Test touch on the default/non-default nameservice in a federated cluster
+  public void testTouchFederation() throws IOException, ParseException {
+    Configuration conf = new Configuration();
+    int numNamenodes = 2;
+    int numDatanodes = 2;
+    cluster = new MiniDFSCluster(conf, numDatanodes, true, null, numNamenodes);
+    cluster.waitActive();
+
+    // f1, f2 are non-default nameservice
+    FileSystem fs1 = cluster.getFileSystem(0);
+    FileSystem fs2 = cluster.getFileSystem(1);
+    // f3 is the default nameservice
+    FileSystem fs3 = FileSystem.get(conf);
+    FsShell shell = new FsShell();
+    shell.setConf(conf);
+
+    try {
+      Path file1 = new Path(fs1.getUri() + "/tmp/federateFile1.txt");
+      Path file2 = new Path(fs2.getUri() + "/tmp/federateFile2.txt");
+      Path file3 = new Path("/tmp/federateFile3.txt");
+      runCmd(shell, "-touch", "" + file1, "" + file2, "" + file3);
+      assertTrue("Touch didn't create a file!", fs1.exists(file1));
+      assertTrue("Touch didn't create a file!", fs2.exists(file2));
+      assertTrue("Touch didn't create a file!", fs3.exists(file3));
+    } finally {
+      try {
+        fs1.close();
+        fs2.close();
+        fs3.close();
       } catch (Exception e) {
       }
       cluster.shutdown();
@@ -2012,7 +2062,7 @@ public class TestDFSShell extends TestCase {
       final String root = createTree(dfs, "lsr");
       dfs.mkdirs(new Path(root, "zzz"));
 
-      runLsr(new FsShell(conf), root, 0);
+      runLsCmd(new FsShell(conf), root, 0, "-lsr", null);
 
       final Path sub = new Path(root, "sub");
       dfs.setPermission(sub, new FsPermission((short)0));
@@ -2023,14 +2073,14 @@ public class TestDFSShell extends TestCase {
           tmpusername, new String[] {tmpusername});
       UnixUserGroupInformation.saveToConf(conf,
             UnixUserGroupInformation.UGI_PROPERTY_NAME, tmpUGI);
-      String results = runLsr(new FsShell(conf), root, -1);
+      String results = runLsCmd(new FsShell(conf), root, -1, "-lsr", null);
       assertTrue(results.contains("zzz"));
     } finally {
       cluster.shutdown();
     }
   }
-  private static String runLsr(final FsShell shell, String root, int returnvalue
-      ) throws Exception {
+  private static String runLsCmd(final FsShell shell, String root,
+      int returnvalue, String cmd, String argument) throws Exception {
     System.out.println("root=" + root + ", returnvalue=" + returnvalue);
     final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     final PrintStream out = new PrintStream(bytes);
@@ -2040,7 +2090,11 @@ public class TestDFSShell extends TestCase {
     System.setErr(out);
     final String results;
     try {
-      assertEquals(returnvalue, shell.run(new String[]{"-lsr", root}));
+      if (argument != null) {
+        assertEquals(returnvalue, shell.run(new String[]{cmd, argument, root}));
+      } else {
+        assertEquals(returnvalue, shell.run(new String[]{cmd, root}));
+      }
       results = bytes.toString();
     } finally {
       IOUtils.closeStream(out);
@@ -2049,5 +2103,20 @@ public class TestDFSShell extends TestCase {
     }
     System.out.println("results:\n" + results);
     return results;
+  }
+  
+  public void testLsd() throws Exception {
+    Configuration conf = new Configuration();
+    cluster = new MiniDFSCluster(conf, 2, true, null);
+    DistributedFileSystem dfs = (DistributedFileSystem)cluster.getFileSystem();
+
+    try {
+      final String root = createTree(dfs, "lsd");
+      dfs.mkdirs(new Path(root, "testDir"));
+      String results = runLsCmd(new FsShell(conf), root + "/testDir", 0, "-ls", "-d");
+      assertTrue(results.contains("testDir"));
+    } finally {
+      cluster.shutdown();
+    }
   }
 }

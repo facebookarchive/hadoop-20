@@ -102,4 +102,18 @@ public class ServletUtil {
   public static String percentageGraph(float perc, int width) throws IOException {
     return percentageGraph((int)perc, width);
   }
+  
+  /**
+   * @return a long value as passed in the given parameter, throwing
+   * an exception if it is not present or if it is not a valid number.
+   */
+  public static long parseLongParam(ServletRequest request, String param)
+      throws IOException {
+    String paramStr = request.getParameter(param);
+    if (paramStr == null) {
+      throw new IOException("Invalid request has no " + param + " parameter");
+    }
+    
+    return Long.valueOf(paramStr);
+  }
 }

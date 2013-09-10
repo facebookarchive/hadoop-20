@@ -19,7 +19,13 @@ package org.apache.hadoop.hdfs.protocol;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
+import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
@@ -28,7 +34,9 @@ import org.apache.hadoop.io.WritableFactory;
  * This class defines a partial listing of a directory to support
  * iterative directory listing.
  */
-public class LocatedDirectoryListing extends DirectoryListing {
+// DO NOT remove final without consulting {@link WrapperWritable#create(V object)}
+@ThriftStruct
+public final class LocatedDirectoryListing extends DirectoryListing {
   static {                                      // register a ctor
     WritableFactories.setFactory
       (LocatedDirectoryListing.class,
@@ -64,6 +72,28 @@ public class LocatedDirectoryListing extends DirectoryListing {
     }
     
     this.blockLocations = blockLocations;
+  }
+
+  @ThriftConstructor
+  public LocatedDirectoryListing(@ThriftField(1) List<HdfsFileStatus> fileStatusList,
+      @ThriftField(2) List<LocatedBlocks> locatedBlocks, @ThriftField(3) int remainingEntries) {
+    this(fileStatusList.toArray(new HdfsFileStatus[fileStatusList.size()]), locatedBlocks.toArray(
+        new LocatedBlocks[locatedBlocks.size()]), remainingEntries);
+  }
+
+  @ThriftField(1)
+  public List<HdfsFileStatus> getFileStatusList() {
+    return Arrays.asList(getPartialListing());
+  }
+
+  @ThriftField(2)
+  public List<LocatedBlocks> getLocatedBlocks() {
+    return Arrays.asList(getBlockLocations());
+  }
+
+  @ThriftField(3)
+  public int getRemainingEntries() {
+    return super.getRemainingEntries();
   }
 
   /**

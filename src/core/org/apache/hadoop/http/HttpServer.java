@@ -45,6 +45,7 @@ import javax.servlet.http.HttpServletResponse;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.jmx.JMXJsonServlet;
 import org.apache.hadoop.log.LogLevel;
 import org.apache.hadoop.metrics.MetricsServlet;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -127,8 +128,8 @@ public class HttpServer implements FilterContainer {
     webServer.addConnector(listener);
 
     int maxThreads = conf.getInt(HTTP_MAX_THREADS, -1);
-    // Wait a maximum of 1 minute by default for the threadpool to exit.
-    int maxStopTime = conf.getInt(HTTP_THREADPOOL_MAX_STOP_TIME, 60000);
+    // Set the timeout for the threadpool to exit (default 1 second)
+    int maxStopTime = conf.getInt(HTTP_THREADPOOL_MAX_STOP_TIME, 1000);
     // If HTTP_MAX_THREADS is not configured, QueueThreadPool() will use the 
     // default value (currently 254).
     QueuedThreadPool threadPool = maxThreads == -1 ?
@@ -216,13 +217,13 @@ public class HttpServer implements FilterContainer {
     if (logDir != null) {
       Context logContext = new Context(parent, "/logs");
       logContext.setResourceBase(logDir);
-      logContext.addServlet(DefaultServlet.class, "/");
+      logContext.addServlet(StaticServlet.class, "/");
       defaultContexts.put(logContext, true);
     }
     // set up the context for "/static/*"
     Context staticContext = new Context(parent, "/static");
     staticContext.setResourceBase(appDir + "/static");
-    staticContext.addServlet(DefaultServlet.class, "/*");
+    staticContext.addServlet(StaticServlet.class, "/*");
     defaultContexts.put(staticContext, true);
   }
   
@@ -233,9 +234,10 @@ public class HttpServer implements FilterContainer {
     // set up default servlets
     addServlet("stacks", "/stacks", StackServlet.class);
     addServlet("logLevel", "/logLevel", LogLevel.Servlet.class);
+    addServlet("jmx", "/jmx", JMXJsonServlet.class);
     addServlet("metrics", "/metrics", MetricsServlet.class);
-		 addServlet("conf", "/conf", ConfServlet.class);
-	}
+    addServlet("conf", "/conf", ConfServlet.class);
+    }
 
   public void addContext(Context ctxt, boolean isFiltered)
       throws IOException {
@@ -524,7 +526,7 @@ public class HttpServer implements FilterContainer {
       throw new IOException("Failed to add ssl listener");
     }
     SslSocketConnector sslListener = new SslSocketConnector();
-    sslListener.setHost(addr.getHostName());
+    sslListener.setHost(addr.getAddress().getHostAddress());
     sslListener.setPort(addr.getPort());
     sslListener.setKeystore(keystore);
     sslListener.setPassword(storPass);
@@ -553,7 +555,7 @@ public class HttpServer implements FilterContainer {
           "ssl.server.truststore.type", "jks"));
     }
     SslSocketConnector sslListener = new SslSocketConnector();
-    sslListener.setHost(addr.getHostName());
+    sslListener.setHost(addr.getAddress().getHostAddress());
     sslListener.setPort(addr.getPort());
     sslListener.setKeystore(sslConf.get("ssl.server.keystore.location"));
     sslListener.setPassword(sslConf.get("ssl.server.keystore.password", ""));
@@ -755,6 +757,9 @@ public class HttpServer implements FilterContainer {
       public String[] getParameterValues(String name) {
         String unquoteName = HtmlQuoting.unquoteHtmlChars(name);
         String[] unquoteValue = rawRequest.getParameterValues(unquoteName);
+        if (unquoteValue == null) {
+          return null;
+        }
         String[] result = new String[unquoteValue.length];
         for(int i=0; i < result.length; ++i) {
           result[i] = HtmlQuoting.quoteHtmlChars(unquoteValue[i]);

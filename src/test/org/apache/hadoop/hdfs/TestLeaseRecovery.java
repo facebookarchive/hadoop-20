@@ -211,7 +211,9 @@ public class TestLeaseRecovery extends junit.framework.TestCase {
       DataNode primary = datanodes[primarydatanodeindex];
       DataNode.LOG.info("primary.dnRegistration=" + primary.getDNRegistrationForNS(
           cluster.getNameNode().getNamespaceID()));
-      primary.recoverBlocks(namespaceId, new Block[]{lastblock}, new DatanodeInfo[][]{datanodeinfos}).join();
+    primary.recoverBlocks(namespaceId, new Block[] { lastblock },
+        new DatanodeInfo[][] { datanodeinfos },
+        System.currentTimeMillis() + 3000).join();
 
       BlockMetaDataInfo[] updatedmetainfo = new BlockMetaDataInfo[REPLICATION_NUM];
       int minsize = min(newblocksizes);

@@ -197,6 +197,12 @@
 %>
 
 <html>
+<%
+if (job == null) {
+  //Check if we're local Jt running remote JT - redirect if so.
+  response.sendRedirect(tracker.getRemoteJTUrl());
+}
+%>
 <head>
   <%
   if (refresh != 0) {
@@ -266,6 +272,33 @@
     printJobLevelTaskSummary(out, jobId, "cleanup",
                              job.getTasks(TaskType.TASK_CLEANUP));
     out.print("<br>\n");
+    
+    
+    if (tracker.isStandAlone()) {
+      String taskLogUrl = null;
+      taskLogUrl = TaskLogServlet.getTaskLogUrl(tracker.getTTHost(),
+        						tracker.getTTHttpPort(),
+        						tracker.getTid().toString());
+      if (taskLogUrl != null) {
+        out.print("<b>RemoteJobTrackerLog:</b>");
+        String tailFourKBUrl = taskLogUrl + "&start=-4097";
+        String tailEightKBUrl = taskLogUrl + "&start=-8193";
+        String entireLogUrl = taskLogUrl + "&all=true";
+        out.print("<a href=\"" + tailFourKBUrl + "\">Last 4KB</a>  ");
+        out.print("<a href=\"" + tailEightKBUrl + "\">Last 8KB</a>  ");
+        out.print("<a href=\"" + entireLogUrl + "\">All</a>  ");
+        
+        String pid = tracker.getPid();
+        if (pid != null) {
+        	String stackTracingUrl = taskLogUrl + 
+        	  "&stacktracing=true&start=-891981&filter=stdout&pid=" + pid;
+        	out.print("<a href=\"" + stackTracingUrl + "\">StackTrace</a><br/>\n");
+        } else {
+        	out.print("<br>\n");
+        } 
+      }
+    }
+    
     if (flakyTaskTrackers > 0) {
       out.print("<b>Black-listed TaskTrackers:</b> " +
           "<a href=\"jobblacklistedtrackers.jsp?jobid=" + jobId + "\">" +

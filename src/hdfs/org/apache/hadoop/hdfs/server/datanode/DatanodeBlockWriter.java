@@ -17,13 +17,19 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
+import java.io.FileDescriptor;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.OutputStream;
+import java.util.concurrent.Future;
+import java.util.concurrent.locks.Lock;
 
 import org.apache.commons.logging.Log;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.InjectionHandler;
 
 /**
  * Base class for block writing in data node. It reads input packet
@@ -40,6 +46,9 @@ abstract class DatanodeBlockWriter implements java.io.Closeable {
   protected String inAddr;
   protected int namespaceId;
   protected DataNode datanode = null;
+  
+  protected int partialCrcInt;
+  protected int firstChunkOffset;
 
   public abstract void initializeStreams(int bytesPerChecksum,
       int checksumSize, Block block, String inAddr, int namespaceId,
@@ -79,7 +88,7 @@ abstract class DatanodeBlockWriter implements java.io.Closeable {
    * @throws IOException
    */
   public abstract void writePacket(byte pktBuf[], int len, int dataOff,
-      int checksumOff, int numChunks) throws IOException;
+      int pktBufStartOff, int numChunks, int packetVersion) throws IOException;
 
   public abstract void setPosAndRecomputeChecksumIfNeeded(long offsetInBlock,
       DataChecksum checksum) throws IOException;
@@ -94,7 +103,26 @@ abstract class DatanodeBlockWriter implements java.io.Closeable {
    *          the number of bytes to sync in the end of the block. It's counted
    *          as block sizes instead of bytes on disk, for inline checksum, it
    *          may translate to more bytes to sync.
+   * @param flags
+   *          the flags for sync_file_range
    * @throws IOException
    */
-  public abstract void fileRangeSync(long lastBytesToSync) throws IOException;
+  public abstract void fileRangeSync(long lastBytesToSync, int flags)
+      throws IOException;
+
+  public abstract void fadviseStream(int advise, long offset, long len)
+      throws IOException;
+
+  public abstract void fadviseStream(int advise, long offset, long len,
+      boolean sync) throws IOException;
+
+  /**
+   * Sets the posix fadvise for the caching behavior required from block after
+   * we finalize the block.
+   * 
+   * @param fadvise
+   *          the type of advice
+   * @throws IOException
+   */
+  public abstract void close(int fadvise) throws IOException;
 }

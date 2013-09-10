@@ -27,7 +27,10 @@ public enum EventType {
   // A file was closed. Won't trigger for a directory.
   FILE_CLOSED  ((byte)1),
   // A file or directory was deleted.
-  NODE_DELETED ((byte)2);
+  NODE_DELETED ((byte)2),
+  // A directory was added.
+  DIR_ADDED    ((byte)3);
+  
   
   // Caching the association between the byte value and the enum value
   private static final Map<Byte, EventType> byteToEnum = 

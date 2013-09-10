@@ -21,6 +21,7 @@ import java.io.IOException;
 
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
+import org.apache.jasper.compiler.JspUtil;
 
 /**
  * A generic abstract class to support journaling of edits logs into 
@@ -52,6 +53,32 @@ public abstract class EditLogOutputStream {
   abstract public void write(FSEditLogOp op) throws IOException;
   
   /**
+   * Write a transaction to the edit log in serialized form.
+   *
+   * @param bytes the bytes of the transaction to write.
+   * @param offset offset in the bytes to write from
+   * @param length number of bytes to write
+   * @param txid transaction id
+   * @throws IOException
+   */
+  abstract public void writeRawOp(byte[] bytes, int offset, int length, long txid)
+      throws IOException;
+  
+  /**
+   * Write raw data to an edit log. This data should already have
+   * the transaction ID, checksum, etc included. It is for use
+   * within the JournalNode when replicating edits from the
+   * NameNode.
+   *
+   * @param bytes the bytes to write.
+   * @param offset offset in the bytes to write from
+   * @param length number of bytes to write
+   * @throws IOException
+   */
+  abstract public void writeRaw(byte[] bytes, int offset, int length)
+      throws IOException;
+  
+  /**
    * Create and initialize new edits log storage.
    * 
    * @throws IOException
@@ -72,16 +99,20 @@ public abstract class EditLogOutputStream {
    * {@link #setReadyToFlush()} into underlying persistent store.
    * @throws IOException
    */
-  abstract protected void flushAndSync() throws IOException;
+  abstract protected void flushAndSync(boolean durable) throws IOException;
 
+  public void flush() throws IOException {
+    flush(true);
+  }
+  
   /**
    * Flush data to persistent store.
    * Collect sync metrics.
    */
-  public void flush() throws IOException {
+  public void flush(boolean durable) throws IOException {
     numSync++;
     long start = System.nanoTime();
-    flushAndSync();
+    flushAndSync(durable);
     long time = DFSUtil.getElapsedTimeMicroSeconds(start);
     totalTimeSync += time;
     if (sync != null) {
@@ -125,5 +156,13 @@ public abstract class EditLogOutputStream {
    */
   public boolean shouldForceSync() {
     return false;
+  }
+  
+  /**
+   * @return a short HTML snippet suitable for describing the current
+   * status of the stream
+   */
+  public String generateHtmlReport() {
+    return "";
   }
 }

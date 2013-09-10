@@ -29,7 +29,12 @@ import org.apache.hadoop.hdfs.server.namenode.EditsDoubleBuffer;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.metrics.util.MetricsBase;
+import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
+import org.apache.hadoop.util.InjectionHandler;
 
 import java.io.IOException;
 
@@ -56,12 +61,26 @@ public class BookKeeperEditLogOutputStream extends EditLogOutputStream {
   private EditsDoubleBuffer doubleBuf;
   private BookKeeperJournalOutputStream outputStream; // Stream for writing to the ledger
 
-  public BookKeeperEditLogOutputStream(LedgerHandle ledger)
-      throws IOException {
+  public BookKeeperEditLogOutputStream(LedgerHandle ledger) throws IOException {
+    this(ledger, null, null);
+  }
+
+  public BookKeeperEditLogOutputStream(LedgerHandle ledger, String parentPath,
+      NameNodeMetrics metrics) throws IOException {
     super();
     this.ledger = ledger;
     doubleBuf = new EditsDoubleBuffer(FSEditLog.sizeFlushBuffer);
     outputStream = new BookKeeperJournalOutputStream(ledger);
+    if (metrics != null) { // Metrics is non-null only when used inside name node
+      String metricsName = "sync_bk_" + parentPath + "_edit";
+      MetricsBase retrMetrics = metrics.registry.get(metricsName);
+      if (retrMetrics != null) {
+        sync = (MetricsTimeVaryingRate) retrMetrics;
+      } else {
+        sync = new MetricsTimeVaryingRate(metricsName, metrics.registry,
+            "Journal Sync for BookKeeper" + ledger.getId());
+      }
+    }
   }
 
   @Override
@@ -76,6 +95,9 @@ public class BookKeeperEditLogOutputStream extends EditLogOutputStream {
 
   @Override
   public void create() throws IOException {
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("Called create() on " + toString());
+    }
     // Write the layout version to the Ledger. This is different from
     // BookKeeperEditLogOutputStream in contrib/bkjournal in
     // Apache trunk, but in line with EditLogFileOutputStream.
@@ -138,7 +160,7 @@ public class BookKeeperEditLogOutputStream extends EditLogOutputStream {
    * of bookies that store the underlying ledger.
    */
   @Override
-  protected void flushAndSync() throws IOException {
+  protected void flushAndSync(boolean durable) throws IOException {
     if (outputStream == null) {
       throw new IOException("Trying to use aborted output stream!");
     }
@@ -168,5 +190,16 @@ public class BookKeeperEditLogOutputStream extends EditLogOutputStream {
     IOUtils.cleanup(LOG, outputStream);
     outputStream = null;
     closeLedger(); // Close aborted ledgers
+  }
+
+  @Override
+  public void writeRaw(byte[] bytes, int offset, int length) throws IOException {
+    doubleBuf.writeRaw(bytes, offset, length);
+  }
+  
+  @Override
+  public void writeRawOp(byte[] bytes, int offset, int length, long txid)
+      throws IOException {
+    doubleBuf.writeRawOp(bytes, offset, length, txid);
   }
 }

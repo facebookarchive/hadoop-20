@@ -1,5 +1,8 @@
 /* config.h.in.  Generated from configure.ac by autoheader.  */
 
+/* The 'actual' dynamic-library for '-llz4' */
+#undef HADOOP_LZ4_LIBRARY
+
 /* The 'actual' dynamic-library for '-llzma' */
 #undef HADOOP_LZMA_LIBRARY
 
@@ -26,6 +29,9 @@
 
 /* Define to 1 if you have the `jvm' library (-ljvm). */
 #undef HAVE_LIBJVM
+
+/* Define to 1 if you have the <lz4/lz4.h> header file. */
+#undef HAVE_LZ4_LZ4_H
 
 /* Define to 1 if you have the <lzma/lzma.h> header file. */
 #undef HAVE_LZMA_LZMA_H

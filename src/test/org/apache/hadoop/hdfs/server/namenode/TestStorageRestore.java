@@ -38,6 +38,9 @@ import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.JournalSet.JournalAndStream;
 import org.mockito.Mockito;
+import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyInt;
+import static org.mockito.Matchers.anyLong;
 
 import com.google.common.collect.ImmutableSet;
 
@@ -135,7 +138,7 @@ public class TestStorageRestore extends TestCase {
       }
     }
     // simulate an error
-    fi.storage.reportErrorsOnDirectories(al);
+    fi.storage.reportErrorsOnDirectories(al, fi);
     
     for (JournalAndStream j : fi.getEditLog().getJournals()) {
       if (j.getManager() instanceof FileJournalManager) {
@@ -146,6 +149,10 @@ public class TestStorageRestore extends TestCase {
           j.setCurrentStreamForTests(mockStream);
           doThrow(new IOException("Injected fault: write")).
             when(mockStream).write(Mockito.<FSEditLogOp>anyObject());
+          doThrow(new IOException("Injected fault: write")).
+            when(mockStream).writeRaw((byte[]) any(), anyInt(), anyInt());
+          doThrow(new IOException("Injected fault: write")).
+            when(mockStream).writeRawOp((byte[]) any(), anyInt(), anyInt(), anyLong());
         }
       }
     }

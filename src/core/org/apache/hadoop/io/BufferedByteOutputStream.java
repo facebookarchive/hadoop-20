@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.io;
 
+import java.io.BufferedOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -57,8 +58,11 @@ public class BufferedByteOutputStream extends OutputStream {
    */
   public static DataOutputStream wrapOutputStream(OutputStream os,
       int bufferSize, int writeBufferSize) {
-    return new DataOutputStream(new BufferedByteOutputStream(os, bufferSize,
-        writeBufferSize));
+    // wrapping BufferedByteOutputStream in BufferedOutputStream decreases
+    // pressure on BBOS internal locks, and we read from the BBOS in
+    // bigger chunks
+    return new DataOutputStream(new BufferedOutputStream(
+        new BufferedByteOutputStream(os, bufferSize, writeBufferSize)));
   }
   
   /**
@@ -71,6 +75,7 @@ public class BufferedByteOutputStream extends OutputStream {
   private BufferedByteOutputStream(OutputStream os, int bufferSize, int writeBufferSize) {
     buffer = new BufferedByteInputOutput(bufferSize);
     writeThread = new WriteThread(os, buffer, writeBufferSize);
+    writeThread.setDaemon(true);
     writeThread.start();
     underlyingOutputStream = os;
   }

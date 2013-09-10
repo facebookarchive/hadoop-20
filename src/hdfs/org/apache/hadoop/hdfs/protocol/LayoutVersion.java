@@ -81,7 +81,10 @@ public class LayoutVersion {
     EDITLOG_OP_OPTIMIZATION(-39,
         "Use LongWritable and ShortWritable directly instead of ArrayWritable of UTF8"),
     HARDLINK(-40, "HardLink inforamation is stored in edits log and image files"),
-    SUPPORT_INLINE_CHECKSUM(-41, "Support inline checksum");
+    SUPPORT_INLINE_CHECKSUM(-41, "Support inline checksum"),
+    ADD_INODE_ID(-42, "Assign an unique inode id to each inode"),
+    BLOCK_CHECKSUM(-43, "Add block checksum in block info"),
+    ADD_RAID(-44, "Support raid in inode");
     
     final int lv;
     final int ancestorLV;

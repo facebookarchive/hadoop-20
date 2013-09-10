@@ -35,7 +35,7 @@ import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 
 import com.google.common.collect.ImmutableList;
 
-class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
+public class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
   public static final Log LOG = LogFactory.getLog(
     FSImageTransactionalStorageInspector.class);
 
@@ -107,7 +107,7 @@ class FSImageTransactionalStorageInspector extends FSImageStorageInspector {
         try {
           long txid = Long.valueOf(imageMatch.group(1));
           LOG.info("Found image for txid: " + txid + " file: " + f);
-          foundImages.add(new FSImageFile(sd, f, txid));
+          foundImages.add(new FSImageFile(sd, f, txid, null));
         } catch (NumberFormatException nfe) {
           LOG.error("Image file " + f + " has improperly formatted " +
                     "transaction ID");

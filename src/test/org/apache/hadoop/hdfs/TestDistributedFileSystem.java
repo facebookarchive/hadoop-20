@@ -20,26 +20,143 @@ package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.Arrays;
 import java.util.Random;
 
 import junit.framework.TestCase;
 
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.DeleteUtils;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileChecksum;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
-import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
-import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.log4j.Level;
 import org.junit.Assert;
 
 public class TestDistributedFileSystem extends junit.framework.TestCase {
   private static final Random RAN = new Random();
+  
+  public static void createFile(FileSystem fs, Path path) throws IOException {
+    FSDataOutputStream stm = fs
+        .create(path, true, 4096, (short) 1, (long) 1024);
+    stm.close();
+  }
+
+  
+  public void testDeleteSkipTrash() throws IOException {
+    Configuration conf = new Configuration();
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 0, true, null);
+
+    try {
+      FileSystem fs = cluster.getFileSystem();
+      TestCase.assertNotNull(DFSUtil.convertToDFS(fs));
+      
+      createFile(fs, new Path("/test/testDelete"));
+      try {
+        fs.delete(new Path("/test"), false, true);
+        TestCase.fail();
+      } catch (IOException e) {
+        
+      }
+      TestCase.assertTrue(fs.delete(new Path("/test"), true, true));
+
+      createFile(fs, new Path("/test1/testDelete"));
+      TestCase
+          .assertTrue(fs.delete(new Path("/test1/testDelete"), false, true));
+      TestCase.assertTrue(fs.delete(new Path("/test1"), false, true));
+    }
+    finally {
+      if (cluster != null) {cluster.shutdown();}
+    }    
+  }
+  
+  public void testDeleteUsingTrash() throws IOException {
+    Configuration conf = new Configuration();
+    conf.setFloat("fs.trash.interval", 60);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 0, true, null);
+
+    try {
+      FileSystem fs = cluster.getFileSystem();
+      TestCase.assertNotNull(DFSUtil.convertToDFS(fs));
+      
+      createFile(fs, new Path("/test/testDelete"));
+      TestCase.assertTrue(fs.delete(new Path("/test/testDelete"), false));
+      TestCase.assertTrue(fs.undelete(new Path("/test/testDelete"),
+          System.getProperty("user.name")));
+
+      fs.mkdirs(new Path("/tmp"));
+      TestCase.assertTrue(fs.delete(new Path("/tmp"), false));
+      TestCase.assertFalse(fs.undelete(new Path("/tmp"),
+          System.getProperty("user.name")));
+
+      // temp directory automatically skips trash.
+      createFile(fs, new Path("/tmp/testDelete"));
+      TestCase.assertTrue(fs.delete(new Path("/tmp/testDelete"), false));
+      TestCase.assertFalse(fs.undelete(new Path("/tmp/testDelete"),
+          System.getProperty("user.name")));
+
+      fs.getConf().set("fs.trash.tmp.path.pattern", "{/tmp,/dir/,/dir1/*/dir3//}");
+      createFile(fs, new Path("/dir1/dir2/dir3/dir5/file1"));
+      TestCase.assertTrue(fs.delete(new Path("/dir1/dir2/dir3/dir5/file1"),
+          false));
+      TestCase.assertFalse(fs.undelete(new Path("/dir1/dir2/dir3/dir5/file1"),
+          System.getProperty("user.name")));
+      fs.mkdirs(new Path("/dir1/dir5/dir3/"));
+      TestCase.assertTrue(fs.delete(new Path("/dir1/dir5/dir3/"),
+          true));
+      TestCase.assertFalse(fs.undelete(new Path("/dir1/dir5/dir3/"),
+          System.getProperty("user.name")));
+      
+
+      createFile(fs, new Path("/tmp/testDelete"));
+      TestCase.assertTrue(fs.delete(new Path("/tmp/testDelete"), false));
+      TestCase.assertFalse(fs.undelete(new Path("/tmp/testDelete"),
+          System.getProperty("user.name")));
+
+      createFile(fs, new Path("/test/tmp/testDelete"));
+      TestCase.assertTrue(fs.delete(new Path("/test/tmp/testDelete"), false));
+      TestCase.assertTrue(fs.undelete(new Path("/test/tmp/testDelete"),
+          System.getProperty("user.name")));
+      
+      // Test another delete() overload method with skipTrash=false
+      fs.delete(new Path("/tmp"), true, true);
+      fs.delete(new Path("/test"), true, true);
+
+      createFile(fs, new Path("/test/testDelete"));
+      // non empty directory is not moved if recursive is not set
+      TestCase.assertFalse(fs.delete(new Path("/test"), false, false));
+
+      // Files are expected to move to trash.
+      TestCase.assertTrue(fs.delete(new Path("/test"), true, false));
+      TestCase.assertTrue(fs.undelete(new Path("/test"),
+          System.getProperty("user.name")));
+      createFile(fs, new Path("/test1/testDelete"));
+      TestCase.assertTrue(fs
+          .delete(new Path("/test1/testDelete"), false, false));
+      TestCase.assertTrue(fs.delete(new Path("/test1"), false, false));
+      TestCase.assertTrue(fs.undelete(new Path("/test1"),
+          System.getProperty("user.name")));
+      TestCase.assertTrue(fs.undelete(new Path("/test1/testDelete"),
+          System.getProperty("user.name")));
+
+      // temp directory automatically skips trash.
+      createFile(fs, new Path("/tmp/testDelete"));
+      TestCase.assertTrue(fs.delete(new Path("/tmp/testDelete"), false, false));
+      TestCase.assertFalse(fs.undelete(new Path("/tmp/testDelete"),
+          System.getProperty("user.name")));
+    }
+    finally {
+      if (cluster != null) {cluster.shutdown();}
+    }
+  }
+
+
 
   public void testFileSystemCloseAll() throws Exception {
     Configuration conf = new Configuration();
@@ -145,7 +262,7 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
       RAN.setSeed(seed);
   
       final Configuration conf = new Configuration();
-      conf.set("slave.host.name", "localhost");
+      conf.set(FSConstants.SLAVE_HOST_NAME, "localhost");
       conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
    
       cluster = new MiniDFSCluster(conf, 2, true, null);;
@@ -193,7 +310,8 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
         System.out.println("hftpfoocs=" + hftpfoocs);
 
 
-        final Path qualified = new Path(hftpuri + dir, "foo" + n);
+        final Path qualified = new Path("hftp://127.0.0.1"
+            + hftpuri.substring(hftpuri.lastIndexOf(':')) + dir, "foo" + n);
         final FileChecksum qfoocs = hftp.getFileChecksum(qualified);
         System.out.println("qfoocs=" + qfoocs);
 
@@ -224,5 +342,47 @@ public class TestDistributedFileSystem extends junit.framework.TestCase {
         cluster.shutdown();
       }
     }
-  }  
+  }
+  
+  public void testUnfavoredNodes() throws IOException {
+    Configuration conf = new Configuration();
+    conf.setBoolean("dfs.client.block.location.renewal.enabled", false);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+
+    try {
+      FileSystem fs = cluster.getFileSystem();
+      DistributedFileSystem dfs = DFSUtil.convertToDFS(fs);
+      TestCase.assertNotNull(dfs);
+
+      Path path = new Path("/testUnfavoredNodes");
+      FSDataOutputStream stm = fs
+          .create(path, true, 4096, (short) 2, (long) 2048);
+      stm.write(new byte[4096]);
+      stm.close();
+      
+      FSDataInputStream is = fs.open(path);
+      DFSDataInputStream dis = (DFSDataInputStream) is;
+      TestCase.assertNotNull(dis);
+
+      is.read(new byte[1024]);
+      DatanodeInfo currentDn1 = dis.getCurrentDatanode();
+      dis.setUnfavoredNodes(Arrays.asList(new DatanodeInfo[] { currentDn1 }));
+
+      is.read(new byte[512]);
+      DatanodeInfo currentDn2 = dis.getCurrentDatanode();
+      TestCase.assertTrue(!currentDn2.equals(currentDn1));
+      dis.setUnfavoredNodes(Arrays.asList(new DatanodeInfo[] { currentDn1, currentDn2 }));
+
+      is.read(new byte[512]);
+      TestCase.assertEquals(currentDn1, dis.getCurrentDatanode());
+      
+      is.read(new byte[1024]);
+      
+      TestCase.assertEquals(dis.getAllBlocks().get(1).getLocations()[0],
+          dis.getCurrentDatanode());
+    }
+    finally {
+      if (cluster != null) {cluster.shutdown();}
+    }    
+  }
 }

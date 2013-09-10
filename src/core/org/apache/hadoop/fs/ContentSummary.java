@@ -21,10 +21,15 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.io.Writable;
 
 /** Store the summary of a content (a directory or a file). */
-public class ContentSummary implements Writable{
+// DO NOT remove final without consulting {@link WrapperWritable#create(V object)}
+@ThriftStruct
+public final class ContentSummary implements Writable{
   private long length;
   private long fileCount;
   private long directoryCount;
@@ -42,9 +47,11 @@ public class ContentSummary implements Writable{
   }
 
   /** Constructor */
+  @ThriftConstructor
   public ContentSummary(
-      long length, long fileCount, long directoryCount, long quota,
-      long spaceConsumed, long spaceQuota) {
+      @ThriftField(1) long length, @ThriftField(2) long fileCount,
+      @ThriftField(3) long directoryCount, @ThriftField(4) long quota,
+      @ThriftField(5) long spaceConsumed, @ThriftField(6) long spaceQuota) {
     this.length = length;
     this.fileCount = fileCount;
     this.directoryCount = directoryCount;
@@ -54,21 +61,27 @@ public class ContentSummary implements Writable{
   }
 
   /** @return the length */
+  @ThriftField(1)
   public long getLength() {return length;}
 
   /** @return the directory count */
+  @ThriftField(3)
   public long getDirectoryCount() {return directoryCount;}
 
   /** @return the file count */
+  @ThriftField(2)
   public long getFileCount() {return fileCount;}
   
   /** Return the directory quota */
+  @ThriftField(4)
   public long getQuota() {return quota;}
   
-  /** Retuns (disk) space consumed */ 
+  /** Retuns (disk) space consumed */
+  @ThriftField(5)
   public long getSpaceConsumed() {return spaceConsumed;}
 
   /** Returns (disk) space quota */
+  @ThriftField(6)
   public long getSpaceQuota() {return spaceQuota;}
   
   /** {@inheritDoc} */

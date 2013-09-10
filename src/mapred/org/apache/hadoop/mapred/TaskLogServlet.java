@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
+import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
@@ -178,6 +179,25 @@ public class TaskLogServlet extends HttpServlet {
         response.sendError(HttpServletResponse.SC_BAD_REQUEST,
                            "Illegal value for filter: " + logFilter);
         return;
+      }
+    }
+    
+    String stackTracing = request.getParameter("stacktracing");
+    if (stackTracing != null) {
+      ServletContext application = this.getServletConfig().getServletContext();
+      TaskTracker tt = (TaskTracker)application.getAttribute("task.tracker");
+      
+      String pid = request.getParameter("pid");
+      if (pid == null) {
+        tt.doStackTrace(taskId);
+      } else {
+        tt.doStackTrace(pid);
+      }
+      
+      try {
+        Thread.sleep(3000);
+      } catch (InterruptedException e) {
+        
       }
     }
     

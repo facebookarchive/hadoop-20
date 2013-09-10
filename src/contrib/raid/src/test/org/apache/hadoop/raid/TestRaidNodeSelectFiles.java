@@ -85,7 +85,7 @@ public class TestRaidNodeSelectFiles extends TestCase {
 
     // use map-reduce cluster for Raiding
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
-    conf.set("raid.server.address", "localhost:0");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
     conf.set("mapred.raid.http.address", "localhost:0");
     // Make sure initial repl is smaller than NUM_DATANODES
     conf.setInt(RaidNode.RAID_PARITY_INITIAL_REPL_KEY, 1);

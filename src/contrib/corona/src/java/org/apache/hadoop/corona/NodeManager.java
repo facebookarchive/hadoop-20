@@ -637,6 +637,7 @@ public class NodeManager implements Configurable {
       faultManager.addNode(node.getName(), resourceInfos.keySet());
       nameToApps.put(node.getName(), resourceInfos);
       hostsToSessions.put(node, new HashSet<String>());
+      clusterManager.getMetrics().restartTaskTracker(1);
       setAliveDeadMetrics();
 
       // 2: update runnable indices

@@ -22,14 +22,18 @@ import junit.framework.TestCase;
 import java.io.*;
 import java.util.UUID;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FileUtil;
+
 
 /**
  * This class tests hadoopStreaming in MapReduce local mode.
  */
 public class TestStreaming extends TestCase
 {
-
+  static final Log LOG = LogFactory.getLog(TestStreaming.class);
+  
   // "map" command: grep -E (red|green|blue)
   // reduce command: uniq
   protected String inputOutputPrefix =
@@ -43,7 +47,8 @@ public class TestStreaming extends TestCase
   // command-line combiner does not have any effect any more.
   protected String reduce = StreamUtil.makeJavaCommand(UniqApp.class, new String[]{"R"});
   protected String outputExpect = "Rare\t\nRblue\t\nRbunnies\t\nRpink\t\nRred\t\nRroses\t\nRviolets\t\n";
-
+  protected boolean testBytesWritable = true;
+  
   protected StreamJob job;
 
   public TestStreaming() throws IOException
@@ -53,6 +58,26 @@ public class TestStreaming extends TestCase
     utilTest.redirectIfAntJunit();
   }
 
+  protected void setExpectedOutput(String out) {
+    outputExpect = out;
+  }
+
+  protected void setInputFile(File input) {
+    INPUT_FILE = input;
+  }
+  
+  protected void setOutputDir(File output) {
+    OUTPUT_DIR = output;
+  }
+  
+  protected void setInputString(String in) {
+    input= in;
+  }
+  
+  protected void setTestBytesWritable(boolean test) {
+    testBytesWritable = test;
+  }
+ 
   protected void createInput() throws IOException
   {
     DataOutputStream out = new DataOutputStream(
@@ -60,7 +85,13 @@ public class TestStreaming extends TestCase
     out.write(input.getBytes("UTF-8"));
     out.close();
   }
-
+  
+  /**
+   * Different test cases should just provide a customized
+   * args and optionaly INPUT_FILE, OUTPUT_DIR, input string
+   * and expected output.
+   * @return
+   */
   protected String[] genArgs() {
     return new String[] {
       "-input", INPUT_FILE.getAbsolutePath(),
@@ -76,6 +107,32 @@ public class TestStreaming extends TestCase
   
   public void testCommandLine() throws IOException
   {
+    // 1st test case:
+    //  Both Key and Value are Text
+    String[] textArgs = genArgs();
+    testCommandLineInternal(textArgs);
+    
+    // 2nd Test case:
+    //   Map output key/value be BytesWritable and
+    //   turn on blocked map output sort
+    if (testBytesWritable) {
+      String[] bytesArgs = addArgs(textArgs, 
+        new String[] {
+          "-jobconf", "stream.key_value.class=BytesWritable",
+          "-jobconf", "mapred.map.output.blockcollector=true"});
+      testCommandLineInternal(bytesArgs);
+    }
+  }
+
+  String[] addArgs(String[] args, String[] more_args) {
+    String[] newargs = new String[args.length + more_args.length];
+    System.arraycopy(args, 0, newargs, 0, args.length);
+    System.arraycopy(more_args, 0, newargs, args.length, more_args.length);
+    return newargs;
+  }
+ 
+  protected void testCommandLineInternal(String[] args) throws IOException
+  {
     try {
       try {
         FileUtil.fullyDelete(OUTPUT_DIR.getAbsoluteFile());
@@ -87,7 +144,7 @@ public class TestStreaming extends TestCase
 
       // During tests, the default Configuration will use a local mapred
       // So don't specify -config or -cluster
-      job = new StreamJob(genArgs(), mayExit);      
+      job = new StreamJob(args, mayExit);      
       job.go();
       File outFile = new File(OUTPUT_DIR, "part-00000").getAbsoluteFile();
       String output = StreamUtil.slurp(outFile);
@@ -105,5 +162,4 @@ public class TestStreaming extends TestCase
   {
     new TestStreaming().testCommandLine();
   }
-
 }

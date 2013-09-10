@@ -23,6 +23,7 @@ import org.apache.hadoop.conf.*;
 import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
+import org.apache.hadoop.util.FlushableLogger;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -35,6 +36,9 @@ public class ValidateNamespaceDirPolicy {
   
   private static final Log LOG = LogFactory
       .getLog(ValidateNamespaceDirPolicy.class.getName());
+  
+  // immediate flush logger
+  private static final Log FLOG = FlushableLogger.getLogger(LOG);
   
   /**
    * Used for storing properties of each of the storage locations.
@@ -95,11 +99,11 @@ public class ValidateNamespaceDirPolicy {
     URI sharedLocation = shared == null ? null : Util.stringAsURI(shared);
     
     for (URI name : configuredLocations) {
-      LOG.info("Conf validation - checking location: " + name);
+      FLOG.info("Conf validation - checking location: " + name);
       NNStorageLocation desc = checkLocation(name, conf, sharedLocation);
       locations.add(desc);
       result.put(desc.location, desc);
-      LOG.info("Conf validation - checked location: " + desc);
+      FLOG.info("Conf validation - checked location: " + desc);
     }
     
     switch (policy) {
@@ -160,7 +164,7 @@ public class ValidateNamespaceDirPolicy {
       // check if the location is shared     
       isShared = location.equals(sharedLocation);
     }
-    
+   
     // handle non-file locations
     if ((location.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) != 0)) {
       // non-file locations are all remote - we might want to add more checks in the future
@@ -175,12 +179,12 @@ public class ValidateNamespaceDirPolicy {
       try {
         return getInfoUnix(location, isShared);
       } catch (Exception e) {
-        LOG.info("Failed to fetch information with unix based df", e);
+        FLOG.info("Failed to fetch information with unix based df", e);
       }
       try {
         return getInfoMacOS(location, isShared);
       } catch (Exception e) {
-        LOG.info("Failed to fetch information with macos based df", e);
+        FLOG.info("Failed to fetch information with macos based df", e);
       }
       throw new IOException("Failed to run df");
     }
@@ -233,7 +237,7 @@ public class ValidateNamespaceDirPolicy {
     // Skip the first line, which is the header info
     br.readLine();
     String output = br.readLine();
-    LOG.info("Running: " + command + ", output: " + output);
+    FLOG.info("Running: " + command + ", output: " + output);
     if (output == null || output.isEmpty()) {
       return new String[0];
     }

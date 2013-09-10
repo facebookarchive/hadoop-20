@@ -41,7 +41,12 @@
 #   HADOOP_ROOT_LOGGER The root appender. Default is INFO,console
 #
 
-bin=`dirname "$0"`
+thisfile="${BASH_SOURCE[0]}"
+if [ -L "${thisfile}" ]; then
+  thisfile=$(readlink "${thisfile}")
+fi
+
+bin=`dirname "${thisfile}"`
 bin=`cd "$bin"; pwd`
 
 . "$bin"/hadoop-config.sh
@@ -157,14 +162,64 @@ for f in $HADOOP_HOME/hadoop-*-core.jar; do
 done
 
 # add libs to CLASSPATH
-for f in $HADOOP_HOME/lib/*.jar; do
-  CLASSPATH=${CLASSPATH}:$f;
-done
+# the thrift library has conflicts in hdfs-nfs-proxy
+# only put neccessary jars for hdfs-nfs-proxy
+if [ "$COMMAND" = "hdfsnfsproxy" ] ; then
+  for f in $HADOOP_HOME/lib/slf4j*.jar; do
+    CLASSPATH=${CLASSPATH}:$f;
+  done
+  for f in $HADOOP_HOME/lib/zookeeper*.jar; do
+    CLASSPATH=${CLASSPATH}:$f;
+  done
+  for f in $HADOOP_HOME/lib/guava*.jar; do
+    CLASSPATH=${CLASSPATH}:$f;
+  done
+  for f in $HADOOP_HOME/lib/json*.jar; do
+    CLASSPATH=${CLASSPATH}:$f;
+  done
+  for f in $HADOOP_HOME/lib/commons*.jar; do
+    CLASSPATH=${CLASSPATH}:$f;
+  done
+  for f in $HADOOP_HOME/lib/log4j*.jar; do
+    CLASSPATH=${CLASSPATH}:$f;
+  done
+  for f in $HADOOP_HOME/lib/hadoop*.jar; do
+    CLASSPATH=${CLASSPATH}:$f;
+  done
+else
+  for f in $HADOOP_HOME/lib/*.jar; do
+    CLASSPATH=${CLASSPATH}:$f;
+  done
+fi
 
 if [ -d "$HADOOP_HOME/build/ivy/lib/Hadoop/common" ]; then
-for f in $HADOOP_HOME/build/ivy/lib/Hadoop/common/*.jar; do
-  CLASSPATH=${CLASSPATH}:$f;
-done
+  if [ "$COMMAND" = "hdfsnfsproxy" ] ; then
+    for f in $HADOOP_HOME/build/ivy/lib/Hadoop/common/slf4j*.jar; do
+      CLASSPATH=${CLASSPATH}:$f;
+    done
+    for f in $HADOOP_HOME/build/ivy/lib/Hadoop/common/zookeeper*.jar; do
+      CLASSPATH=${CLASSPATH}:$f;
+    done
+    for f in $HADOOP_HOME/build/ivy/lib/Hadoop/common/guava*.jar; do
+      CLASSPATH=${CLASSPATH}:$f;
+    done
+    for f in $HADOOP_HOME/build/ivy/lib/Hadoop/common/json*.jar; do
+      CLASSPATH=${CLASSPATH}:$f;
+    done
+    for f in $HADOOP_HOME/build/ivy/lib/Hadoop/common/commons*.jar; do
+      CLASSPATH=${CLASSPATH}:$f;
+    done
+    for f in $HADOOP_HOME/build/ivy/lib/Hadoop/common/log4j*.jar; do
+      CLASSPATH=${CLASSPATH}:$f;
+    done
+    for f in $HADOOP_HOME/build/ivy/lib/Hadoop/common/hadoop*.jar; do
+      CLASSPATH=${CLASSPATH}:$f;
+    done
+  else
+   for f in $HADOOP_HOME/build/ivy/lib/Hadoop/common/*.jar; do
+      CLASSPATH=${CLASSPATH}:$f;
+   done
+  fi
 fi
 
 for f in $HADOOP_HOME/lib/jsp-2.1/*.jar; do
@@ -187,8 +242,10 @@ for f in $HADOOP_HOME/contrib/corona/*.jar; do
   CORONA_PATH=${CORONA_PATH}:$f;
 done
 
-if [ "$CORONA_PATH" != "" ]; then
-  CLASSPATH=${CLASSPATH}:${CORONA_PATH}
+if [ "$COMMAND" != "hdfsnfsproxy" ] ; then
+  if [ "$CORONA_PATH" != "" ]; then
+    CLASSPATH=${CLASSPATH}:${CORONA_PATH}
+  fi
 fi
 
 for f in $HADOOP_HOME/contrib/corona/lib/*.jar; do
@@ -202,6 +259,37 @@ fi
 
 for f in $HADOOP_HOME/contrib/namespace-notifier/*.jar; do
   NOTIFIER_PATH=${NOTIFIER_PATH}:$f;
+done
+
+# NFS_PROXY_PATH for the hdfs nfs proxy daemon
+if [ -d "$HADOOP_HOME/build/contrib/hdfs-nfs-proxy/classes" ] ; then
+  NFS_PROXY_PATH=${NFS_PROXY_PATH}:$HADOOP_HOME/build/contrib/hdfs-nfs-proxy/classes
+fi
+
+# hdfs-nfs-proxy needs raid and configerator in classpath
+# to get DistributedRaidFileSystem from configuration
+if [ -d "$HADOOP_HOME/build/contrib/raid/classes" ] ; then
+    NFS_PROXY_PATH=${NFS_PROXY_PATH}:$HADOOP_HOME/build/contrib/raid/classes
+fi
+
+if [ -d "$HADOOP_HOME/build/contrib/configerator/classes" ] ; then
+    NFS_PROXY_PATH=${NFS_PROXY_PATH}:$HADOOP_HOME/build/contrib/configerator/classes
+fi
+
+for f in $HADOOP_HOME/build/contrib/hdfs-nfs-proxy/lib/*.jar; do
+  NFS_PROXY_PATH=${NFS_PROXY_PATH}:$f;
+done
+
+for f in $HADOOP_HOME/build/contrib/hdfs-nfs-proxy/hadoop-*-hdfs-nfs-proxy.jar; do
+  NFS_PROXY_PATH=${NFS_PROXY_PATH}:$f;
+done
+
+for f in $HADOOP_HOME/contrib/hdfs-nfs-proxy/*.jar; do
+  NFS_PROXY_PATH=${NFS_PROXY_PATH}:$f;
+done
+
+for f in $HADOOP_HOME/contrib/hdfs-nfs-proxy/lib/*.jar; do
+  NFS_PROXY_PATH=${NFS_PROXY_PATH}:$f;
 done
 
 # default log directory & file
@@ -246,6 +334,10 @@ elif [ "$COMMAND" = "avatarnode" ] ; then
   CLASS='org.apache.hadoop.hdfs.server.namenode.AvatarNode'
   JMX_OPTS=$HADOOP_JMX_NAMENODE_OPTS
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_NAMENODE_OPTS"
+elif [ "$COMMAND" = "journalnode" ] ; then
+  CLASS='org.apache.hadoop.hdfs.qjournal.server.JournalNode'
+  JMX_OPTS=$HADOOP_JMX_JOURNAL_OPTS
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_JOURNAL_OPTS"
 elif [ "$COMMAND" = "secondarynamenode" ] ; then
   CLASS='org.apache.hadoop.hdfs.server.namenode.SecondaryNameNode'
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $HADOOP_SECONDARYNAMENODE_OPTS"
@@ -259,7 +351,19 @@ elif [ "$COMMAND" = "notifier" ] ; then
   if [ "$NOTIFIER_PATH" != "" ]; then
     CLASSPATH=${CLASSPATH}:${NOTIFIER_PATH}
   fi
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS $NOTIFIER_OPTS"
   JMX_OPTS="$JMX_OPTS $NOTIFIER_JMX_OPTS"
+elif [ "$COMMAND" = "hdfsnfsproxy" ] ; then
+  CLASS='org.apache.hadoop.hdfs.nfs.nfs4.NFS4Server'
+  # hdfs-nfs-proxy is using log4j Rolling File Appender for
+  # log rotation, max log size, and how many backup logs to keep
+  HADOOP_LOGFILE='hdfs-nfs-proxy.log'
+  HADOOP_ROOT_LOGGER=INFO,RFA
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_GC_LOG_OPTS"
+  JMX_OPTS="$JMX_OPTS"
+  if [ "$NFS_PROXY_PATH" != "" ]; then
+    CLASSPATH=${CLASSPATH}:${NFS_PROXY_PATH}
+  fi
 elif [ "$COMMAND" = "fsshellservice" ] ; then
   CLASS='org.apache.hadoop.hdfs.fsshellservice.FsShellServiceImpl'
   if [ -d "$HADOOP_HOME/build/contrib/corona/lib" ]; then
@@ -311,6 +415,9 @@ elif [ "$COMMAND" = "raidfsck" ] ; then
   CMDLINE_OPTS="-fsck $CMDLINE_OPTS"
 elif [ "$COMMAND" = "raidshell" ] ; then
   CLASS=org.apache.hadoop.raid.RaidShell
+  HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
+elif [ "$COMMAND" = "notifiershell" ] ; then
+  CLASS=org.apache.hadoop.hdfs.notifier.tools.NotifierShell
   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_CLIENT_OPTS"
 elif [ "$COMMAND" = "balancer" ] ; then
   CLASS=org.apache.hadoop.hdfs.server.balancer.Balancer
@@ -458,6 +565,11 @@ if [ -d "${HADOOP_HOME}/build/native" -o -d "${HADOOP_HOME}/lib/native" ]; then
       JAVA_LIBRARY_PATH=${HADOOP_HOME}/lib/native/${JAVA_PLATFORM}
     fi
   fi
+fi
+
+# use fbcode gcc in nfs proxy java.library.path
+if [ "$COMMAND" = "hdfsnfsproxy" ] ; then
+  JAVA_LIBRARY_PATH=${JAVA_LIBRARY_PATH}:/usr/local/fbcode/gcc-4.6.2-glibc-2.5.1/lib;
 fi
 
 # cygwin path translation

@@ -27,7 +27,7 @@ import org.junit.BeforeClass;
 import org.junit.Test;
 
 public class TestAvatarCheckpointingQuiesce {
-  
+	
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     MiniAvatarCluster.createAndStartZooKeeper();
@@ -49,21 +49,21 @@ public class TestAvatarCheckpointingQuiesce {
   @Test
   public void testQuiescingWhenDoingCheckpoint1() throws Exception {
     TestAvatarCheckpointing.testQuiesceInterruption(
-        InjectionEvent.STANDBY_INSTANTIATE_INGEST, true, false);
+        InjectionEvent.STANDBY_INSTANTIATE_INGEST, true, false, false);
   }
 
   @Test
   public void testQuiescingWhenDoingCheckpoint2() throws Exception {
     TestAvatarCheckpointing.testQuiesceInterruption(
-        InjectionEvent.STANDBY_QUIESCE_INGEST, true, false);
+        InjectionEvent.STANDBY_QUIESCE_INGEST, true, false, false);
   }
-
+  
   @Test
   public void testQuiescingWhenDoingCheckpoint3() throws Exception {
     // quiesce comes before rolling the log for checkpoint,
     // the log will be closed on standby but not opened
     TestAvatarCheckpointing.testQuiesceInterruption(
-        InjectionEvent.STANDBY_ENTER_CHECKPOINT, true, true);
+        InjectionEvent.STANDBY_ENTER_CHECKPOINT, true, true, false);
   }
 
   @Test
@@ -71,36 +71,36 @@ public class TestAvatarCheckpointingQuiesce {
     // quiesce comes before rolling the log for checkpoint,
     // the log will be closed on standby but not opened
     TestAvatarCheckpointing.testQuiesceInterruption(
-        InjectionEvent.STANDBY_BEFORE_ROLL_EDIT, true, true);
+        InjectionEvent.STANDBY_BEFORE_ROLL_EDIT, true, true, false);
   }
 
   @Test
   public void testQuiescingWhenDoingCheckpoint5() throws Exception {
     TestAvatarCheckpointing.testQuiesceInterruption(
-        InjectionEvent.STANDBY_BEFORE_SAVE_NAMESPACE, true, false);
+        InjectionEvent.STANDBY_BEFORE_SAVE_NAMESPACE, true, false, false);
   }
 
   @Test
   public void testQuiescingWhenDoingCheckpoint6() throws Exception {
     // this one does not throw cancelled exception, quiesce after SN
     TestAvatarCheckpointing.testQuiesceInterruption(
-        InjectionEvent.STANDBY_BEFORE_PUT_IMAGE, false, false);
+        InjectionEvent.STANDBY_BEFORE_PUT_IMAGE, false, false, false);
   }
-
+  
   @Test
   public void testQuiescingBeforeCheckpoint() throws Exception {
     // quiesce comes before rolling the log for checkpoint,
     // the log will be closed on standby but not opened
     TestAvatarCheckpointing.testQuiesceInterruption(
-        InjectionEvent.STANDBY_BEGIN_RUN, true, true);
+        InjectionEvent.STANDBY_BEGIN_RUN, true, true, false);
   }
-
+  
   @Test
   public void testQuiescingImageValidationCreation() throws Exception {
     // test if creation of new validation fails after standby quiesce
     TestAvatarCheckpointingHandler h = TestAvatarCheckpointing
         .testQuiesceInterruption(InjectionEvent.STANDBY_VALIDATE_CREATE, false,
-            false);
+            false, false);
     assertTrue(h.receivedEvents
         .contains(InjectionEvent.STANDBY_VALIDATE_CREATE_FAIL));
   }
@@ -110,7 +110,7 @@ public class TestAvatarCheckpointingQuiesce {
     // test if the image upload is interrupted when quiescing standby
     TestAvatarCheckpointingHandler h = TestAvatarCheckpointing
         .testQuiesceInterruption(InjectionEvent.STANDBY_UPLOAD_CREATE,
-            InjectionEvent.STANDBY_QUIESCE_INTERRUPT, false, false, false);
+            InjectionEvent.STANDBY_QUIESCE_INTERRUPT, false, false, false, false);
     assertTrue(h.receivedEvents.contains(InjectionEvent.STANDBY_UPLOAD_FAIL));
   }
 
@@ -119,7 +119,7 @@ public class TestAvatarCheckpointingQuiesce {
     // test if an ongoing image validation is interrupted
     TestAvatarCheckpointingHandler h = TestAvatarCheckpointing
         .testQuiesceInterruption(InjectionEvent.IMAGE_LOADER_CURRENT_START,
-            InjectionEvent.STANDBY_QUIESCE_INTERRUPT, false, false, false);
+            InjectionEvent.STANDBY_QUIESCE_INTERRUPT, false, false, false, false);
     assertTrue(h.receivedEvents
         .contains(InjectionEvent.IMAGE_LOADER_CURRENT_INTERRUPT));
   }

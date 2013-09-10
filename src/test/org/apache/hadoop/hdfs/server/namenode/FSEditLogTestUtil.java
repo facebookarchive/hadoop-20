@@ -18,12 +18,20 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 
+import com.google.common.base.Joiner;
+import com.google.common.collect.ImmutableMap;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.io.IOUtils;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
+
+import static org.junit.Assert.assertEquals;
+
 
 /**
  * Utility class for testing {@link EditLogOutputStream} and
@@ -123,7 +131,11 @@ public class FSEditLogTestUtil {
     for (EditLogOutputStream stream : streams) {
       stream.create();
     }
+    populateStreams(firstTxId, lastTxId, streams);
+  }
 
+  public static void populateStreams(int firstTxId, int lastTxId,
+      EditLogOutputStream... streams) throws IOException {
     // Semi-randomly generate contiguous transactions starting from firstTxId
     // to lastTxId (inclusive)
     List<FSEditLogOp> ops = getContiguousLogSegment(firstTxId, lastTxId);
@@ -136,4 +148,109 @@ public class FSEditLogTestUtil {
     closeStreams(streams);
   }
 
+  /**
+   * Assert that specified {@link EditLogInputStream} instances all contain
+   * the same operations in the same order.
+   * @param numEdits Number of edit log operations
+   * @param streamByName Map of stream name to
+   *                     {@link EditLogInputStream} instance
+   */
+  public static void assertStreamsAreEquivalent(int numEdits,
+      Map<String, EditLogInputStream> streamByName) throws IOException {
+    LOG.info(" --- Verifying " + numEdits + " edits from " +
+        Joiner.on(',').join(streamByName.values()) + " ---");
+    for (int i = 1; i <= numEdits; i++) {
+      String prevName = null;
+      FSEditLogOp prevLogOp = null;
+      for (Map.Entry<String, EditLogInputStream> e : streamByName.entrySet()) {
+        String name = e.getKey();
+        EditLogInputStream stream = e.getValue();
+        FSEditLogOp op = stream.readOp();
+        if (LOG.isDebugEnabled()) {
+          LOG.debug(
+              Joiner.on(',').withKeyValueSeparator(" = ").join(
+                  ImmutableMap.of("txId", i, "streamName", name, "op", op)));
+        }
+        if (prevLogOp != null) {
+          assertEquals("Operation read from " + prevName + " and " +
+              name + " must be equal!", op, prevLogOp);
+        }
+        prevLogOp = op;
+        prevName = name;
+      }
+    }
+  }
+
+  /**
+   * Find out how many transactions we can read from a
+   * FileJournalManager, starting at a given transaction ID.
+   *
+   * @param jm              The journal manager
+   * @param fromTxId        Transaction ID to start at
+   * @param inProgressOk    Should we consider edit logs that are not finalized?
+   * @return                The number of transactions
+   * @throws IOException
+   */
+  public static long getNumberOfTransactions(JournalManager jm,
+      long fromTxId,
+      boolean inProgressOk,
+      boolean abortOnGap) throws IOException {
+    long numTransactions = 0, txId = fromTxId;
+    final PriorityQueue<EditLogInputStream> allStreams =
+        new PriorityQueue<EditLogInputStream>(64,
+            JournalSet.EDIT_LOG_INPUT_STREAM_COMPARATOR);
+    jm.selectInputStreams(allStreams, fromTxId, inProgressOk, true);
+    EditLogInputStream elis = null;
+    try {
+      while ((elis = allStreams.poll()) != null) {
+        elis.skipUntil(txId);
+        while (true) {
+          FSEditLogOp op = elis.readOp();
+          if (op == null) {
+            break;
+          }
+          if (abortOnGap && (op.getTransactionId() != txId)) {
+            TestFileJournalManager.LOG.info("getNumberOfTransactions: detected gap at txId " +
+                fromTxId);
+            return numTransactions;
+          }
+          txId = op.getTransactionId() + 1;
+          numTransactions++;
+        }
+      }
+    } finally {
+      IOUtils.cleanup(FSEditLogTestUtil.LOG,
+          allStreams.toArray(new EditLogInputStream[0]));
+      IOUtils.cleanup(FSEditLogTestUtil.LOG, elis);
+    }
+    return numTransactions;
+  }
+
+  public static EditLogInputStream getJournalInputStream(JournalManager jm,
+      long txId, boolean inProgressOk) throws IOException {
+    final PriorityQueue<EditLogInputStream> allStreams =
+        new PriorityQueue<EditLogInputStream>(64,
+            JournalSet.EDIT_LOG_INPUT_STREAM_COMPARATOR);
+    jm.selectInputStreams(allStreams, txId, inProgressOk, true);
+    EditLogInputStream elis = null, ret;
+    try {
+      while ((elis = allStreams.poll()) != null) {
+        if (elis.getFirstTxId() > txId) {
+          break;
+        }
+        if (elis.getLastTxId() < txId) {
+          elis.close();
+          continue;
+        }
+        elis.skipUntil(txId);
+        ret = elis;
+        elis = null;
+        return ret;
+      }
+    } finally {
+      IOUtils.cleanup(FSEditLogTestUtil.LOG,  allStreams.toArray(new EditLogInputStream[0]));
+      IOUtils.cleanup(FSEditLogTestUtil.LOG,  elis);
+    }
+    return null;
+  }
 }

@@ -65,8 +65,6 @@ public class TestParallelReader extends TestCase {
 
     // Read using 1 thread.
     ParallelStreamReader parallelReader;
-    long start;
-    long end;
     parallelReader = new ParallelStreamReader(
       RaidUtils.NULL_PROGRESSABLE,
       streams,
@@ -102,7 +100,7 @@ public class TestParallelReader extends TestCase {
         parallelReader.getReadResult();
       LOG.info("Reads using 10 threads finished in " +
         parallelReader.readTime  + " msec");
-      assertTrue("Parallel read", parallelReader.readTime   <= sleep * 1.1);
+      assertTrue("Parallel read", parallelReader.readTime   <= sleep * 2);
     } finally {
       parallelReader.shutdown();
     }

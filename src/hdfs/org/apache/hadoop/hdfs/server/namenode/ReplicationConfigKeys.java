@@ -26,6 +26,10 @@ class ReplicationConfigKeys {
   static final int INVALIDATE_WORK_PCT_PER_ITERATION = 32;
   static final float REPLICATION_WORK_MULTIPLIER_PER_ITERATION = 2;
   static final int OVERREPLICATION_WORK_MULTIPLIER_PER_ITERATION = 10;
+  static final int RAID_ENCODING_TASK_MULTIPLIER_PER_ITERATION = 1;
+  static final int RAID_ENCODING_TASK_LIMIT_DEFAULT = 1;
+  static final int RAID_DECODING_TASK_MULTIPLIER_PER_ITERATION = 1;
+  static final int RAID_DECODING_TASK_LIMIT_DEFAULT = 2;
 
   // underReplicationRecheckInterval is how often 
   // the namenode checks for new under replication work
@@ -43,6 +47,17 @@ class ReplicationConfigKeys {
   // At each heartbeat, ask datanode only up to this many blocks to delete.
   public static int blockInvalidateLimit = FSConstants.BLOCK_INVALIDATE_CHUNK;
   
+  // How many raid works (heartbeats.size() * multiplier)
+  // are scheduled in one round
+  public static volatile int raidEncodingTaskMultiplier = 
+      RAID_ENCODING_TASK_MULTIPLIER_PER_ITERATION;
+  public static volatile int raidDecodingTaskMultiplier = 
+      RAID_DECODING_TASK_MULTIPLIER_PER_ITERATION;
+  
+  // At each heartbeat, ask datanode only up to this many raid tasks to do
+  public static volatile int raidEncodingTaskLimit = RAID_ENCODING_TASK_LIMIT_DEFAULT;
+  public static volatile int raidDecodingTaskLimit = RAID_DECODING_TASK_LIMIT_DEFAULT;
+  
   static void updateConfigKeys(Configuration conf) {
     replicationRecheckInterval =
         conf.getInt("dfs.replication.interval", 3) * 1000L;
@@ -57,6 +72,18 @@ class ReplicationConfigKeys {
     
     blockInvalidateLimit = conf.getInt("dfs.block.invalidate.limit",
         FSConstants.BLOCK_INVALIDATE_CHUNK);
+    
+    raidEncodingTaskMultiplier = 
+        conf.getInt("dfs.raid.encoding.task.iteration.multiplier", 
+            RAID_ENCODING_TASK_MULTIPLIER_PER_ITERATION);
+    raidDecodingTaskMultiplier = 
+        conf.getInt("dfs.raid.decoding.task.iteration.multiplier", 
+            RAID_DECODING_TASK_MULTIPLIER_PER_ITERATION);
+        
+    raidEncodingTaskLimit = conf.getInt("dfs.raid.encoding.task.limit", 
+        RAID_ENCODING_TASK_LIMIT_DEFAULT);
+    raidDecodingTaskLimit = conf.getInt("dfs.raid.decoding.task.limit", 
+        RAID_DECODING_TASK_LIMIT_DEFAULT);
   }
   
 }

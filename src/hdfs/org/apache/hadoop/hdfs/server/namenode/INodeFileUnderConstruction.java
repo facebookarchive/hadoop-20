@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
+import java.util.List;
 
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -30,21 +31,25 @@ class INodeFileUnderConstruction extends INodeFile {
   private final DatanodeDescriptor clientNode; // if client is a cluster node too.
 
   private int primaryNodeIndex = -1; //the node working on lease recovery
+  // targets and targetGSs should either both be null or have the same length
   private DatanodeDescriptor[] targets = null;   //locations for last block
+  private long[] targetGSs = null; // generation stamp for each replica
   private long lastRecoveryTime = 0;
+  private boolean lastBlockReplicated = false; // if scheduled to replicate last block
   
-  INodeFileUnderConstruction(PermissionStatus permissions,
+  INodeFileUnderConstruction(long id, PermissionStatus permissions,
                              short replication,
                              long preferredBlockSize,
                              long modTime,
                              String clientName,
                              String clientMachine,
                              DatanodeDescriptor clientNode) {
-	this(permissions, replication, preferredBlockSize, modTime, modTime, 
-		 clientName, clientMachine, clientNode);
+  this(id, permissions, replication, preferredBlockSize, modTime, modTime, 
+     clientName, clientMachine, clientNode);
   }
   
-  INodeFileUnderConstruction(PermissionStatus permissions,
+  INodeFileUnderConstruction(long id, 
+                             PermissionStatus permissions,
                              short replication,
                              long preferredBlockSize,
                              long modTime,
@@ -52,14 +57,15 @@ class INodeFileUnderConstruction extends INodeFile {
                              String clientName,
                              String clientMachine,
                              DatanodeDescriptor clientNode) {
-    super(permissions.applyUMask(UMASK), 0, replication, modTime, accessTime,
+    super(id, permissions.applyUMask(UMASK), 0, replication, modTime, accessTime,
           preferredBlockSize);
     this.clientName = clientName;
     this.clientMachine = clientMachine;
     this.clientNode = clientNode;
   }
 
-  public INodeFileUnderConstruction(byte[] name,
+  public INodeFileUnderConstruction(long id,
+                             byte[] name,
                              short blockReplication,
                              long modificationTime,
                              long preferredBlockSize,
@@ -68,11 +74,12 @@ class INodeFileUnderConstruction extends INodeFile {
                              String clientName,
                              String clientMachine,
                              DatanodeDescriptor clientNode) {
-    this(name, blockReplication, modificationTime, modificationTime,preferredBlockSize, 
+    this(id, name, blockReplication, modificationTime, modificationTime,preferredBlockSize, 
          blocks, perm, clientName, clientMachine,clientNode);
   }
   
-  public INodeFileUnderConstruction(byte[] name,
+  public INodeFileUnderConstruction(long id, 
+                                    byte[] name,
                                     short blockReplication,
                                     long modificationTime,
                                     long accessTime,
@@ -82,8 +89,8 @@ class INodeFileUnderConstruction extends INodeFile {
                                     String clientName,
                                     String clientMachine,
                                     DatanodeDescriptor clientNode) {
-    super(perm, blocks, blockReplication, modificationTime, accessTime,
-          preferredBlockSize);
+    super(id, perm, blocks, blockReplication, modificationTime, accessTime,
+          preferredBlockSize, null);
     setLocalName(name);
     this.clientName = clientName;
     this.clientMachine = clientMachine;
@@ -122,6 +129,36 @@ class INodeFileUnderConstruction extends INodeFile {
     return targets;
   }
   
+  /** Return the targets with generation stamp matching that of the last block */
+  DatanodeDescriptor[] getValidTargets() {
+    if (targetGSs == null) {
+      return null;
+    }
+    int count = 0;
+    long lastBlockGS = this.getLastBlock().getGenerationStamp();
+    for (long targetGS : targetGSs) {
+      if (lastBlockGS == targetGS) {
+        count++;
+      }
+    }
+    if (count == 0) {
+      return null;
+    } if (count == targets.length) {
+      return targets;
+    } else {
+      DatanodeDescriptor[] validTargets = new DatanodeDescriptor[count];
+      for (int i=0, numOfValidTargets=0; i<targets.length; i++) {
+        if (lastBlockGS == targetGSs[i]) {
+          validTargets[numOfValidTargets++] = targets[i];
+          if (numOfValidTargets == count) {
+            return validTargets;
+          }
+        }
+      }
+      return validTargets;
+    }
+  }
+  
   void clearTargets() {
     if (targets != null) {
       for (DatanodeDescriptor node : targets) {
@@ -129,22 +166,33 @@ class INodeFileUnderConstruction extends INodeFile {
       }
     }
     this.targets = null;
+    this.targetGSs = null;
   }
 
-  void setTargets(DatanodeDescriptor[] targets) {
+  /**
+   * Set targets for list of replicas all sharing the same generationStamp
+   * 
+   * @param locs location of replicas
+   * @param generationStamp shared generation stamp
+   */
+  void setTargets(DatanodeDescriptor[] locs, long generationStamp) {
+    setTargets(locs);
+    if (locs == null) {
+      targetGSs = null;
+      return;
+    }
+    long[] targetGSs = new long[locs.length];
+    for (int i=0; i<targetGSs.length; i++) {
+      targetGSs[i] = generationStamp;
+    }
+    this.targetGSs = targetGSs;
+  }
+  
+  private void setTargets(DatanodeDescriptor[] targets) {
     // remove assoc of this with previous Datanodes
-    if (this.targets != null) {
-      for (DatanodeDescriptor node : this.targets) {
-        node.removeINode(this);
-      }
-    }
-
+    removeINodeFromDatanodeDescriptors(this.targets);
     // add new assoc
-    if (targets != null) {
-      for (DatanodeDescriptor node : targets) {
-        node.addINode(this);
-      }
-    }
+    addINodeToDatanodeDescriptors(targets);
 
     this.targets = targets;
     this.primaryNodeIndex = -1;
@@ -153,16 +201,29 @@ class INodeFileUnderConstruction extends INodeFile {
   /**
    * add this target if it does not already exists. Returns true if the target
    * was added.
+   * 
+   * @param node
+   *          data node having the block
+   * @param generationStamp
+   *          the generation of the block on the data node
+   * @return true if the data node is added to the target list, or previous
+   *         generation stamp for the datanode is updated. Otherwise, false,
+   *         which means the data node is already in the target list with
+   *         the same generation stamp.
    */
-  boolean addTarget(DatanodeDescriptor node) {
+  boolean addTarget(DatanodeDescriptor node, long generationStamp) {
     
     if (this.targets == null) {
       this.targets = new DatanodeDescriptor[0];
     }
 
-    for (int j = 0; j < this.targets.length; j++) {
-      if (this.targets[j].equals(node)) {
-        return false; // target already exists
+    for (int i=0; i<targets.length; i++) {
+      if (targets[i].equals(node)) {
+        if (generationStamp != targetGSs[i]) {
+          targetGSs[i] = generationStamp;
+          return true;
+        }
+        return false;
       }
     }
     
@@ -172,11 +233,16 @@ class INodeFileUnderConstruction extends INodeFile {
 
     // allocate new data structure to store additional target
     DatanodeDescriptor[] newt = new DatanodeDescriptor[targets.length + 1];
+    long[] newgs = new long[targets.length + 1];
     for (int i = 0; i < targets.length; i++) {
       newt[i] = this.targets[i];
+      newgs[i] = this.targetGSs[i];
     }
     newt[targets.length] = node;
+    newgs[targets.length] = generationStamp;
+
     this.targets = newt;
+    this.targetGSs = newgs;
     this.primaryNodeIndex = -1;
     return true;
   }
@@ -205,13 +271,16 @@ class INodeFileUnderConstruction extends INodeFile {
       }
       
       DatanodeDescriptor[] newt = new DatanodeDescriptor[targets.length - 1];
+      long[] newgs = new long[targets.length - 1];
       for (int i = 0, j = 0; i < targets.length; i++) {
         if (i != index) {
-          newt[j++] = this.targets[i];
+          newt[j] = this.targets[i];
+          newgs[j++] = this.targetGSs[i];
         }
       }
 
       setTargets(newt);
+      this.targetGSs = newgs;
     }
   }
 
@@ -220,12 +289,14 @@ class INodeFileUnderConstruction extends INodeFile {
   // use the modification time as the access time
   //
   INodeFile convertToInodeFile(boolean changeAccessTime) {
-    INodeFile obj = new INodeFile(getPermissionStatus(),
+    INodeFile obj = new INodeFile(getId(),
+                                  getPermissionStatus(),
                                   getBlocks(),
                                   getReplication(),
                                   getModificationTime(),
                                   changeAccessTime ? getModificationTime() : getAccessTime(),
-                                  getPreferredBlockSize());
+                                  getPreferredBlockSize(),
+                                  null);
     return obj;
     
   }
@@ -239,27 +310,8 @@ class INodeFileUnderConstruction extends INodeFile {
    * the last one on the list.
    */
   void removeBlock(Block oldblock) throws IOException {
-    if (blocks == null) {
-      throw new IOException("Trying to delete non-existant block " + oldblock);
-    }
-    int size_1 = blocks.length - 1;
-    if (!blocks[size_1].equals(oldblock)) {
-      throw new IOException("Trying to delete non-last block " + oldblock);
-    }
-
-    //copy to a new list
-    BlockInfo[] newlist = new BlockInfo[size_1];
-    System.arraycopy(blocks, 0, newlist, 0, size_1);
-    blocks = newlist;
-
-    if (targets != null) {
-      for (DatanodeDescriptor datanode : targets) {
-        datanode.removeINode(this);
-      }
-    }
-
-    // Remove the block locations for the last block.
-    targets = null;
+    this.storage.removeBlock(oldblock);
+    setTargets(null, -1); // reset targets to be null
   }
   
   /**
@@ -269,38 +321,13 @@ class INodeFileUnderConstruction extends INodeFile {
    * @throws IOException
    */
   synchronized void checkLastBlockId(long blockId) throws IOException {
-    BlockInfo oldLast = blocks[blocks.length - 1];
-    if (oldLast.getBlockId() != blockId) {
-      // This should not happen - this means that we're performing recovery
-      // on an internal block in the file!
-      NameNode.stateChangeLog.error(
-        "Trying to commit block synchronization for an internal block on"
-          + " inode=" + this
-          + " newblockId=" + blockId + " oldLast=" + oldLast);
-      throw new IOException("Trying to update an internal block of " +
-        "pending file " + this);
-    }
+    this.storage.checkLastBlockId(blockId);
   }
 
   synchronized void setLastBlock(BlockInfo newblock, DatanodeDescriptor[] newtargets
       ) throws IOException {
-    if (blocks == null || blocks.length == 0) {
-      throw new IOException("Trying to update non-existant block (newblock="
-          + newblock + ")");
-    }
-
-    checkLastBlockId(newblock.getBlockId());
-
-    BlockInfo oldLast = blocks[blocks.length - 1];
-    if (oldLast.getGenerationStamp() > newblock.getGenerationStamp()) {
-      NameNode.stateChangeLog.warn(
-        "Updating last block " + oldLast + " of inode " +
-          "under construction " + this + " with a block that " +
-          "has an older generation stamp: " + newblock);
-    } 
-
-    blocks[blocks.length - 1] = newblock;
-    setTargets(newtargets);
+    this.storage.setLastBlock(newblock);
+    setTargets(newtargets, newblock.getGenerationStamp());
     lastRecoveryTime = 0;
   }
 
@@ -317,14 +344,15 @@ class INodeFileUnderConstruction extends INodeFile {
     }
 
     int previous = primaryNodeIndex;
+    Block lastBlock = this.getLastBlock();
     // find an alive datanode beginning from previous.
     // This causes us to cycle through the targets on successive retries.
     for(int i = 1; i <= targets.length; i++) {
       int j = (previous + i)%targets.length;
       if (targets[j].isAlive) {
         DatanodeDescriptor primary = targets[primaryNodeIndex = j]; 
-        primary.addBlockToBeRecovered(blocks[blocks.length - 1], targets);
-        NameNode.stateChangeLog.info("BLOCK* " + blocks[blocks.length - 1]
+        primary.addBlockToBeRecovered(lastBlock, targets);
+        NameNode.stateChangeLog.info("BLOCK* " + lastBlock
           + " recovery started, primary=" + primary);
         return;
       }
@@ -342,4 +370,58 @@ class INodeFileUnderConstruction extends INodeFile {
     }
     return expired;
   }
+  
+  /** Check if the last block has scheduled to be replicated */
+  synchronized boolean isLastBlockReplicated() {
+    return this.lastBlockReplicated;
+  }
+  
+  /** Mark that last block has been scheduled to be replicated */
+  synchronized void setLastBlockReplicated() {
+    this.lastBlockReplicated = true;
+  }
+  
+  /**
+   * When deleting an open file, we should remove it from the list
+   * of its targets.
+   */
+  int collectSubtreeBlocksAndClear(List<BlockInfo> v, 
+                                   int blocksLimit, 
+                                   List<INode> removedINodes) {
+    clearTargets();
+    return super.collectSubtreeBlocksAndClear(v, blocksLimit, removedINodes);
+  }
+  
+  /**
+   * Set local file name. Since the name, and hence hash value, changes,
+   * we need to reinsert this inode into the list of it's targets.
+   */
+  @Override
+  void setLocalName(byte[] name) {
+    removeINodeFromDatanodeDescriptors(targets);
+    this.name = name;
+    addINodeToDatanodeDescriptors(targets);
+  }
+  
+  /**
+   * Remove this INodeFileUnderConstruction from the list of datanodes.
+   */
+  private void removeINodeFromDatanodeDescriptors(DatanodeDescriptor[] targets) {
+    if (targets != null) {
+      for (DatanodeDescriptor node : targets) {
+        node.removeINode(this);
+      }
+    }
+  }
+  
+  /**
+   * Add this INodeFileUnderConstruction to the list of datanodes.
+   */
+  private void addINodeToDatanodeDescriptors(DatanodeDescriptor[] targets) {
+    if (targets != null) {
+      for (DatanodeDescriptor node : targets) {
+        node.addINode(this);
+      }
+    }
+  } 
 }

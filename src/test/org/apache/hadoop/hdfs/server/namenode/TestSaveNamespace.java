@@ -81,7 +81,7 @@ public class TestSaveNamespace {
 
     public Void answer(InvocationOnMock invocation) throws Throwable {
       Object[] args = invocation.getArguments();
-      StorageDirectory sd = (StorageDirectory)args[1];
+      StorageDirectory sd = ((FileImageManager)args[1]).getStorageDirectory();
 
       if (count++ == 1) {
         LOG.info("Injecting fault for sd: " + sd);
@@ -129,7 +129,7 @@ public class TestSaveNamespace {
       doAnswer(new FaultySaveImage(true)).
         when(spyImage).saveFSImage(
             (SaveNamespaceContext)anyObject(),
-            (StorageDirectory)anyObject(), anyBoolean());
+            (ImageManager)anyObject(), anyBoolean());
       shouldFail = false;
       break;
     case SAVE_SECOND_FSIMAGE_IOE:
@@ -137,7 +137,7 @@ public class TestSaveNamespace {
       doAnswer(new FaultySaveImage(false)).
         when(spyImage).saveFSImage(
             (SaveNamespaceContext)anyObject(),
-            (StorageDirectory)anyObject(), anyBoolean());
+            (ImageManager)anyObject(), anyBoolean());
       shouldFail = false;
       break;
     case SAVE_ALL_FSIMAGES:
@@ -145,7 +145,7 @@ public class TestSaveNamespace {
       doThrow(new RuntimeException("Injected")).
       when(spyImage).saveFSImage(
           (SaveNamespaceContext)anyObject(),
-          (StorageDirectory)anyObject(), anyBoolean());
+          (ImageManager)anyObject(), anyBoolean());
       shouldFail = true;
       break;
     case WRITE_STORAGE_ALL:
@@ -351,7 +351,7 @@ public class TestSaveNamespace {
     doThrow(new IOException("Injected fault: saveFSImage")).
         when(spyImage).saveFSImage(
             (SaveNamespaceContext)anyObject(),
-            (StorageDirectory)anyObject(), anyBoolean());
+            (ImageManager)anyObject(), anyBoolean());
 
     try {
       doAnEdit(fsn, 1);
@@ -519,11 +519,12 @@ public class TestSaveNamespace {
   private Configuration getConf() throws IOException {
     String baseDir = System.getProperty("test.build.data", "build/test/data/dfs/");
     String nameDirs = baseDir + "name1" + "," + baseDir + "name2";
+    String editsDirs = baseDir + "edits1" + "," + baseDir + "edits2";
     Configuration conf = new Configuration();
     FileSystem.setDefaultUri(conf, "hdfs://localhost:0");
     conf.set("dfs.http.address", "0.0.0.0:0");
     conf.set("dfs.name.dir", nameDirs);
-    conf.set("dfs.name.edits.dir", nameDirs);
+    conf.set("dfs.name.edits.dir", editsDirs);
     conf.set("dfs.secondary.http.address", "0.0.0.0:0");
     conf.setBoolean("dfs.permissions", false); 
     return conf;

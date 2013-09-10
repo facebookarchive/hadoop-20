@@ -22,6 +22,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.Vector;
 
 /**
  * Maintain parameters for sorting
@@ -175,6 +178,9 @@ public abstract class Schedulable {
     case FAIR:
       Schedulable.distributeShareFair(total, schedulables);
       break;
+    case PRIORITY:
+      Schedulable.distributeSharePriority(total, schedulables);
+      break;
     default:
       throw new IllegalArgumentException("Unknown comparator");
     }
@@ -263,5 +269,166 @@ public abstract class Schedulable {
     share = Math.min(max, share);
     share = Math.min(requested, share);
     return share;
+  }
+
+  /**
+   * Assign fair share if total share < min demand.
+   *
+   * @param totalShare   The share to be distributed.
+   * @param schedulables The collection of schedulables
+   * @return Excess share after assigning the min demand to each schedulable.
+   */
+  private static double assignShareIfUnderAllocated(
+      double totalShare,
+      final Collection<? extends Schedulable> schedulables) {
+
+    double totalMinDemand = 0;
+    for (Schedulable schedulable : schedulables) {
+      schedulable.share = 0;
+      totalMinDemand += Math.min(schedulable.getRequested(),
+                                 schedulable.getMinimum());
+    }
+
+    if ((totalMinDemand > 0) && (totalMinDemand >= totalShare)) {
+      distributeShareMin(schedulables);
+    }
+
+    return totalShare - totalMinDemand;
+  }
+
+  /**
+   * Group a collection of schedulables into priority groups
+   * sorted by priority.
+   *
+   * @param schedulables Collection of schedulables
+   * @return Sorted map of priority to vector of schedulables
+   *         (lowest priority first)
+   */
+  private static TreeMap<Integer, Vector<Schedulable>>
+      generatePriorityGroupedSchedulables(
+        final Collection<? extends Schedulable> schedulables) {
+    TreeMap<Integer, Vector<Schedulable>> prioritizedSchedulableMap =
+        new TreeMap<Integer, Vector<Schedulable>>();
+
+    for (Schedulable schedulable : schedulables) {
+      if (! prioritizedSchedulableMap.containsKey(schedulable.getPriority())) {
+        prioritizedSchedulableMap.put(schedulable.getPriority(),
+                                      new Vector<Schedulable>());
+      }
+      prioritizedSchedulableMap.get(schedulable.getPriority()).add(schedulable);
+    }
+    return prioritizedSchedulableMap;
+  }
+
+  /**
+   * Does PRIORITY share distribution across priority groups.
+   * Algorithm is as follows:
+   * Starting from the highest priority,
+   * try to allocate min(max_alloc, demand) to priority group.
+   * If that's possible, then move to the next prty group in order.
+   * If that's not possible, do fair share on that prty group
+   * and then allocate min_alloc to all the other
+   * priority groups.
+   *
+   * @param share The number of resources that need to be allocated.
+   * @param prioritizedSchedulableMap The priority group map.
+   */
+  private static void trickleShareDownPriorityGroups(
+      double share,
+      TreeMap<Integer, Vector<Schedulable>> prioritizedSchedulableMap) {
+
+    double surplusDemandForPriorityGroup, totalMinDemandForPriorityGroup;
+    for (Map.Entry<Integer, Vector<Schedulable>> entry :
+        prioritizedSchedulableMap.descendingMap().entrySet()) {
+      Vector<Schedulable> schedulableVector = entry.getValue();
+      if (share <= 0) {
+        distributeShareMin(schedulableVector);
+        continue;
+      }
+
+      surplusDemandForPriorityGroup = 0.0;
+      totalMinDemandForPriorityGroup = 0.0;
+
+      for (Schedulable schedulable : schedulableVector) {
+        double d = Math.min(schedulable.getMaximum(),
+                            schedulable.getRequested());
+        totalMinDemandForPriorityGroup +=
+            Math.min(schedulable.getMinimum(), d);
+        surplusDemandForPriorityGroup +=
+            Math.max(0, d - schedulable.getMinimum());
+      }
+
+      if (surplusDemandForPriorityGroup >= share) {
+        distributeShareFair(share + totalMinDemandForPriorityGroup,
+                            schedulableVector);
+      } else {
+        distributeShareMax(schedulableVector);
+      }
+      share -= surplusDemandForPriorityGroup;
+    }
+  }
+
+
+  /**
+   * Distribute the total share among the list of schedulables according to the
+   * PRIORITY model. Note that the eventual intent is to determine if
+   * preemption is necessary. So, we need to assign the most ideal share on
+   * each schedulable beyond which preemption is necessary.
+   * Finds a way to distribute the share in such a way that all the
+   * min and max reservations of the schedulables are satisfied. In
+   * the PRIORITY scheduling, MINs are always granted to all pools. Therefore,
+   * irrespective of the demand of a pool, its share according to the
+   * algorithm will be at least MIN.
+   *
+   * @param total the share to be distributed
+   * @param schedulables the list of schedulables
+   */
+  private static void distributeSharePriority(
+      double total, final Collection<? extends Schedulable> schedulables) {
+
+    // 1) If share < sum(min(demand, min_alloc)) then do fair share and quit.
+    double residualShare = assignShareIfUnderAllocated(total, schedulables);
+    if (residualShare <= 0.0) {
+      return;
+    }
+
+    // 2) Group schedulables according to priorities.
+    TreeMap<Integer, Vector<Schedulable>> prioritizedSchedulableMap =
+        generatePriorityGroupedSchedulables(schedulables);
+
+    // 3) Trickle the share across priority groups.
+    trickleShareDownPriorityGroups(residualShare, prioritizedSchedulableMap);
+  }
+
+  /**
+   * Increment each of the schedulables' share by
+   * the minimum demand. Note that each pool has to be guaranteed
+   * at least its MIN value according to PRIORITY scheduling.
+   *
+   * @param schedulableVector: The collection of schedulables
+   *                           (all with the same priority)
+   */
+  private static void distributeShareMin(
+      Collection<? extends Schedulable> schedulableVector) {
+    for (Schedulable schedulable : schedulableVector) {
+      schedulable.share += schedulable.getMinimum();
+    }
+  }
+
+  /**
+   * Increment each of the schedulables' share by
+   * the lesser of its min demand or its maximum.
+   *
+   * @param schedulableVector: The collection of schedulables
+   *                           (all with the same priority)
+   */
+  private static void distributeShareMax(
+      Collection<? extends Schedulable> schedulableVector) {
+    for (Schedulable schedulable : schedulableVector) {
+      double minShare = Math.max(schedulable.getMinimum(),
+                                 schedulable.getRequested());
+      schedulable.share += Math.min(schedulable.getMaximum(),
+                                    minShare);
+    }
   }
 }

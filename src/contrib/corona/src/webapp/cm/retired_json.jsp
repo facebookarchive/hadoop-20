@@ -25,7 +25,7 @@
 
   JSONObject result = new JSONObject();
   JSONArray array = new JSONArray();
-
+  
   Collection<ResourceType> resourceTypes = nm.getResourceTypes();
   Collection<RetiredSession> retiredSessions = sm.getRetiredSessions();
   synchronized (retiredSessions) {
@@ -61,6 +61,22 @@
         int totalTypes =
             s.getFulfilledRequestCountForType(resourceType);
         row.put(totalTypes);
+        
+        if (resourceType == ResourceType.JOBTRACKER) {
+          continue;
+        }
+        
+        List<Long> resourceUsage = s.getResourceUsageForType(resourceType);
+        if (resourceUsage != null) {
+          for (long val:resourceUsage) {
+            row.put(StringUtils.humanReadableInt(val));
+          }
+        } else {
+          row.put("0 B");
+          row.put("0 B");
+          row.put("0 B");
+        }
+        
       }
       array.put(row);
     }

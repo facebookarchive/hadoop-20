@@ -32,12 +32,13 @@ import java.util.concurrent.ConcurrentNavigableMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.zip.Checksum;
 
-import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.DFSUtil;
-import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.qjournal.client.QuorumJournalManager;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.Transition;
 import org.apache.hadoop.hdfs.server.common.Storage.FormatConfirmable;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
@@ -46,6 +47,7 @@ import org.apache.hadoop.hdfs.server.namenode.JournalSet.JournalAndStream;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
 import org.apache.hadoop.hdfs.server.namenode.ValidateNamespaceDirPolicy.NNStorageLocation;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
+import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.*;
@@ -64,6 +66,9 @@ import com.google.common.collect.Lists;
 public class FSEditLog {
   
   static final Log LOG = LogFactory.getLog(FSEditLog.class);
+
+  public static final long PURGE_ALL_TXID = Long.MAX_VALUE;
+  public static String CONF_ROLL_TIMEOUT_MSEC = "dfs.fsedits.timeout.roll.edits.msec";
   
   public static int sizeFlushBuffer = HdfsConstants.DEFAULT_EDIT_BUFFER_SIZE;
   static long preallocateSize= HdfsConstants.DEFAULT_EDIT_PREALLOCATE_SIZE;
@@ -123,7 +128,8 @@ public class FSEditLog {
   private NNStorage storage;  
   private Configuration conf;
   private Collection<URI> editsDirs;
-  
+  private long timeoutRollEdits;
+
   private static ThreadLocal<Checksum> localChecksumForRead = new ThreadLocal<Checksum>() {
     protected Checksum initialValue() {
       return new PureJavaCrc32();
@@ -158,11 +164,14 @@ public class FSEditLog {
     this.txid = txid;
   }
   
-  public void resetTxIds(long txid) {
+  public void resetTxIds(long txid) throws IOException {
     this.txid = txid;
     this.synctxid = txid;
     this.curSegmentTxId = HdfsConstants.INVALID_TXID;
     this.state = State.BETWEEN_LOG_SEGMENTS;
+    
+    // Journals need to reset their committed IDs.
+    journalSet.setCommittedTxId(txid, true);
   }
 
   private static class TransactionId {
@@ -179,16 +188,6 @@ public class FSEditLog {
       return new TransactionId(-1L);
     }
   };
-
-
-
-  FSEditLog(NNStorage storage) throws IOException {
-    Configuration conf = new Configuration();
-    // Make sure the edits dirs are set in the provided configuration object.
-    conf.set(FSConstants.DFS_NAMENODE_EDITS_DIR_KEY,
-        StringUtils.join(storage.getEditsDirectories(), ","));
-    init(conf, storage, NNStorageConfiguration.getNamespaceEditsDirs(conf), null);
-  }
   
   /**
    * Constructor for FSEditLog. Underlying journals are constructed, but no
@@ -199,13 +198,16 @@ public class FSEditLog {
    * @param editsDirs List of journals to use
    * @param locationMap contains information about shared/local/remote locations
    */
-  FSEditLog(Configuration conf, NNStorage storage, Collection<URI> editsDirs,
+  FSEditLog(Configuration conf, FSImage image, NNStorage storage,
+      Collection<URI> imageDirs, Collection<URI> editsDirs,
       Map<URI, NNStorageLocation> locationMap) {
-    init(conf, storage, editsDirs, locationMap);
+    init(conf, image, storage, imageDirs, editsDirs, locationMap);
+    timeoutRollEdits = conf.getLong(CONF_ROLL_TIMEOUT_MSEC, 0);
   }
   
-  private void init(Configuration conf, NNStorage storage,
-      Collection<URI> editsDirs, Map<URI, NNStorageLocation> locationMap) {
+  private void init(Configuration conf, FSImage image, NNStorage storage,
+      Collection<URI> imageDirs, Collection<URI> editsDirs,
+      Map<URI, NNStorageLocation> locationMap) {
 
     isSyncRunning = false;
     this.conf = conf;
@@ -217,7 +219,8 @@ public class FSEditLog {
     // of the editlog, as no journals will exist
     this.editsDirs = new ArrayList<URI>(editsDirs);
 
-    journalSet = new JournalSet(conf, storage, this.editsDirs.size());
+    journalSet = new JournalSet(conf, image, storage, this.editsDirs.size(),
+        metrics);
     
     for (URI u : this.editsDirs) {
       boolean required = NNStorageConfiguration.getRequiredNamespaceEditsDirs(
@@ -232,12 +235,24 @@ public class FSEditLog {
         StorageDirectory sd = storage.getStorageDirectory(u);
         if (sd != null) {
           LOG.info("Adding local file journal: " + u + ", required: " + required);
-          journalSet.add(new FileJournalManager(sd, metrics), required, shared,
+          // port error reporter
+          journalSet.add(new FileJournalManager(sd, metrics, null), required, shared,
               remote);
         }
+      } else if (u.getScheme().equals(QuorumJournalManager.QJM_URI_SCHEME)) {
+        // for now, we only allow the QJM to store images
+        boolean hasImageStorage = imageDirs.contains(u);
+        try {
+          journalSet.add(new QuorumJournalManager(conf, u, new NamespaceInfo(
+              storage), metrics, hasImageStorage), required, shared, remote);
+        } catch (Exception e) {
+          throw new IllegalArgumentException("Unable to construct journal, " + u,
+              e);
+        }     
       } else {
         LOG.info("Adding journal: " + u + ", required: " + required);
-        journalSet.add(createJournal(u, conf), required, shared, remote);
+        journalSet.add(createJournal(conf, u, new NamespaceInfo(storage),
+            metrics), required, shared, remote);
       }
     }
     if (journalSet.isEmpty()) {
@@ -304,17 +319,19 @@ public class FSEditLog {
     state = State.CLOSED;
   }
   
-  /**
-   * Format all configured journals which are not file-based.
-   * 
-   * File-based journals are skipped, since they are formatted by the
-   * Storage format code.
-   */
-  synchronized void formatNonFileJournals(StorageInfo nsInfo) throws IOException {
-    if (state != State.BETWEEN_LOG_SEGMENTS) {
+  synchronized void transitionNonFileJournals(StorageInfo nsInfo,
+      boolean checkEmpty, Transition transition, StartupOption startOpt)
+      throws IOException {
+    if (Transition.FORMAT == transition
+        && state != State.BETWEEN_LOG_SEGMENTS) {
       throw new IOException("Bad state:" + state);
     }
-    journalSet.formatNonFileJournals(nsInfo);
+    journalSet.transitionNonFileJournals(nsInfo, checkEmpty,
+        transition, startOpt);
+  }
+
+  synchronized List<JournalManager> getNonFileJournalManagers() {
+    return journalSet.getNonFileJournalManagers();
   }
   
   synchronized List<FormatConfirmable> getFormatConfirmables()
@@ -676,6 +693,10 @@ public class FSEditLog {
   protected int  checkJournals() throws IOException {
     return journalSet.checkJournals("");
   }
+  
+  protected void updateNamespaceInfo(StorageInfo si) throws IOException {
+    journalSet.updateNamespaceInfo(si);
+  }
 
   //
   // print statistics every 1 minute.
@@ -708,7 +729,8 @@ public class FSEditLog {
   public void logOpenFile(String path, INodeFileUnderConstruction newNode)  
                    throws IOException {
     AddOp op = AddOp.getInstance();  
-    op.set(path, 
+    op.set(newNode.getId(),
+        path,
         newNode.getReplication(), 
         newNode.getModificationTime(),
         newNode.getAccessTime(),
@@ -725,7 +747,8 @@ public class FSEditLog {
    */
   public void logCloseFile(String path, INodeFile newNode) {
     CloseOp op = CloseOp.getInstance();
-    op.set(path, 
+    op.set(newNode.getId(),
+        path, 
         newNode.getReplication(), 
         newNode.getModificationTime(),
         newNode.getAccessTime(),
@@ -738,11 +761,24 @@ public class FSEditLog {
   }
   
   /** 
+   * Add append file record to the edit log.
+   */
+  public void logAppendFile(String path, INodeFileUnderConstruction newNode)  
+                   throws IOException {
+    AppendOp op = AppendOp.getInstance();  
+    op.set(path, 
+        newNode.getBlocks(),
+        newNode.getClientName(),
+        newNode.getClientMachine());   
+    logEdit(op);
+  }
+  
+  /** 
    * Add create directory record to edit log
    */
   public void logMkDir(String path, INode newNode) {
     MkdirOp op = MkdirOp.getInstance();
-    op.set(path, newNode.getModificationTime(), 
+    op.set(newNode.getId(), path, newNode.getModificationTime(), 
         newNode.getPermissionStatus());
     logEdit(op);
   }
@@ -763,6 +799,14 @@ public class FSEditLog {
     RenameOp op = RenameOp.getInstance();
     op.set(src, dst, timestamp);
     logEdit(op);
+  }
+  
+  /**
+   * Add raidFile record to edit log
+   */
+  public void logRaidFile(String src, String codecId, short expectedSourceRepl,
+      long timestamp) {
+    //TODO
   }
   
   /** 
@@ -808,6 +852,18 @@ public class FSEditLog {
     logEdit(op);
   }
   
+  /**
+   * Merge(parity, source, ...) log
+   * It's used for converting old raided files into new format
+   * by merging parity file and source file together into one file
+   */
+  public void logMerge(String parity, String source, String codecId, 
+      int[] checksums, long timestamp) {
+    MergeOp op = MergeOp.getInstance();
+    op.set(parity, source, codecId, checksums, timestamp);
+    logEdit(op);
+  }
+  
   /** 
    * Add delete file record to edit log
    */
@@ -845,7 +901,7 @@ public class FSEditLog {
   /**
    * Used only by unit tests.
    */
-  static synchronized void setRuntimeForTesting(Runtime rt) {
+  public static synchronized void setRuntimeForTesting(Runtime rt) {
     runtime = rt;
   }
   
@@ -874,6 +930,7 @@ public class FSEditLog {
     long rollTime = DFSUtil.getElapsedTimeMicroSeconds(start);
     if (metrics != null) {
       metrics.rollEditLogTime.inc(rollTime);
+      metrics.tsLastEditsRoll.set(System.currentTimeMillis());
     }
     return nextTxId;
   }
@@ -882,7 +939,7 @@ public class FSEditLog {
      * Start writing to the log segment with the given txid.  
      * Transitions from BETWEEN_LOG_SEGMENTS state to IN_LOG_SEGMENT state.   
      */ 
-    synchronized void startLogSegment(final long segmentTxId,
+  synchronized void startLogSegment(final long segmentTxId,
       boolean writeHeaderTxn) throws IOException {
     LOG.info("Starting log segment at " + segmentTxId);
     if (segmentTxId < 0) {
@@ -918,6 +975,25 @@ public class FSEditLog {
     if (writeHeaderTxn) {
       logEdit(LogSegmentOp.getInstance(FSEditLogOpCodes.OP_START_LOG_SEGMENT));
       logSync();
+    }
+    
+    // force update of journal and image metrics
+    journalSet.updateJournalMetrics();
+    // If it is configured, we want to schedule an automatic edits roll
+    if (timeoutRollEdits > 0) {
+      FSNamesystem fsn = this.journalSet.getImage().getFSNamesystem();
+      if (fsn != null) {
+        // In some test cases fsn is NULL in images. Simply skip the feature.
+        AutomaticEditsRoller aer = fsn.automaticEditsRoller;
+        if (aer != null) {
+          aer.setNextRollTime(System.currentTimeMillis() + timeoutRollEdits);
+        } else {
+          LOG.warn("Automatic edits roll is enabled but the roller thread "
+              + "is not enabled. Should only happen in unit tests.");
+        }
+      } else {
+        LOG.warn("FSNamesystem is NULL in FSEditLog.");
+      }
     }
   }
       
@@ -1005,25 +1081,73 @@ public class FSEditLog {
   /**
    * Select a list of input streams to load.
    * 
+   * @param streams, streams to be returned
    * @param fromTxId first transaction in the selected streams
    * @param toAtLeast the selected streams must contain this transaction
+   * @param inProgessOk set to true if in-progress streams are OK
+   * 
+   * @return true if there the redundancy in no met
    */
-  Collection<EditLogInputStream> selectInputStreams(long fromTxId,
-      long toAtLeastTxId) throws IOException {
-    LOG.info("Selecting input stream from: " + fromTxId + " to at least: "
-        + toAtLeastTxId);
-    List<EditLogInputStream> streams = new ArrayList<EditLogInputStream>();
-    EditLogInputStream stream = journalSet.getInputStream(fromTxId);
-    while (stream != null) {
-      fromTxId = stream.getLastTxId() + 1;
-      streams.add(stream);
-      stream = journalSet.getInputStream(fromTxId);
+  public synchronized boolean selectInputStreams(
+      Collection<EditLogInputStream> streams, long fromTxId,
+      long toAtLeastTxId, int minRedundancy) throws IOException {
+    
+    // at this point we should not have any non-finalized segments
+    // this function is called at startup, and must be invoked after
+    // recovering all in progress segments
+    if (journalSet.hasUnfinalizedSegments(fromTxId)) {
+      LOG.fatal("All streams should be finalized");
+      throw new IOException("All streams should be finalized at startup");
     }
-    if (fromTxId <= toAtLeastTxId) {
+    
+    // get all finalized streams
+    boolean redundancyViolated = journalSet.selectInputStreams(streams,
+        fromTxId, false, false, minRedundancy);
+    
+    try {
+      checkForGaps(streams, fromTxId, toAtLeastTxId, true);
+    } catch (IOException e) {
       closeAllStreams(streams);
-      throw new IOException("No non-corrupt logs for txid ::::" + fromTxId);
+      throw e;
     }
-    return streams;
+    return redundancyViolated;
+  }
+  
+  /**
+   * Check for gaps in the edit log input stream list.
+   * Note: we're assuming that the list is sorted and that txid ranges don't
+   * overlap.  This could be done better and with more generality with an
+   * interval tree.
+   */
+  private void checkForGaps(Collection<EditLogInputStream> streams, long fromTxId,
+      long toAtLeastTxId, boolean inProgressOk) throws IOException {
+    Iterator<EditLogInputStream> iter = streams.iterator();
+    long txId = fromTxId;
+    while (true) {
+      if (txId > toAtLeastTxId)
+        return;
+      if (!iter.hasNext())
+        break;
+      EditLogInputStream elis = iter.next();
+      if (elis.getFirstTxId() > txId) {
+        break;
+      }
+      long next = elis.getLastTxId();
+      if (next == HdfsConstants.INVALID_TXID) {
+        if (!inProgressOk) {
+          throw new RuntimeException("inProgressOk = false, but "
+              + "selectInputStreams returned an in-progress edit "
+              + "log input stream (" + elis + ")");
+        }
+        // We don't know where the in-progress stream ends.
+        // It could certainly go all the way up to toAtLeastTxId.
+        return;
+      }
+      txId = next + 1;
+    }
+    throw new IOException(String.format("Gap in transactions. Expected to "
+        + "be able to read up until at least txid %d but unable to find any "
+        + "edit logs containing txid %d", toAtLeastTxId, txId));
   }
 
   /**
@@ -1070,21 +1194,23 @@ public class FSEditLog {
    * @return The constructed journal manager
    * @throws IllegalArgumentException if no class is configured for uri
    */
-  public static JournalManager createJournal(URI uri, Configuration conf) {
+  public static JournalManager createJournal(Configuration conf, URI uri,
+      NamespaceInfo nsInfo, NameNodeMetrics metrics) {
     Class<? extends JournalManager> clazz = getJournalClass(conf,
         uri.getScheme());
 
     try {
       Constructor<? extends JournalManager> cons = clazz.getConstructor(
-          Configuration.class, URI.class);
-      return cons.newInstance(conf, uri);
+          Configuration.class, URI.class, NamespaceInfo.class,
+          NameNodeMetrics.class);
+      return cons.newInstance(conf, uri, nsInfo, metrics);
     } catch (Exception e) {
       throw new IllegalArgumentException("Unable to construct journal, " + uri,
           e);
     }
   }
 
-    // sets the initial capacity of the flush buffer.
+  // sets the initial capacity of the flush buffer.
   static void setBufferCapacity(int size) {
     sizeFlushBuffer = size;
   }
@@ -1130,12 +1256,23 @@ public class FSEditLog {
   }
   
   /**
+   * Get number of journals (enabled and disabled).
+   */
+  public int getNumberOfJournals() throws IOException {
+    return journalSet.getNumberOfJournals();
+  }
+  
+  /**
    * Check if the shared journal is available
    */
   public boolean isSharedJournalAvailable() throws IOException {
     return journalSet.isSharedJournalAvailable();
   }
-
+  
+  public void setTimeoutRollEdits(long timeoutRollEdits) {
+    this.timeoutRollEdits = timeoutRollEdits;
+  }
+  
   /**
    * A class to read in blocks stored in the old format. The only two
    * fields in the block were blockid and length.

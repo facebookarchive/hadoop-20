@@ -60,7 +60,7 @@ public class TestTaskTrackerMemoryManager extends TestCase {
     conf.set("mapred.job.tracker.handler.count", "1");
     conf.set("mapred.tasktracker.map.tasks.maximum", "1");
     conf.set("mapred.tasktracker.reduce.tasks.maximum", "1");
-    conf.set("mapred.tasktracker.tasks.sleeptime-before-sigkill", "0");
+    conf.set(JvmManager.SLEEPTIME_BEFORE_SIGKILL_KEY, "0");
     miniMRCluster = new MiniMRCluster(1, "file:///", 1, null, null, conf);
   }
 

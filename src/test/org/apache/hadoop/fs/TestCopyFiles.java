@@ -1651,4 +1651,22 @@ public class TestCopyFiles extends CopyFilesBase {
       if (cluster != null) { cluster.shutdown(); }
     }
   }
+
+  /** Test copying from a source directory that doesn't exist */
+  @Test
+  public void testSrcFileNotFound() throws Exception {
+    Configuration conf = new Configuration();
+    FileSystem localfs = FileSystem.get(LOCAL_FS, conf);
+    deldir(localfs, TEST_ROOT_DIR+"/srcdatdoesnotexist");
+
+    int result = ToolRunner.run(new DistCp(new Configuration()),
+        new String[] {"file:///"+TEST_ROOT_DIR+"/srcdatdoesnotexist",
+            "file:///"+TEST_ROOT_DIR+"/destdat"});
+
+    assertEquals("Should have failed with a -1, indicating invalid arguments",
+        -1, result);
+
+    deldir(localfs, TEST_ROOT_DIR+"/destdat");
+    deldir(localfs, TEST_ROOT_DIR+"/srcdatdoesnotexist");
+  }
 }

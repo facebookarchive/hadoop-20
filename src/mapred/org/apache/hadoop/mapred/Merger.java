@@ -37,6 +37,7 @@ import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.mapred.IFile.Reader;
 import org.apache.hadoop.mapred.IFile.Writer;
 import org.apache.hadoop.util.PriorityQueue;
+import org.apache.hadoop.util.PriorityQueueFloyd;
 import org.apache.hadoop.util.Progress;
 import org.apache.hadoop.util.Progressable;
 
@@ -234,7 +235,7 @@ class Merger {
   }
   
   private static class MergeQueue<K extends Object, V extends Object> 
-  extends PriorityQueue<Segment<K, V>> implements RawKeyValueIterator {
+  extends PriorityQueueFloyd<Segment<K, V>> implements RawKeyValueIterator {
     Configuration conf;
     FileSystem fs;
     CompressionCodec codec;

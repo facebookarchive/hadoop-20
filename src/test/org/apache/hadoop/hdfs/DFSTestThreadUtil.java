@@ -60,7 +60,13 @@ public class DFSTestThreadUtil {
           it.remove();
           continue;
         }
-        System.out.println("Thread: " + th.getName() + " : " + th.toString());
+        String msg = "";
+        for (StackTraceElement stack : th.getStackTrace()) {
+          msg += stack + "\n";
+        }
+        
+        System.out.println("Thread: " + th.getName() + " : " + th.toString() + "\n" + msg);
+        
       }
     }
     assertTrue("This is not a clean shutdown", threads.size() == 0);

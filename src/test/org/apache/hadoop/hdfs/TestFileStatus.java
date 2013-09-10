@@ -68,7 +68,7 @@ public class TestFileStatus extends TestCase {
     conf.setInt("dfs.ls.limit", 2);
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
     FileSystem fs = cluster.getFileSystem();
-    final DFSClient dfsClient = new DFSClient(NameNode.getAddress(conf), conf);
+    final DFSClient dfsClient = new DFSClient(NameNode.getClientProtocolAddress(conf), conf);
     try {
 
       //

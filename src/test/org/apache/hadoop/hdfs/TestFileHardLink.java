@@ -52,6 +52,27 @@ public class TestFileHardLink {
     }
     
   @Test
+  public void testHardLinkAfterRestart() throws Exception {
+    final Configuration conf = new Configuration();
+    final MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
+    try {
+      final FileSystem fs = cluster.getFileSystem();
+      DFSTestUtil.createFile(fs, new Path("/f1"), 1, (short) 1, 0);
+      DFSTestUtil.createFile(fs, new Path("/f2"), 1, (short) 1, 0);
+      fs.hardLink(new Path("/f1"), new Path("/dst/f1"));
+      cluster.getNameNode().saveNamespace(true, false);
+      cluster.restartNameNode();
+      fs.hardLink(new Path("/f2"), new Path("/dst/f2"));
+      long hid1 = cluster.getNameNode().namesystem.dir.getHardLinkId("/f1");
+      long hid2 = cluster.getNameNode().namesystem.dir.getHardLinkId("/f2");
+      assertEquals(0, hid1);
+      assertEquals(1, hid2);
+    } finally {
+      cluster.shutdown();
+    }
+  }
+
+  @Test
   public void testHardLinkWithSameFilename() throws Exception {  
     final Configuration conf = new Configuration(); 
     final MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null); 

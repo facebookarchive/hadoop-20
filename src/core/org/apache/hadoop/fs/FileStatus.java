@@ -67,6 +67,11 @@ public class FileStatus implements Writable, Comparable {
     this.path = path;
   }
 
+  public FileStatus(FileStatus elem) {
+    this(elem.length, elem.isdir, elem.block_replication, elem.blocksize, elem.modification_time,
+        elem.access_time, elem.permission, elem.owner, elem.group, elem.path);
+  }
+
   /**
    * Get the length of this file, in bytes.
    * @return the length of this file, in bytes.
@@ -231,6 +236,17 @@ public class FileStatus implements Writable, Comparable {
     permission.readFields(in);
     owner = Text.readStringOpt(in);
     group = Text.readStringOpt(in);
+  }
+
+  public static void write(DataOutput out, FileStatus elem) throws IOException {
+    FileStatus status = new FileStatus(elem);
+    status.write(out);
+  }
+
+  public static FileStatus read(DataInput in) throws IOException {
+    FileStatus status = new FileStatus();
+    status.readFields(in);
+    return status;
   }
 
   public boolean compareFull(Object o, boolean closedFile) {

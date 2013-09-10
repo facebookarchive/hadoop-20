@@ -28,7 +28,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
   
   /**
    *  The canonical URI representing the cluster we are connecting to
-   *  dfs1.data.xxx.com:9000 for example
    */
   URI logicalName;
   Configuration conf;
@@ -68,6 +67,8 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
   FailoverClientProtocol failoverClient;
   FailoverClientHandler failoverHandler;
 
+  private URI fsName;
+
   /**
    * HA FileSystem initialization
    */
@@ -77,9 +78,59 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
     return this.logicalName;
   }
 
+  /**
+   * This ensures that if we have done a client configuration lookup, the
+   * logicalName might have changed and we still need to allow URIs that specify
+   * the old logical name stored in fsName. It also allows paths that don't
+   * specify ports. For example :
+   *
+   * We would like to support connecting to a HDFS cluster like this
+   * :
+   * bin/hadoop dfs -ls hdfs://<clustername>.<servicename>/
+   *
+   * For this purpose we need to add some logic to checkPath(). The
+   * reason is that DAFS replaces the logical name with the one retrieved
+   * from the client configuration lookup and hence without this check, doing
+   * something like :
+   *
+   * bin/hadoop dfs -ls hdfs://<clustername>.<servicename>/
+   *
+   * would give a Wrong FS error, since <clustername>.<servicename> does not match
+   * with the actual URI after lookup which would be something like <host:port>
+   *
+   * Therefore in checkPath() we should also allow paths that have a URI with
+   * the old authority (<clustername>.<servicename>).
+   */
+  @Override
+  protected void checkPath(Path path) {
+    if (conf.getBoolean("client.configuration.lookup.done", false)) {
+      URI uri = path.toUri();
+      String thisScheme = this.getUri().getScheme();
+      String thatScheme = uri.getScheme();
+      String thisHost = fsName.getHost();
+      String thatHost = uri.getHost();
+      if (thatScheme != null && thisScheme.equalsIgnoreCase(thatScheme)) {
+        if (thisHost != null && thisHost.equalsIgnoreCase(thatHost)) {
+          return;
+        }
+      }
+    }
+    super.checkPath(path);
+  }
+
   public void initialize(URI name, Configuration conf) throws IOException {
     // The actual name of the filesystem e.g. dfs.data.xxx.com:9000
-    this.logicalName = name;
+    fsName = name;
+    try {
+      if (conf.getBoolean("client.configuration.lookup.done", false)) {
+        // In case of client configuration lookup, use the default name retrieved.
+        this.logicalName = new URI(conf.get("fs.default.name"));
+      } else {
+        this.logicalName = name;
+      }
+    } catch (URISyntaxException urie) {
+      throw new IOException(urie);
+    }
     this.conf = conf;
     failoverHandler = new FailoverClientHandler(conf, logicalName, this);
     // default interval between standbyFS initialization attempts is 10 mins
@@ -201,12 +252,12 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
             failoverFS.initialize(primaryURI, conf);
 
             newNamenode(failoverFS.dfs.namenode);
+            // Update the namenode address if DFSClient tries to recreate the NN
+            // connection.
+            this.dfs.nameNodeAddr = failoverFS.dfs.nameNodeAddr;
 
           } else {
             super.initialize(primaryURI, conf);
-            failoverClient = new FailoverClientProtocol(this.dfs.namenode,
-                failoverHandler);
-            this.dfs.namenode = failoverClient;
           }
         } catch (IOException ex) {
           if (firstAttempt && failoverHandler.isZKCacheEnabled()) {
@@ -228,12 +279,29 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
         return false;
       } else {
         LOG.error("Exception initializing DAFS. for " + this.getUri() +
-		" .Falling back to using DFS instead", ex);
+		" .Falling back to using DFS instead. Exception: " + ex.getMessage());
         fallback = true;
         super.initialize(logicalName, conf);
       }
     }
     return true;
+  }
+
+  /**
+   * This method ensures that when {@link DFSClient#getNewNameNodeIfNeeded(int)}
+   * runs, it still keeps the {@link DFSClient#namenode} object a type of
+   * {@link FailoverClientProtocol}
+   */
+  @Override
+  ClientProtocol getNewNameNode(ClientProtocol rpcNamenode, Configuration conf)
+      throws IOException {
+    ClientProtocol namenode = DFSClient.createNamenode(rpcNamenode, conf);
+    if (failoverClient == null) {
+      failoverClient = new FailoverClientProtocol(namenode,
+          failoverHandler);
+    }
+    failoverClient.setNameNode(namenode);
+    return failoverClient;
   }
 
   @Override

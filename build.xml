@@ -60,6 +60,9 @@
   <property name="build.examples" value="${build.dir}/examples"/>
   <property name="build.anttasks" value="${build.dir}/ant"/>
   <property name="build.librecordio" value="${build.dir}/librecordio"/>
+  <property name="configerator.lib" location="${basedir}/src/native/lib/configerator"/>
+  <property name="userGroupInfo.lib" location="${basedir}/src/native/lib/userGroupInfo"/>
+  <property name="cgroup.lib" location="${basedir}/src/native/lib/cgroup"/>
   <!-- convert spaces to _ so that mac os doesn't break things -->
   <exec executable="sed" inputstring="${os.name}"
         outputproperty="nonspace.os">
@@ -234,8 +237,12 @@
 
   <!-- Snappy native library location -->
   <property name="snappy.prefix" value="${native.src.dir}/lib/snappy"/>
+  <property name="configerator.lib" value="${native.src.dir}/lib/configerator"/>
+  <property name="userGroupInfo.lib" value="${native.src.dir}/lib/userGroupInfo"/>
   <property name="snappy.lib" value="${snappy.prefix}/lib"/>
   <property name="snappy.include" value="${snappy.prefix}/include"/>
+  <property name="cgroup.prefix" value="${native.src.dir}/lib/cgroup"/>
+  <property name="cgroup.lib" value="${native.src.dir}/lib/cgroup"/>
 
   <!-- the normal classpath -->
   <path id="classpath">
@@ -298,7 +305,9 @@
     <mkdir dir="${build.tools}"/>
     <mkdir dir="${build.src}"/>
     <mkdir dir="${build.webapps}/task/WEB-INF"/>
+    <mkdir dir="${build.webapps}/qjm/WEB-INF"/>
     <mkdir dir="${build.webapps}/job/WEB-INF"/>
+    <mkdir dir="${build.webapps}/jmx/WEB-INF"/>
     <mkdir dir="${build.webapps}/hdfs/WEB-INF"/>
     <mkdir dir="${build.webapps}/datanode/WEB-INF"/>
     <mkdir dir="${build.webapps}/secondary/WEB-INF"/>
@@ -450,6 +459,13 @@
      webxml="${build.webapps}/datanode/WEB-INF/web.xml">
     </jsp-compile>
 
+    <jsp-compile
+     uriroot="${src.webapps}/qjm"
+     outputdir="${build.src}"
+     package="org.apache.hadoop.hdfs.qjournal.server"
+     webxml="${build.webapps}/qjm/WEB-INF/web.xml">
+    </jsp-compile>
+
     <!-- Compile Java files (excluding JSPs) checking warnings -->
     <javac
      includeantruntime="true"
@@ -509,6 +525,7 @@
     <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/zlib"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/snappy"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/lzma"/>
+    <mkdir dir="${build.native}/src/org/apache/hadoop/io/compress/lz4"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/syscall"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/util"/>
     <mkdir dir="${build.native}/src/org/apache/hadoop/io/nativeio"/>
@@ -531,6 +548,16 @@
       >
       <class name="org.apache.hadoop.io.compress.lzma.LzmaCompressor" />
       <class name="org.apache.hadoop.io.compress.lzma.LzmaDecompressor" />
+    </javah>
+
+    <javah
+      classpath="${build.classes}"
+      destdir="${build.native}/src/org/apache/hadoop/io/compress/lz4"
+      force="yes"
+      verbose="yes"
+      >
+      <class name="org.apache.hadoop.io.compress.lz4.Lz4Compressor" />
+      <class name="org.apache.hadoop.io.compress.lz4.Lz4Decompressor" />
     </javah>
 
     <echo> Running javah NativeIO.java  </echo>
@@ -563,14 +590,24 @@
       <class name="org.apache.hadoop.util.NativeCrc32" />
     </javah>
 
+    <echo> Running javah NativeJerasure.java  </echo>
+    <javah
+      classpath="${build.classes}"
+      destdir="${build.native}/src/org/apache/hadoop/util"
+      force="yes"
+      verbose="yes"
+      >
+      <class name="org.apache.hadoop.util.NativeJerasure" />
+    </javah>
+
     <exec dir="${build.native}" executable="sh" failonerror="true">
       <env key="OS_NAME" value="${os.name}"/>
       <env key="OS_ARCH" value="${os.arch}"/>
       <env key="JVM_DATA_MODEL" value="${sun.arch.data.model}"/>
       <env key="HADOOP_NATIVE_SRCDIR" value="${native.src.dir}"/>
       <arg line="${native.src.dir}/configure 
-          LDFLAGS='-L${snappy.lib} -L${basedir}/nativelib/lzma -lrt'
-          CPPFLAGS='-I${snappy.include} -I${basedir}/nativelib/lzma'"/>
+          LDFLAGS='-L${snappy.lib} -L${basedir}/nativelib/lzma -L${basedir}/nativelib/lz4 -lrt'
+          CPPFLAGS='-I${snappy.include} -I${basedir}/nativelib/lzma -I${basedir}/nativelib/lz4'"/>
   	</exec>
 
     <javah
@@ -598,6 +635,13 @@
       <fileset dir="${build.native}/src/org/apache/hadoop/io/compress/snappy/.libs/" includes="libhadoopsnappy.*"/>
     </copy>
 
+    <copy todir="${build.native}/lib">
+      <fileset dir="${userGroupInfo.lib}" includes="libGetUserGroupInfo.*"/>
+    </copy>
+    <copy todir="${build.native}/lib">
+      <fileset dir="${cgroup.lib}" includes="libCGroupEventListener.*"/>
+    </copy>
+
   	<exec dir="${build.native}" executable="sh" failonerror="true">
   	  <arg line="${build.native}/libtool --mode=install cp ${build.native}/lib/libhadoop.la ${build.native}/lib"/>
     </exec>
@@ -607,6 +651,12 @@
     <copy file="${basedir}/nativelib/lzma/liblzma.so" tofile="${build.native}/lib/liblzma.so"/>
     <copy file="${basedir}/nativelib/lzma/liblzma.so" tofile="${build.native}/lib/liblzma.so.0"/>
     <copy file="${basedir}/nativelib/lzma/liblzma.so" tofile="${build.native}/lib/liblzma.so.5"/>
+    <delete>
+      <fileset dir="${build.native}/lib" includes="liblz4.so*"/>
+    </delete>
+    <copy file="${basedir}/nativelib/lz4/liblz4.so" tofile="${build.native}/lib/liblz4.so"/>
+    <copy file="${basedir}/nativelib/lz4/liblz4.so" tofile="${build.native}/lib/liblz4.so.0"/>
+    <copy file="${basedir}/nativelib/lz4/liblz4.so" tofile="${build.native}/lib/liblz4.so.5"/>
   </target>
 
   <target name="compile-core"
@@ -618,6 +668,7 @@
   <target name="compile-contrib" depends="compile-core,tools-jar,compile-c++-libhdfs">
      <subant target="compile">
         <property name="version" value="${version}"/>
+        <property name="javac.version" value="${javac.version}"/>
         <fileset file="${contrib.dir}/build.xml"/>
      </subant>
   </target>
@@ -665,10 +716,29 @@
         </section>
       </manifest>
       <fileset file="${conf.dir}/commons-logging.properties"/>
-      <fileset file="${conf.dir}/log4j.properties"/>
       <fileset file="${conf.dir}/hadoop-metrics.properties"/>
       <zipfileset dir="${build.webapps}" prefix="webapps"/>
     </jar>
+  </target>
+
+  <target name="jar-source" description="Make sources.jar">
+    <jar jarfile="${build.dir}/${final.name}-sources.jar">
+      <manifest>
+        <section name="org/apache/hadoop">
+          <attribute name="Implementation-Title" value="Hadoop"/>
+          <attribute name="Implementation-Version" value="${version}"/>
+          <attribute name="Implementation-Vendor" value="Facebook"/>
+        </section>
+      </manifest>
+      <fileset dir="${src.dir}/core" includes="*/**"/>
+      <fileset dir="${src.dir}/hdfs/" includes="*/**"/>
+      <fileset dir="${src.dir}/mapred/" includes="*/**"/>
+      <fileset dir="${src.dir}/native/src" includes="*/**"/>
+    </jar>
+    <subant target="jar-source">
+      <property name="version" value="${version}"/>
+      <fileset file="${contrib.dir}/build.xml"/>
+    </subant>
   </target>
 
   <!-- ================================================================== -->
@@ -872,7 +942,7 @@
       <sysproperty key="test.build.extraconf" value="${test.build.extraconf}" />
       <sysproperty key="hadoop.policy.file" value="hadoop-policy.xml"/>
       <sysproperty key="java.library.path"
-        value="${build.native}/lib:${lib.dir}/native/${build.platform}:${snappy.lib}"/>
+        value="${build.native}/lib:${lib.dir}/native/${build.platform}:${snappy.lib}:${configerator.lib}:${cgroup.lib}:{userGroupInfo.lib}"/>
       <sysproperty key="install.c++.examples" value="${install.c++.examples}"/>
       <sysproperty key="user.home" value="${test.user.home}"/>
       <env key="LD_LIBRARY_PATH" value="${build.native}/lib${path.separator}${env.LD_LIBRARY_PATH}"/>
@@ -935,13 +1005,7 @@
     </subant>
   </target>
 
-  <target name="test" depends="clean, compile, compile-native" description="Run core, contrib unit tests">
-    <subant target="test-core" failonerror="false">
-      <fileset file="build.xml"/>
-    </subant>
-    <subant target="test-contrib">
-     <fileset file="build.xml"/>
-    </subant>
+  <target name="test" depends="test-core, test-contrib" description="Run core, contrib unit tests">
   </target>
 
   <!-- Run all unit tests, not just Test*, and use non-test configuration. -->
@@ -1130,6 +1194,9 @@
         <packageset dir="${core.src.dir}"/>
         <packageset dir="${mapred.src.dir}"/>
     	<packageset dir="${examples.dir}"/>
+    	<packageset dir="${hdfs.src.dir}"/>
+    	<packageset dir="src/contrib/highavailability/src/java"/>
+    	<packageset dir="src/contrib/raid/src/java"/>
 
     	<packageset dir="src/contrib/streaming/src/java"/>
     	<packageset dir="src/contrib/data_join/src/java"/>
@@ -1156,6 +1223,9 @@
        <group title="contrib: Index" packages="org.apache.hadoop.contrib.index*"/>
        <group title="contrib: FailMon" packages="org.apache.hadoop.contrib.failmon*"/>
     </javadoc>
+    <jar jarfile="${build.dir}/${final.name}-javadoc.jar">
+      <fileset dir="${build.javadoc}" includes="**/*"/>
+    </jar>
   </target>
 
   <target name="api-xml" depends="ivy-retrieve-jdiff,javadoc,write-null">
@@ -1375,6 +1445,7 @@
     <env key="BUNDLE_SNAPPY_LIB" value="${bundle.snappy}"/>
     <env key="SNAPPY_LIB_DIR" value="${snappy.prefix}/lib"/>
 	  <arg line="${native.src.dir}/packageNativeHadoop.sh"/>
+    <env key="CGROUP_LIB_DIR" value="${cgroup.prefix}/lib"/>
     </exec>
 
     <subant target="package">

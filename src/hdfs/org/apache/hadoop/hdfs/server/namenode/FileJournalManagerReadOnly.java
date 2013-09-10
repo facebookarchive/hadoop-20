@@ -20,6 +20,7 @@ package org.apache.hadoop.hdfs.server.namenode;
 import java.io.IOException;
 
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.common.StorageErrorReporter;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 
@@ -34,33 +35,19 @@ public class FileJournalManagerReadOnly extends FileJournalManager {
     super(sd);
   }
 
-  public FileJournalManagerReadOnly(StorageDirectory sd, NameNodeMetrics metrics) {
-    super(sd, metrics);
+  public FileJournalManagerReadOnly(StorageDirectory sd,
+      NameNodeMetrics metrics, StorageErrorReporter errorReporter) {
+    super(sd, metrics, errorReporter);
   }
   
-  // allowed methods
-
-  public EditLogInputStream getInputStream(long fromTxnId) throws IOException {
-    return super.getInputStream(fromTxnId);
-  }
-  
-  public EditLogInputStream getInputStream(long fromTxnId,
-      boolean validateInProgressSegments) throws IOException {
-    return super.getInputStream(fromTxnId, validateInProgressSegments);
-  }
-
-  public boolean isSegmentInProgress(long startTxId) throws IOException {
-    return super.isSegmentInProgress(startTxId);
-  }
+  // methods not allowed
 
   public long getNumberOfTransactions(long fromTxnId) throws IOException,
       CorruptionException {
-    return super.getNumberOfTransactions(fromTxnId);
+    throw new IOException("Unsupported operation");
   }
-  
-  // all other methods are not allowed
 
-  public void format(StorageInfo si) throws IOException {
+  public void formatJournal(StorageInfo si) throws IOException {
     throw new IOException("Operation not supported");
   }
 

@@ -22,6 +22,8 @@ import java.util.Iterator;
 import java.util.Random;
 import java.net.*;
 
+import junit.framework.TestCase;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -38,7 +40,6 @@ import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyConfigurable;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyDefault;
-import org.apache.hadoop.net.StaticMapping;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -46,8 +47,8 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.BlockLocation;
 
 import static org.junit.Assert.*;
-import org.junit.BeforeClass;
 import org.junit.Test;
+
 /**
  * This class tests the replication of a DFS file.
  */
@@ -63,35 +64,7 @@ public class TestReplication {
   private static final Log LOG = LogFactory.getLog(
                                        "org.apache.hadoop.hdfs.TestReplication");
   
-  private static final String[] hosts4 = new String[] { "h1", "h2", "h3", "h4" };
-  private static final String[] hosts7 = new String[] { "h1", "h2", "h3", "h4", "h5", "h6", "h7" };
-  private static final String[] hosts8 = new String[] { "h1", "h2", "h3", "h4", "h5", "h6", "h7",
-      "h8" };
-  
-  @BeforeClass
-  public static void setUpBeforeClass() {
-    for (int i = 0; i < numDatanodes; i++) {
-      StaticMapping.addNodeToRack(hosts8[i], racks[i]);
-    }
-  }
-
-  private File createHostsFile(Configuration conf) throws IOException {
-    File baseDir = MiniDFSCluster.getBaseDirectory(conf);
-    baseDir.mkdirs();
-    File hostsFile = new File(baseDir, "hosts");
-    FileOutputStream out = new FileOutputStream(hostsFile);
-    out.write("h1\n".getBytes());
-    out.write("h2\n".getBytes());
-    out.write("h3\n".getBytes());
-    out.write("h4\n".getBytes());
-    out.write("h5\n".getBytes());
-    out.write("h6\n".getBytes());
-    out.write("h7\n".getBytes());
-    out.write("h8\n".getBytes());
-    out.close();
-    hostsFile.deleteOnExit();
-    return hostsFile;
-  }
+  private static final String[] racks4 = new String[] { racks[0], racks[1], racks[2], racks[3] };
 
   private void writeFile(FileSystem fileSys, Path name, int repl)
     throws IOException {
@@ -126,16 +99,20 @@ public class TestReplication {
       LocatedBlock blk = locations.get(i);
       DatanodeInfo[] datanodes = blk.getLocations();
       String[] topologyPaths = blockLocations[i].getTopologyPaths();
+      String[] racks = blockLocations[i].getRacks();
       assertTrue(topologyPaths.length == datanodes.length);
       for (int j = 0; j < topologyPaths.length; j++) {
         boolean found = false;
+        String matchedRack = null;
         for (int k = 0; k < racks.length; k++) {
           if (topologyPaths[j].startsWith(racks[k])) {
             found = true;
+            matchedRack = racks[k];
             break;
           }
         }
         assertTrue(found);
+        assertEquals("Rack info should be equal", matchedRack, racks[j]);
       }
     }
 
@@ -187,7 +164,7 @@ public class TestReplication {
     fileSys.delete(name, true);
     assertTrue(!fileSys.exists(name));
   }
-
+  
   /* 
    * Test if Datanode reports bad blocks during replication request
    */
@@ -248,17 +225,14 @@ public class TestReplication {
     }    
     MiniDFSCluster cluster = null;
     FileSystem fileSys = null;
+    DFSClient client = null;
     try {
-      conf.set("dfs.hosts", this.createHostsFile(conf).getAbsolutePath());
-      cluster = new MiniDFSCluster(conf, numDatanodes, racks, hosts8,
+      cluster = new MiniDFSCluster(conf, numDatanodes, racks, null,
           true, true);
       cluster.waitActive();
       cluster.getNameNode().namesystem.refreshNodes(conf);
       
-      InetSocketAddress addr = new InetSocketAddress("localhost",
-                                                     cluster.getNameNodePort());
-      DFSClient client = new DFSClient(addr, conf);
-      
+      client = new DFSClient(cluster.getNameNode().getNameNodeAddress(), conf);
       DatanodeInfo[] info = client.datanodeReport(DatanodeReportType.LIVE);
       assertEquals("Number of Datanodes ", numDatanodes, info.length);
       fileSys = cluster.getFileSystem();
@@ -280,6 +254,9 @@ public class TestReplication {
       checkFile(fileSys, file1, 2);
       cleanupFile(fileSys, file1);
     } finally {
+      if(client != null) {
+        client.close();
+      }
       if(fileSys != null)
         fileSys.close();
       if (cluster != null)
@@ -325,7 +302,6 @@ public class TestReplication {
     
     //wait for all the blocks to be replicated;
     LOG.info("Checking for block replication for " + filename);
-    int iters = 0;
     while (true) {
       boolean replOk = true;
       LocatedBlocks blocks = namenode.getBlockLocations(filename, 0, 
@@ -339,11 +315,9 @@ public class TestReplication {
         }
         int actual = block.getLocations().length;
         if ( actual < expected ) {
-          if (true || iters > 0) {
             LOG.info("Not enough replicas for " + block.getBlock() +
                                " yet. Expecting " + expected + ", got " + 
                                actual + ".");
-          }
           replOk = false;
           break;
         }
@@ -352,8 +326,6 @@ public class TestReplication {
       if (replOk) {
         return;
       }
-      
-      iters++;
       
       if (maxWaitSec > 0 && 
           (System.currentTimeMillis() - start) > (maxWaitSec * 1000)) {
@@ -421,14 +393,13 @@ public class TestReplication {
       conf.setClass("dfs.block.replicator.classname", clazz,
           BlockPlacementPolicy.class);
       conf.set("dfs.replication", Integer.toString(numDataNodes));
-      //first time format
-      conf.set("dfs.hosts", this.createHostsFile(conf).getAbsolutePath());
-      cluster = new MiniDFSCluster(conf, numDataNodes, null, hosts4, true, true);
+      cluster = new MiniDFSCluster(conf, numDataNodes, racks4, null, true, true);
 
       cluster.waitActive();
       for (DataNode dn : cluster.getDataNodes()) {
         dn.useInlineChecksum = inlineChecksum;
       }
+
       DFSClient dfsClient = new DFSClient(new InetSocketAddress("localhost",
                                             cluster.getNameNodePort()),
                                             conf);
@@ -502,7 +473,6 @@ public class TestReplication {
       conf = new Configuration();
       conf.setClass("dfs.block.replicator.classname", clazz,
           BlockPlacementPolicy.class);
-      conf.set("dfs.hosts", this.createHostsFile(conf).getAbsolutePath());
       // first time format
       conf.set("dfs.replication", Integer.toString(numDataNodes));
       conf.set("dfs.replication.pending.timeout.sec", Integer.toString(2));
@@ -510,10 +480,9 @@ public class TestReplication {
       conf.set("dfs.safemode.threshold.pct", "0.75f"); // only 3 copies exist
       conf.setBoolean("dfs.use.inline.checksum", !inlineChecksum);
       
-      cluster = new MiniDFSCluster(conf, numDataNodes * 2, null, hosts8, true,
+      cluster = new MiniDFSCluster(conf, numDataNodes * 2, racks, null, true,
           true, false);
       cluster.waitActive();
-      
       dfsClient = new DFSClient(new InetSocketAddress("localhost",
                                   cluster.getNameNodePort()),
                                   conf);
@@ -666,5 +635,36 @@ public class TestReplication {
         cluster.shutdown();
       }
     }  
+  }
+
+  /* 
+   * Test if rate cap takes effective
+   */
+  @Test
+  public void testRateCap() throws Exception {
+    Configuration conf = new Configuration();
+    conf.setLong("dfs.data.transfer.max.bytes.per.sec", 128 * 1024);
+    FileSystem fs = null;
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    try {
+      cluster.waitActive();
+      fs = cluster.getFileSystem();
+
+      // Create file with replication factor of 1
+      Path file1 = new Path("/tmp/testRateCap");
+      DFSTestUtil.createFile(fs, file1, 512 * 1024, (short) 1, 0);
+      DFSTestUtil.waitReplication(fs, file1, (short) 1);
+
+      // Make sure replication doesn't finish too fast.
+      long startTime = System.currentTimeMillis();
+      fs.setReplication(file1, (short) 2);
+      DFSTestUtil.waitReplication(fs, file1, (short) 2);
+      long endTime = System.currentTimeMillis();
+      long length = endTime - startTime;
+      System.out.println("Taking " + length + " ms to replicate.");
+      TestCase.assertTrue(endTime - startTime > 3700);
+    } finally {
+      cluster.shutdown();
+    }
   }
 }

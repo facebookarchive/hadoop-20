@@ -49,20 +49,20 @@ public class INodeDirectoryWithQuota extends INodeDirectory {
   
   /** constructor with no quota verification */
   INodeDirectoryWithQuota(
-      PermissionStatus permissions, long modificationTime, 
+      long id, PermissionStatus permissions, long modificationTime, 
       long nsQuota, long dsQuota)
   {
-    super(permissions, modificationTime);
+    super(id, permissions, modificationTime);
     this.nsQuota = nsQuota;
     this.dsQuota = dsQuota;
     this.nsCount = 1;
   }
   
   /** constructor with no quota verification */
-  INodeDirectoryWithQuota(String name, PermissionStatus permissions, 
+  INodeDirectoryWithQuota(long id, String name, PermissionStatus permissions, 
                           long nsQuota, long dsQuota)
   {
-    super(name, permissions);
+    super(id, name, permissions);
     this.nsQuota = nsQuota;
     this.dsQuota = dsQuota;
     this.nsCount = 1;
@@ -104,7 +104,7 @@ public class INodeDirectoryWithQuota extends INodeDirectory {
   /** Get the number of names in the subtree rooted at this directory
    * @return the size of the subtree rooted at this directory
    */
-  long numItemsInTree() {
+  public long numItemsInTree() {
     return nsCount;
   }
   

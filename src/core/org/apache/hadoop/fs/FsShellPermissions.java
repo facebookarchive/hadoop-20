@@ -135,14 +135,7 @@ class FsShellPermissions {
   
   private static class ChgrpHandler extends ChownHandler {
     ChgrpHandler(String groupStr) throws IOException {
-      super("chgrp");
-
-      Matcher matcher = chgrpPattern.matcher(groupStr);
-      if (!matcher.matches()) {
-        throw new IOException("'" + groupStr + "' does not match " +
-        "expected pattern for group");
-      }
-      group = matcher.group(1);
+      super(":"+groupStr);
     }
   }
 

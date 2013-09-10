@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.hdfs.notifier.server;
 
+import static org.junit.Assert.assertEquals;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -48,7 +50,6 @@ import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.util.InjectionEventI;
 import org.apache.hadoop.util.InjectionHandler;
 import org.junit.Test;
-import static org.junit.Assert.*;
 
 public class TestTransactionalEditLogReader {
 
@@ -165,6 +166,7 @@ public class TestTransactionalEditLogReader {
                 FSEditLogOpCodes.OP_START_LOG_SEGMENT);
             startOp.setTransactionId(firstTxId);
             FSEditLogTestUtil.writeToStreams(startOp, out);
+            LOG.info("Written op: " + startOp);
             writtenTransactions.add(startOp);
 
             currentTxId++;
@@ -194,6 +196,7 @@ public class TestTransactionalEditLogReader {
                   FSEditLogOpCodes.OP_END_LOG_SEGMENT);
               endOp.setTransactionId(lastTxId);
               FSEditLogTestUtil.writeToStreams(endOp, out);
+              LOG.info("Written op: " + endOp);
               writtenTransactions.add(endOp);
               currentTxId++;
             }
@@ -226,7 +229,7 @@ public class TestTransactionalEditLogReader {
         conf.setLong(NotifierConfig.LOG_READER_STREAM_TIMEOUT, 100);
         // will sleep for 100ms after exceptions
         conf.setLong(NotifierConfig.LOG_READER_STREAM_ERROR_SLEEP, 100);
-
+        
         EmptyServerCore core = new EmptyServerCore();
         core.setConfiguration(conf);
 
@@ -240,7 +243,7 @@ public class TestTransactionalEditLogReader {
           }
         } catch (IOException e) {
           // this will finally fail, because we close last segment
-          LOG.info("Exception: " + e.getMessage());
+          LOG.info("Exception: " + e.getMessage(), e);
         }
         return null;
       }
@@ -275,7 +278,9 @@ public class TestTransactionalEditLogReader {
     @Override
     protected void _processEvent(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.SERVERLOGREADER_UPDATE) {
-        readTransactions.add((FSEditLogOp) args[0]);
+        FSEditLogOp op = (FSEditLogOp) args[0];
+        LOG.info("read transaction: " + op.getTransactionId());
+        readTransactions.add(op);
       }
     }
 

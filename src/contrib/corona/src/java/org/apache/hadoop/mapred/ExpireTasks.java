@@ -33,8 +33,6 @@ import org.apache.commons.logging.LogFactory;
 public class ExpireTasks extends Thread {
   /** Logger. */
   private static final Log LOG = LogFactory.getLog(ExpireTasks.class);
-  /** Expiry interval. */
-  private static final long TASKTRACKER_EXPIRY_INTERVAL = 10 * 60 * 1000;
   /**
    * This is a map of the tasks that have been assigned to task trackers,
    * but that have not yet been seen in a status report.
@@ -67,6 +65,8 @@ public class ExpireTasks extends Thread {
 
   @Override
   public void run() {
+    final long sleepTime = Math.max(10000, Math.min(
+        cjt.getLaunchExpiryInterval(), cjt.getTaskExpiryInterval()) / 3);
     while (running) {
       try {
         long now = JobTracker.getClock().getTime();
@@ -82,7 +82,7 @@ public class ExpireTasks extends Thread {
             Map.Entry<TaskAttemptID, Long> pair = itr.next();
             TaskAttemptID taskId = pair.getKey();
             long age = now - (pair.getValue()).longValue();
-            if (age > TASKTRACKER_EXPIRY_INTERVAL) {
+            if (age > cjt.getLaunchExpiryInterval()) {
               LOG.error("Launching task " + taskId + " timed out after " +
                 (age / 1000) + " secs.");
               expiredLaunchingTasks.add(taskId);
@@ -111,8 +111,8 @@ public class ExpireTasks extends Thread {
         for (TaskAttemptID taskId : expiredRunningTasks) {
           cjt.expiredRunningTask(taskId);
         }
-        // Every 3 minutes check for any tasks that are overdue
-        Thread.sleep(TASKTRACKER_EXPIRY_INTERVAL / 3);
+        // Check for any tasks that are overdue every sleepTime msec
+        Thread.sleep(sleepTime);
       } catch (InterruptedException ie) {
         // Ignore. if shutting down, while condition will catch it.
         LOG.info(ExpireTasks.class + " interrupted");

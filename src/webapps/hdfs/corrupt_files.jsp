@@ -20,6 +20,7 @@
 %>
 <%@ page contentType="text/html; charset=UTF-8"
 	import="org.apache.hadoop.util.ServletUtil"
+	import="org.apache.hadoop.net.NetUtils"
 	import="org.apache.hadoop.fs.FileStatus"
 	import="org.apache.hadoop.fs.FileUtil"
 	import="org.apache.hadoop.fs.Path"
@@ -30,24 +31,23 @@
 <%
   NameNode nn = (NameNode) application.getAttribute("name.node");
   FSNamesystem fsn = nn.getNamesystem();
-  String namenodeLabel = nn.getNameNodeAddress().getHostName() + ":"
-      + nn.getNameNodeAddress().getPort();
+  String namenodeLabel = NetUtils.toIpPort(nn.getNameNodeAddress());
   Collection<FSNamesystem.CorruptFileBlockInfo> corruptFileBlocks = 
 	fsn.listCorruptFileBlocks("/", null);
   int corruptFileCount = corruptFileBlocks.size();
 %>
 
 <html>
-<link rel="stylesheet" type="text/css" href="/static/hadoop.css">
+<link rel="stylesheet" type="text/css" href="static/hadoop.css">
 <title>Hadoop <%=namenodeLabel%></title>
 <body>
 <h1> '<%=namenodeLabel%>'</h1>
 <br>
-<b><a href="/nn_browsedfscontent.jsp">Browse the filesystem</a></b>
+<b><a href="<%=namenodeLabel%>/nn_browsedfscontent.jsp">Browse the filesystem</a></b>
 <br>
-<b><a href="/logs/">Logs</a></b>
+<b><a href="<%=namenodeLabel%>/logs/">Logs</a></b>
 <br>
-<b><a href=/dfshealth.jsp> Go back to DFS home</a></b>
+<b><a href=<%=namenodeLabel%>/dfshealth.jsp> Go back to DFS home</a></b>
 <hr>
 <h3>Reported Corrupt Files</h3>
 <%

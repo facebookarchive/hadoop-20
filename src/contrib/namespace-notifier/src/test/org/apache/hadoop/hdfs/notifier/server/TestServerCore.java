@@ -43,7 +43,6 @@ public class TestServerCore {
   @BeforeClass
   public static void initConf() {
     conf = NotifierTestUtil.initGenericConf();
-    conf.set(ServerCore.SERVER_ID, "42");
   }
   
   @Test

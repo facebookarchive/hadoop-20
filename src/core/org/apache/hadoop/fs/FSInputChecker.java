@@ -48,6 +48,8 @@ abstract public class FSInputChecker extends FSInputStream {
   // cached file position
   private long chunkPos = 0;
   
+  protected FSClientReadProfilingData cliData = null;
+  
   /** Constructor
    * 
    * @param file The name of the file to be read
@@ -237,6 +239,10 @@ abstract public class FSInputChecker extends FSInputStream {
           if( needChecksum() ) {
             sum.update(b, off, read);
             verifySum(chunkPos);
+            
+            if (cliData != null) {
+              cliData.recordVerifyChunkCheckSumTime();
+            }
           }
           chunkPos += read;
         } 

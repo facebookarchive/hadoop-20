@@ -60,13 +60,21 @@ public class TestBlocksMap {
     FSEditLog.setRuntimeForTesting(runtime);
   }
 
-  private void insertBlocks(int numBlocks) {
+  private void insertBlocks(int numBlocks, boolean underConstruction) {
     Random r = new Random();
     map = new BlocksMap(1000, 0.75f, new MyNamesystem());
     Set<Long> ids = new HashSet<Long>(numBlocks);
 
     blockList = new HashSet<Block>(numBlocks);
-    iNode = new INodeFile();
+    if (underConstruction) {
+      INodeFile node = new INodeFile();
+      iNode = new INodeFileUnderConstruction(node.getId(),
+          node.getLocalNameBytes(), (short) 2,
+          node.getModificationTime(), 0, node.getPreferredBlockSize(),
+          node.getBlocks(), node.getPermissionStatus(), "", "", null);
+    } else {
+      iNode= new INodeFile();
+    }
     int inserted = 0;
 
     while (inserted < numBlocks) {
@@ -76,7 +84,7 @@ public class TestBlocksMap {
       ids.add(id);
       Block b = new Block(id, 0, GenerationStamp.FIRST_VALID_STAMP);
       blockList.add(b);
-      BlockInfo info = map.addINode(b, iNode);
+      BlockInfo info = map.addINode(b, iNode, iNode.getReplication());
       
       // create 2 datanode descriptors
       DatanodeDescriptor dd; 
@@ -92,7 +100,7 @@ public class TestBlocksMap {
   
   @Test
   public void testBlockInfoPlaceUpdate() throws IOException {
-    insertBlocks(100);
+    insertBlocks(100, true);
 
     for (Block b : blockList) {
       BlockInfo oldBlock = map.getBlockInfo(b);
@@ -112,20 +120,18 @@ public class TestBlocksMap {
 
       LOG.info("Updating block: " + oldBlock + " to: " + newBlock);
       // do update
-      newBlock = map.updateINode(oldBlock, newBlock, iNode);
+      newBlock = map.updateINode(oldBlock, newBlock, iNode, 
+          iNode.getReplication(), false);
       // preserved new generation stamp
       assertEquals(map.getStoredBlockWithoutMatchingGS(newBlock)
           .getGenerationStamp(), newGS);
       // check locations
-      assertEquals(2, newBlock.numNodes());
-      // check location references
-      assertTrue(loc0 == newBlock.getDatanode(0));
-      assertTrue(loc1 == newBlock.getDatanode(1));
+      assertEquals(0, newBlock.numNodes());
 
       // when id is mismatched, the block should not be updated
       newBlock.setBlockId(newBlock.getBlockId() + 1);
       try {
-        map.updateINode(oldBlock, newBlock, iNode);
+        map.updateINode(oldBlock, newBlock, iNode, iNode.getReplication(), false);
         fail("Should fail here");
       } catch (IOException e) {
         LOG.info("Can't update " + oldBlock + " to: " + newBlock + " "
@@ -166,7 +172,7 @@ public class TestBlocksMap {
     // test correct behaviour when the map is empty
 
     doReturn(new Long(1 * 1024 * 1024)).when(runtime).maxMemory();
-    insertBlocks(0);
+    insertBlocks(0, false);
 
     for (Block b : map.getBlocks()) {
       fail("There should be no blocks in the map");
@@ -189,7 +195,7 @@ public class TestBlocksMap {
     // make the map have very few buckets
     doReturn(new Long(memSize)).when(runtime).maxMemory();
 
-    insertBlocks(numBlocks);
+    insertBlocks(numBlocks, false);
     assertEquals(map.size(), numBlocks);
     assertEquals(blockList.size(), numBlocks);
 
@@ -213,7 +219,7 @@ public class TestBlocksMap {
     // make the map have very few buckets
     doReturn(new Long(memSize)).when(runtime).maxMemory();
 
-    insertBlocks(numBlocks);
+    insertBlocks(numBlocks, false);
     assertEquals(map.size(), numBlocks);
     assertEquals(blockList.size(), numBlocks);
 

@@ -158,7 +158,7 @@ public class CoronaClient extends Configured implements Tool {
         }
         System.out.printf("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
             session.getHandle(),
-            session.getName(),
+            session.getName().replace("\t", "\\t").replace("\n", "\\n"),
             session.getUserId(),
             session.getPoolInfo().getPoolGroupName(),
             session.getPoolInfo().getPoolName(),

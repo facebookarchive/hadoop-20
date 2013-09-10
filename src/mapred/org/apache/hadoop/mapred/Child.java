@@ -20,7 +20,11 @@ package org.apache.hadoop.mapred;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.File;
 import java.io.PrintStream;
+import java.io.FileInputStream;
+import java.io.InputStreamReader;
+import java.io.BufferedReader;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
 import java.util.List;
@@ -150,6 +154,26 @@ class Child {
         //are viewable immediately
         TaskLog.syncLogs(firstTaskid, taskid, isCleanup);
         JobConf job = new JobConf(task.getJobFile());
+        //read from bigParam if it exists
+        String bigParamStr = job.get("mapred.bigparam.path", "");
+        if ( bigParamStr != null && bigParamStr.length() > 0) {
+          Path bigParamPath = new Path(bigParamStr);
+          File file = new File(bigParamPath.toUri().getPath()).getAbsoluteFile();
+          BufferedReader in = new BufferedReader(new InputStreamReader(new FileInputStream(file)));
+          int MAX_BUFFER_SIZE = 1024; 
+
+          StringBuilder result = new StringBuilder(); 
+          char[] buffer = new char[MAX_BUFFER_SIZE];
+          int readChars = 0, totalChars = 0;
+          while ((readChars = in.read(buffer, 0, MAX_BUFFER_SIZE)) > 0) {
+            result.append(buffer, 0, readChars);
+            totalChars += readChars;
+          }
+          job.set("mapred.input.dir", result.toString());
+          LOG.info("Read mapred.input.dir: " + totalChars);
+          in.close();
+        }
+         
         umbilical = convertToDirectUmbilicalIfNecessary(umbilical, job, task);
         //setupWorkDir actually sets up the symlinks for the distributed
         //cache. After a task exits we wipe the workdir clean, and hence

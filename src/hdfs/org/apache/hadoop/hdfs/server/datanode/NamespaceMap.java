@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -28,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset.ActiveFile;
+import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSDatasetDeltaInterface;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
 
 
@@ -45,11 +47,13 @@ public class NamespaceMap {
     int bucketId;
     Map<Block, DatanodeBlockInfo> blockInfoMap;
     
-    BlockBucket() {
+    BlockBucket(int bucketId) {
       blockInfoMap = new HashMap<Block, DatanodeBlockInfo>();      
+      this.bucketId = bucketId;
     }
     
-    synchronized int removeUnhealthyVolumes(Collection<FSVolume> failed_vols) {
+    synchronized int removeUnhealthyVolumes(Collection<FSVolume> failed_vols,
+        FSDatasetDeltaInterface datasetDelta) {
       int removed_blocks = 0;
 
       Iterator<Entry<Block, DatanodeBlockInfo>> dbi = blockInfoMap.entrySet()
@@ -57,11 +61,14 @@ public class NamespaceMap {
       while (dbi.hasNext()) {
         Entry<Block, DatanodeBlockInfo> entry = dbi.next();
         for (FSVolume v : failed_vols) {
-          if (entry.getValue().getVolume() == v) {
+          if (entry.getValue().getBlockDataFile().getVolume() == v) {
             DataNode.LOG.warn("removing block " + entry.getKey().getBlockId()
                 + " from vol " + v.toString() + ", form namespace: "
                 + namespaceId);
             dbi.remove();
+            if (datasetDelta != null) {
+              datasetDelta.removeBlock(namespaceId, entry.getKey());
+            }
             removed_blocks++;
             break;
           }
@@ -73,14 +80,38 @@ public class NamespaceMap {
     synchronized DatanodeBlockInfo getBlockInfo(Block block) {
       return blockInfoMap.get(block);
     }
+    
+    synchronized void getBlockReport(List<Block> ret) {
+      for (Entry<Block, DatanodeBlockInfo> e : blockInfoMap.entrySet()) {
+        if (e.getValue().isFinalized()) {
+          ret.add(e.getKey());
+        }
+      }
+    }
+    
+    synchronized List<DatanodeBlockInfo> getBlockInfosForTesting() {
+      List<DatanodeBlockInfo> blockInfos = new ArrayList<DatanodeBlockInfo>();
+      for (Entry<Block, DatanodeBlockInfo> e : blockInfoMap.entrySet()) {
+        blockInfos.add(e.getValue());
+      }
+      return blockInfos;
+    }
 
     synchronized DatanodeBlockInfo addBlockInfo(Block block,
         DatanodeBlockInfo replicaInfo) {
-      return blockInfoMap.put(block, replicaInfo);
+      DatanodeBlockInfo oldInfo = blockInfoMap.put(block, replicaInfo);
+      if (oldInfo != null) {
+        oldInfo.getBlockDataFile().closeFileChannel();
+      }
+      return oldInfo;
     }
     
     synchronized DatanodeBlockInfo removeBlockInfo(Block block) {
-      return blockInfoMap.remove(block);
+      DatanodeBlockInfo removedInfo = blockInfoMap.remove(block);
+      if (removedInfo != null) {
+        removedInfo.getBlockDataFile().closeFileChannel();
+      }
+      return removedInfo;
     }
     
     /**
@@ -97,15 +128,74 @@ public class NamespaceMap {
     }
     
     synchronized void getBlockCrcPerVolume(
-        Map<FSVolume, List<DatanodeBlockInfo>> fsVolumeMap) {
-      for (DatanodeBlockInfo binfo : blockInfoMap.values()) {
-        if (fsVolumeMap.containsKey(binfo.getVolume())
+        Map<FSVolume, List<Map<Block, DatanodeBlockInfo>>> fsVolumeMap) {
+      for (Map.Entry<Block, DatanodeBlockInfo> entry: blockInfoMap.entrySet()) {
+        Block block = entry.getKey();
+        DatanodeBlockInfo binfo = entry.getValue();
+        if (fsVolumeMap.containsKey(binfo.getBlockDataFile().getVolume())
             && binfo.hasBlockCrcInfo()) {
-          fsVolumeMap.get(binfo.getVolume()).add(binfo);
+          fsVolumeMap.get(binfo.getBlockDataFile().getVolume()).get(bucketId)
+              .put(block, binfo);
         }
       }
     }
 
+    /**
+     * @param blockCrcInfos
+     * @return number of blocks whose CRCs were updated.
+     * @throws IOException
+     */
+    synchronized int updateBlockCrc(List<BlockCrcInfoWritable> blockCrcInfos)
+        throws IOException {
+      int updatedCount = 0;
+      Block tmpBlock = new Block();
+      for (BlockCrcInfoWritable blockCrcInfo : blockCrcInfos) {
+        tmpBlock.set(blockCrcInfo.blockId, 0, blockCrcInfo.blockGenStamp);
+        DatanodeBlockInfo info = getBlockInfo(tmpBlock);
+        if (info != null && !info.hasBlockCrcInfo()) {
+          updatedCount++;
+          info.setBlockCrc(blockCrcInfo.blockCrc);
+        }
+      }
+      return updatedCount;
+    }
+    
+    /**
+     * 
+     * @param reader
+     * @return number of blocks whose CRCs were updated.
+     * @throws IOException
+     */
+    int updateBlockCrc(BlockCrcFileReader reader) throws IOException {
+      int updatedCount = 0;
+      int batchCount = 0;
+      List<BlockCrcInfoWritable> listCrcInfo = new ArrayList<BlockCrcInfoWritable>();
+      while (reader.moveToNextRecordAndGetItsBucketId() == this.bucketId) {
+        BlockCrcInfoWritable blockCrcInfo = reader.getNextRecord();
+        if (blockCrcInfo == null) {
+          DataNode.LOG.warn("Connot get next block crc record from file.");
+          return updatedCount;
+        } else {
+          listCrcInfo.add(blockCrcInfo);
+          batchCount++;
+          if (batchCount >= 5000) {
+            // We don't want to hold the lock for too long.
+            updateBlockCrc(listCrcInfo);
+            listCrcInfo.clear();
+            batchCount = 0;
+            try {
+              Thread.sleep(1);
+            } catch (InterruptedException e) {
+              DataNode.LOG.warn("thread interrupted");
+            }
+          }
+        }
+      }
+      if (listCrcInfo.size() > 0) {
+        updatedCount += updateBlockCrc(listCrcInfo);        
+      }
+      return updatedCount;
+    }
   }
   
   // Map of block Id to DatanodeBlockInfo
@@ -120,7 +210,7 @@ public class NamespaceMap {
     ongoingCreates = new ConcurrentHashMap<Block, ActiveFile>();
     blockBuckets = new BlockBucket[numBucket];
     for (int i = 0; i < numBucket; i++) {
-      blockBuckets[i] = new BlockBucket();
+      blockBuckets[i] = new BlockBucket(i);
     }
   }
 
@@ -147,11 +237,13 @@ public class NamespaceMap {
     return blockBuckets[getBucketId(block)];
   }
 
-  int removeUnhealthyVolumes(Collection<FSVolume> failed_vols) {
+  int removeUnhealthyVolumes(Collection<FSVolume> failed_vols,
+      FSDatasetDeltaInterface datasetDelta) {
     int removed_blocks = 0;
     
     for (BlockBucket blockBucket : blockBuckets) {
-      removed_blocks += blockBucket.removeUnhealthyVolumes(failed_vols);
+      removed_blocks += blockBucket.removeUnhealthyVolumes(failed_vols,
+          datasetDelta);
     }
     return removed_blocks;
   }
@@ -204,6 +296,7 @@ public class NamespaceMap {
         DatanodeBlockInfo bi = bOld.removeBlockInfo(oldB);
         if (bi != null) {
           bNew.addBlockInfo(newB, bi);
+          bi.setBlock(newB);
         }
         return bi;
       }
@@ -277,19 +370,41 @@ public class NamespaceMap {
    * 
    * @param volumes
    *          Volumes are interested in get the list
-   * @return a map from FSVolume to a list of DatanodeBlockInfo in the volume
-   *         and has CRC information.
+   * @return a map from FSVolume to buckets -> (Block -> DatanodeBlockInfo) in
+   *         the volume and has CRC information. The first level value is a
+   *         list, each one on the list is for a bucket. The order on the list
+   *         is the bucket ID. The third level is a map from block to datablock
+   *         info.
    */
-  Map<FSVolume, List<DatanodeBlockInfo>> getBlockCrcPerVolume(
+  Map<FSVolume, List<Map<Block, DatanodeBlockInfo>>> getBlockCrcPerVolume(
       List<FSVolume> volumes) {
-    Map<FSVolume, List<DatanodeBlockInfo>> retMap = new HashMap<FSVolume, List<DatanodeBlockInfo>>();
+    Map<FSVolume, List<Map<Block, DatanodeBlockInfo>>> retMap =
+        new HashMap<FSVolume, List<Map<Block, DatanodeBlockInfo>>>();
     for (FSVolume volume : volumes) {
-      retMap.put(volume, new ArrayList<DatanodeBlockInfo>());
+      List<Map<Block, DatanodeBlockInfo>> newSubMap = new ArrayList<Map<Block, DatanodeBlockInfo>>(
+          numBucket);
+      for (int i = 0; i < numBucket; i++) {
+        newSubMap.add(new HashMap<Block, DatanodeBlockInfo>());
+      }
+      retMap.put(volume, newSubMap);
     }
     for (BlockBucket bb : blockBuckets) {
       bb.getBlockCrcPerVolume(retMap);
     }
     return retMap;
+  }
+  
+  /**
+   * @param reader
+   * @return number of blocks whose CRCs were updated.
+   * @throws IOException
+   */
+  int updateBlockCrc(BlockCrcFileReader reader) throws IOException {
+    int retValue = 0;
+    for (BlockBucket bucket : blockBuckets) {
+      retValue += bucket.updateBlockCrc(reader);
+    }
+    return retValue;
   }
   
   public String toString() {

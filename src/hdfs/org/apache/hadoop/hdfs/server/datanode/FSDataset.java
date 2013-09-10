@@ -18,7 +18,9 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
 import java.nio.channels.FileChannel;
+import java.io.DataInputStream;
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -43,17 +45,22 @@ import javax.management.NotCompliantMBeanException;
 import javax.management.ObjectName;
 import javax.management.StandardMBean;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.DF;
 import org.apache.hadoop.fs.DU;
 import org.apache.hadoop.fs.DU.NamespaceSliceDU;
 import org.apache.hadoop.fs.FileUtil;
-import org.apache.hadoop.fs.HardLink;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.server.common.GenerationStamp;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumReader.GenStampAndChecksum;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.datanode.DirectoryScanner.ScanDifference;
+import org.apache.hadoop.hdfs.server.datanode.NamespaceMap.BlockBucket;
 import org.apache.hadoop.hdfs.server.datanode.metrics.FSDatasetMBean;
 import org.apache.hadoop.hdfs.server.protocol.BlockFlags;
 import org.apache.hadoop.hdfs.server.protocol.BlockRecoveryInfo;
@@ -74,6 +81,16 @@ import org.apache.hadoop.util.DiskChecker.DiskOutOfSpaceException;
  *
  ***************************************************/
 public class FSDataset implements FSConstants, FSDatasetInterface {
+  
+  public static final Log LOG = LogFactory.getLog(FSDataset.class);
+  
+  interface FSDatasetDeltaInterface {
+    void addBlock(int namespaceId, Block block);
+
+    void removeBlock(int namespaceId, Block block);
+
+    void updateBlock(int namespaceId, Block oldBlock, Block newBlock);
+  }
   
   static String[] getFileNames(File[] files) {
     String[] fileNames = new String[files.length];
@@ -111,11 +128,12 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   class NamespaceSlice {
     private final int namespaceId;
     private final FSVolume volume; // volume to which this namespaceSlice belongs to
-    private final FSDir dataDir; // StorageDirectory/current/nsid/current
+    private final FSDir dataDir; // StorageDirectory/current/nsid/current/finalized
     private final File detachDir; // directory store Finalized replica
     private final File rbwDir ; // directory store RBW replica
     private final File tmpDir; // directory store Temporary replica
     private final NamespaceSliceDU dfsUsage;
+    private volatile boolean blockCrcFileLoaded;
 
     /**
      * 
@@ -144,29 +162,25 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       // recovery for these blocks. For example, crc validation.
       //
       this.tmpDir = new File(nsDir, "tmp");
-      if (tmpDir.exists()) {
-        FileUtil.fullyDelete(tmpDir);
+      if (tmpDir.exists()) {        
+        // rename tmpDir to prepare delete
+        File toDeleteDir = new File(tmpDir.getParent(),
+        DELETE_FILE_EXT + tmpDir.getName());
+        if (tmpDir.renameTo(toDeleteDir)) {
+          // asyncly delete the renamed directory
+          asyncDiskService.deleteAsyncFile(volume, toDeleteDir);
+        } else {
+          // rename failed, let's synchronously delete the directory
+          FileUtil.fullyDelete(tmpDir);
+          DataNode.LOG.warn("Deleted " + tmpDir.getPath());
+        }
       }
       
       this.rbwDir = new File(nsDirCur, DataStorage.STORAGE_DIR_RBW);
       // Files that were being written when the datanode was last shutdown
-      // should not be deleted.
+      // should not be deleted if append mode is enabled.
       if (rbwDir.exists()) {
-        if (supportAppends) {
-          recoverBlocksBeingWritten(rbwDir);
-        } else {
-          // rename tmpDir to prepare delete
-          File toDeleteDir = new File(tmpDir.getParent(),
-          DELETE_FILE_EXT + tmpDir.getName());
-          if (tmpDir.renameTo(toDeleteDir)) {
-            // asyncly delete the renamed directory
-            asyncDiskService.deleteAsyncFile(volume, toDeleteDir);
-          } else {
-            // rename failed, let's synchronously delete the directory
-            FileUtil.fullyDelete(tmpDir);
-            DataNode.LOG.warn("Deleted " + tmpDir.getPath());
-          }
-        }
+        recoverBlocksBeingWritten(rbwDir);
       }
       
       if (!rbwDir.mkdirs()) {
@@ -185,11 +199,20 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         }
       }
       this.dfsUsage = volume.dfsUsage.addNamespace(namespaceId, nsDir, conf);
+      this.blockCrcFileLoaded = false;
     }
     
     void getBlockInfo(LightWeightHashSet<Block> blocks) throws IOException{
       dataDir.getBlockInfo(blocks);
     }
+    
+   boolean isBlockCrcFileLoaded() {
+     return blockCrcFileLoaded;
+   }
+
+   void setBlockCrcFileLoaded(boolean blockCrcFileLoaded) {
+     this.blockCrcFileLoaded = blockCrcFileLoaded;
+   }
     
     /**
      * Recover detached files on datanode restart. If a detached block
@@ -284,7 +307,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
 
           volumeMap.add(namespaceId, b.block, binfo);
           volumeMap.addOngoingCreates(namespaceId, b.block, new ActiveFile(
-              binfo, true, ActiveFile.UNKNOWN_SIZE));
+              binfo, true, ActiveFile.UNKNOWN_SIZE, false));
         } finally {
           lock.writeLock().unlock();
         }
@@ -544,6 +567,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
                                  " from tmp to " + 
                                  dest.getAbsolutePath() );
         }
+        // fsyncIfPossible parent directory to persist rename.
+        if (datanode.syncOnClose) {
+          NativeIO.fsyncIfPossible(dest.getParent());
+        }
         if (DataNode.LOG.isDebugEnabled()) {
           DataNode.LOG.debug("addBlock: Moved " + src + " to " + dest);
         }
@@ -763,13 +790,14 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     }
   }
   
-  class FSVolume {
+  public class FSVolume {
     private final NamespaceMap namespaceMap;
     private final File currentDir;    // <StorageDirectory>/current
     private final DF usage;           
     private final long reserved;
     private final FSDataset dataset;
     private DU dfsUsage;
+    private final ExecutorService nativeIOExecutor;
     
     FSVolume(FSDataset dataset, File currentDir, Configuration conf) throws IOException {
       this.currentDir = currentDir; 
@@ -780,8 +808,13 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       this.namespaceMap = new NamespaceMap();
       this.dfsUsage = new DU(currentDir, conf);
       this.dfsUsage.start();
+      this.nativeIOExecutor = Executors.newSingleThreadExecutor();
     }
     
+    public Future<?> submitNativeIOTask(Runnable task) {
+      return nativeIOExecutor.submit(task);
+    }
+
     /**
      * It is the only method a caller is supposed to access namespaceMap.
      * This method will return a immutable map. It is a snapshot.
@@ -799,7 +832,23 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     public File getDir() {
       return currentDir.getParentFile();
     }
-    
+        
+    public File getBlockCrcFile(int namespaceId) {
+      NamespaceSlice ns = getNamespaceSlice(namespaceId);
+      if (ns == null) {
+        return null;
+      }
+      return new File(ns.getDirectory(), Storage.STORAGE_BLOCK_CRC);
+    }
+
+    public File getBlockCrcTmpFile(int namespaceId) {
+      NamespaceSlice ns = getNamespaceSlice(namespaceId);
+      if (ns == null) {
+        return null;
+      }
+      return new File(ns.getDirectory(), Storage.STORAGE_TMP_BLOCK_CRC);
+    }
+
     public File getCurrentDir() {
       return currentDir;
     }
@@ -807,6 +856,23 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     public File getRbwDir(int namespaceId) throws IOException {
       NamespaceSlice ns = getNamespaceSlice(namespaceId);
       return ns.getRbwDir();
+    }
+    
+    void setNamespaceBlockCrcLoaded(int namespaceId, boolean loaded) {
+      NamespaceSlice ns = getNamespaceSlice(namespaceId);
+      if (ns != null) {
+        ns.setBlockCrcFileLoaded(loaded);
+      }
+    }
+
+    boolean isNamespaceBlockCrcLoaded(int namespaceId) {
+      NamespaceSlice ns = getNamespaceSlice(namespaceId);
+      if (ns != null) {
+        return ns.isBlockCrcFileLoaded();
+      } else {
+        // if the namespace is not added
+        return false;
+      }
     }
     
     void decDfsUsed(int namespaceId, long value) {
@@ -857,7 +923,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     String getFileSystem() throws IOException {
       return usage.getFilesystem();
     }
-     
+
     File addBlock(int namespaceId, Block b, File f, boolean inlineChecksum,
         int checksumType, int bytesPerChecksum) throws IOException {
       NamespaceSlice ns = getNamespaceSlice(namespaceId);
@@ -942,6 +1008,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         ns.shutdown();
       }
       dfsUsage.shutdown();
+      nativeIOExecutor.shutdownNow();
     }
     
     void clearPath(int namespaceId, File f) throws IOException{
@@ -1040,6 +1107,15 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
 
     public FSVolume[] getVolumes() {
       return volumeList.getVolumeListSnapshot();
+    }
+    
+    boolean isValid(FSVolume volume) {
+      for (FSVolume vol : volumeList.getVolumeListSnapshot()) {
+        if (vol == volume) {
+          return true;
+        }
+      }
+      return false;
     }
       
     private FSVolume getNextVolume(long blockSize) throws IOException {
@@ -1244,20 +1320,13 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         v.addNamespace(namespaceId, nsDir, conf, supportAppends);
       }
     }
-    
-    private void addNamespace(FSVolume[] vs, int namespaceId, String nsDir, Configuration conf)
-        throws IOException {    
-      for (FSVolume v : vs) {
-        v.addNamespace(namespaceId, nsDir, conf, supportAppends);
-      }
-    }
 
     private void removeNamespace(int namespaceId) {
       FSVolume[] volumes = this.getVolumes();
 
       for (FSVolume v : volumes) {
         v.shutdownNamespace(namespaceId);
-      }
+      } 
     }
     
     public String toString() {
@@ -1338,8 +1407,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     final boolean wasRecoveredOnStartup;
 
     ActiveFile(DatanodeBlockInfo datanodeBlockInfo, List<Thread> list,
-        long expectedSize) throws IOException {
-      this(datanodeBlockInfo, false, expectedSize);
+        long expectedSize, boolean enable) throws IOException {
+      this(datanodeBlockInfo, false, expectedSize, enable);
       if (list != null) {
         threads.addAll(list);
       }
@@ -1353,7 +1422,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
      * @throws IOException 
      */
     private ActiveFile(DatanodeBlockInfo datanodeBlockInfo, boolean recovery,
-                       long expectedSize)
+                       long expectedSize, boolean enable)
         throws IOException {
       this.datanodeBlockInfo = datanodeBlockInfo;
       long sizeFromDisk;
@@ -1374,9 +1443,9 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       }
       bytesReceived = bytesAcked = bytesOnDisk = sizeFromDisk;
       crcUpdater = new BlockCrcUpdater(this.getBytesPerChecksum(),
-          bytesReceived == 0);
+          enable && bytesReceived == 0);
       wasRecoveredOnStartup = recovery;
-      finalized = false;
+      finalized = false;      
     }
 
     @Override
@@ -1410,8 +1479,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       return datanodeBlockInfo.getDataFileToRead();
     }
 
-    public File getDataFile() {
-      return datanodeBlockInfo.file;
+    private File getDataFile() {
+      return datanodeBlockInfo.getBlockDataFile().getFile();
     }
     
     public String toString() {
@@ -1459,9 +1528,9 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     }
 
     @Override
-    public void updateBlockCrc(long offset, boolean isLastChunk, int length,
+    public void updateBlockCrc(long offset, int length,
         int crc) {
-      crcUpdater.updateBlockCrc(offset, isLastChunk, length, crc);
+      crcUpdater.updateBlockCrc(offset, length, crc);
     }
 
     @Override
@@ -1472,8 +1541,12 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     BlockCrcUpdater getCrcUpdater() {
       return crcUpdater;
     }
-  }
-  
+
+    @Override
+    public BlockDataFile getBlockDataFile() throws IOException {
+      return datanodeBlockInfo.getBlockDataFile();
+    }
+  }  
   
   /**
    * Check if a file is scheduled for deletion
@@ -1534,6 +1607,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   private boolean initialized = false;
   
   VolumeMap volumeMap; 
+  BlockCrcMapFlusher blockCrcMapFlusher;
+  Thread blockCrcMapFlusherThread = null;
   static  Random random = new Random();
   FSDatasetAsyncDiskService asyncDiskService;
   ReentrantReadWriteLock lock = new ReentrantReadWriteLock(true);
@@ -1552,6 +1627,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     this.conf = conf;
     this.maxBlocksPerDir = conf.getInt("dfs.datanode.numblocks", 64);
     volumeMap = new VolumeMap(numNamespaces);
+  }
+  
+  void setDatasetDelta(FSDatasetDeltaInterface stateChangeCallback) {
+    volumeMap.setDatasetDelta(stateChangeCallback);
   }
   
   @Override
@@ -1591,6 +1670,11 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       int threads = conf.getInt("dfs.datanode.blockscanner.threads", 1);
       volumes = new FSVolumeSet(volArray, threads, datanode.isSupportAppends());
       registerMBean(storage.getStorageID());
+      blockCrcMapFlusher = new BlockCrcMapFlusher(datanode, volumeMap,
+          volumes, conf.getLong("dfs.block.crc.flush.interval", 600000));
+      blockCrcMapFlusherThread = new Thread(blockCrcMapFlusher,
+          "Block Crc Flusher");
+      blockCrcMapFlusherThread.start();
       initialized = true;
     } finally {
       lock.writeLock().unlock();
@@ -1860,7 +1944,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   private void setDataFileForBlock(int namespaceId, Block block, File newDataFile) {
     DatanodeBlockInfo info = volumeMap.get(namespaceId, block);
     if (info != null) {
-      info.setFile(newDataFile);
+      info.getBlockDataFile().setFile(newDataFile);
     }
   }
   
@@ -1887,7 +1971,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
             + " doesn't exist or has been recovered to a new generation ");
       }
 
-      File blockFile = binfo.file;
+      File blockFile = binfo.getBlockDataFile().getFile();
   
       long oldgs;
       File oldMetaFile = null;
@@ -1949,24 +2033,24 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       ActiveFile file = null;
       if (newblock.getNumBytes() < oldBlockLength) {
         if (!binfo.isInlineChecksum()) {
-          new BlockWithChecksumFileWriter(blockFile, tmpMetaFile)
-              .truncateBlock(oldBlockLength, newblock.getNumBytes());
+          new BlockWithChecksumFileWriter(binfo.getBlockDataFile(), tmpMetaFile)
+            .truncateBlock(oldBlockLength, newblock.getNumBytes());
         } else {
-          new BlockInlineChecksumWriter(blockFile, binfo.getChecksumType(),
+          new BlockInlineChecksumWriter(binfo.getBlockDataFile(), binfo.getChecksumType(),
               binfo.getBytesPerChecksum(), datanode.writePacketSize)
-              .truncateBlock(newblock.getNumBytes());
+            .truncateBlock(newblock.getNumBytes());
         }
-      file = volumeMap.getOngoingCreates(namespaceId, oldblock);
-      if (file != null) {
-        file.setBytesAcked(newblock.getNumBytes());
-        file.setBytesOnDisk(newblock.getNumBytes());
-        file.setBytesReceived(newblock.getNumBytes());
-      } else {
-        // This should never happen unless called from unit tests.
-        binfo.syncInMemorySize();
+        file = volumeMap.getOngoingCreates(namespaceId, oldblock);
+        if (file != null) {
+          file.setBytesAcked(newblock.getNumBytes());
+          file.setBytesOnDisk(newblock.getNumBytes());
+          file.setBytesReceived(newblock.getNumBytes());
+        } else {
+          // This should never happen unless called from unit tests.
+          binfo.syncInMemorySize();
+        }
       }
-      }
-  
+
       String newDataFileName;
       if (!binfo.isInlineChecksum()) {
         //rename the tmp file to the new meta file (with new generation stamp)
@@ -1980,6 +2064,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         File newDataFile = new File(blockFile.getParent(), newDataFileName);
         if (!blockFile.renameTo(newDataFile)) {
           throw new IOException("Cannot rename data file to " + newDataFileName);
+        }
+        // fsyncIfPossible parent directory to persist rename.
+        if (datanode.syncOnClose) {
+          NativeIO.fsyncIfPossible(newDataFile.getParent());
         }
         setDataFileForBlock(namespaceId, oldblock, newDataFile);
       }
@@ -2022,7 +2110,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
    * If replicationRequest is true, then this operation is part of a block
    * replication request.
    */
-  public DatanodeBlockWriter writeToBlock(int namespaceId, Block b,
+  public DatanodeBlockWriter writeToBlock(int namespaceId, Block b, Block newBlock,
       boolean isRecovery, boolean replicationRequest, int checksumType, int bytesPerChecksum)
       throws IOException {
     //
@@ -2048,6 +2136,13 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     List<Thread> threads = null;
     long expectedFileSize = ActiveFile.UNKNOWN_SIZE;
     boolean inlineChecksum = datanode.useInlineChecksum;
+    DatanodeBlockInfo binfo;
+    FSVolume v = null;
+    Block targetBlock = b;
+    if (newBlock != null && newBlock != b) {
+      targetBlock = newBlock;
+    }
+
     lock.writeLock().lock();
     try {
 
@@ -2071,34 +2166,43 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         }
         volumeMap.removeOngoingCreates(namespaceId, b);
       }
-      FSVolume v = null;
       if (!isRecovery) {
+        if (newBlock != null && b != newBlock) {
+          throw new IOException("newBlock is not allowed except append case. ");
+        }
         v = volumes.getNextVolume(blockSize);
         // create temporary file to hold block in the designated volume
         f = createTmpFile(namespaceId, v, b, replicationRequest,
             inlineChecksum, checksumType, bytesPerChecksum);
       } else if (f != null) {
         DataNode.LOG.info("Reopen already-open Block for append " + b);
+        if (newBlock != null && b != newBlock) {
+          throw new IOException("newBlock is not allowed except append case. ");
+        }
         // create or reuse temporary file to hold block in the designated volume
-        DatanodeBlockInfo binfo = volumeMap.get(namespaceId, b);
-        inlineChecksum = binfo.isInlineChecksum();
-        v = binfo.getVolume();
+        DatanodeBlockInfo oldBinfo = volumeMap.get(namespaceId, b);
+        inlineChecksum = oldBinfo.isInlineChecksum();
+        v = oldBinfo.getBlockDataFile().getVolume();
         volumeMap.add(namespaceId, b, new DatanodeBlockInfo(v, f,
             DatanodeBlockInfo.UNFINALIZED, true, inlineChecksum, checksumType,
             bytesPerChecksum, false, 0));
       } else {
         // reopening block for appending to it.
         DataNode.LOG.info("Reopen Block for append " + b);
-        DatanodeBlockInfo binfo = volumeMap.get(namespaceId, b);
-        inlineChecksum = binfo.isInlineChecksum();
-        v = binfo.getVolume();
-        f = createTmpFile(namespaceId, v, b, replicationRequest,
+        if (newBlock == null) {
+          throw new IOException(
+              "newBlock is required for append af file to write. ");
+        }
+        DatanodeBlockInfo oldBinfo = volumeMap.get(namespaceId, b);
+        inlineChecksum = oldBinfo.isInlineChecksum();
+        v = oldBinfo.getBlockDataFile().getVolume();
+        f = createTmpFile(namespaceId, v, newBlock, replicationRequest,
             inlineChecksum, checksumType, bytesPerChecksum);
         File blkfile = getBlockFile(namespaceId, b);
 
         if (!inlineChecksum) {
           File oldmeta = BlockWithChecksumFileReader.getMetaFile(this, namespaceId, b);
-          File newmeta = BlockWithChecksumFileWriter.getMetaFile(f, b);
+          File newmeta = BlockWithChecksumFileWriter.getMetaFile(f, newBlock);
 
           // rename meta file to tmp directory
           DataNode.LOG.debug("Renaming " + oldmeta + " to " + newmeta);
@@ -2122,6 +2226,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
                                   " to tmp dir " + f);
           }
         }
+        // fsyncIfPossible parent directory to persist rename.
+        if (datanode.syncOnClose) {
+          NativeIO.fsyncIfPossible(blkfile.getParent());
+        }
       }
       if (f == null) {
         DataNode.LOG.warn("Block " + b + " reopen failed " +
@@ -2132,7 +2240,6 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       // If this is a replication request, then this is not a permanent
       // block yet, it could get removed if the datanode restarts. If this
       // is a write or append request, then it is a valid block.
-      DatanodeBlockInfo binfo;
       if (replicationRequest) {
         binfo = new DatanodeBlockInfo(v, f, DatanodeBlockInfo.UNFINALIZED,
             false, inlineChecksum, checksumType, bytesPerChecksum, false, 0);
@@ -2140,9 +2247,13 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         binfo = new DatanodeBlockInfo(v, f, DatanodeBlockInfo.UNFINALIZED,
             true, inlineChecksum, checksumType, bytesPerChecksum, false, 0);
       }
-      volumeMap.add(namespaceId, b, binfo); 
-      volumeMap.addOngoingCreates(namespaceId, b, new ActiveFile(binfo,
-          threads, expectedFileSize));
+      if (newBlock != null && newBlock != b) {
+        volumeMap.remove(namespaceId, b);
+      }
+
+      volumeMap.add(namespaceId, targetBlock, binfo);
+      volumeMap.addOngoingCreates(namespaceId, targetBlock, new ActiveFile(binfo,
+          threads, expectedFileSize, datanode.updateBlockCrcWhenWrite));
       
     } finally {
       lock.writeLock().unlock();
@@ -2167,15 +2278,15 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       DataNode.LOG.debug("writeTo blockfile is " + f + " of size " + f.length());
     }
     if (inlineChecksum) {
-      return new BlockInlineChecksumWriter(f, checksumType, bytesPerChecksum,
-          datanode.writePacketSize);
+      return new BlockInlineChecksumWriter(binfo.getBlockDataFile(),
+          checksumType, bytesPerChecksum, datanode.writePacketSize);
     } else {
-      File metafile = BlockWithChecksumFileWriter.getMetaFile(f, b);
+      File metafile = BlockWithChecksumFileWriter.getMetaFile(f, targetBlock);
       if (DataNode.LOG.isDebugEnabled()) {
         DataNode.LOG.debug("writeTo metafile is " + metafile + " of size "
             + metafile.length());
       }
-      return new BlockWithChecksumFileWriter(f, metafile);
+      return new BlockWithChecksumFileWriter(binfo.getBlockDataFile(), metafile);
     }
   }
   
@@ -2185,7 +2296,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     lock.writeLock().lock();
     try {
         if ( vol == null ) {
-          vol = volumeMap.get(namespaceId, blk).getVolume();
+          vol = volumeMap.get(namespaceId, blk).getBlockDataFile().getVolume();
           if ( vol == null ) {
             throw new IOException("Could not find volume for block " + blk);
           }
@@ -2238,7 +2349,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       if (f == null || !f.exists()) {
         throw new IOException("No temporary file " + f + " for block " + b);
       }
-      FSVolume v = binfo.getVolume();
+      FSVolume v = binfo.getBlockDataFile().getVolume();
       if (v == null) {
         throw new IOException("No volume for temporary file " + f + 
                               " for block " + b);
@@ -2251,9 +2362,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
           namespaceId,
           b,
           new DatanodeBlockInfo(v, dest, activeFile.getBytesWritten(), true,
-              activeFile.isInlineChecksum(), binfo.getChecksumType(), binfo
-                  .getBytesPerChecksum(), activeFile.getCrcUpdater().isCrcValid(),
-                  activeFile.getCrcUpdater().getBlockCrc()));
+              activeFile.isInlineChecksum(), binfo.getChecksumType(),
+              binfo.getBytesPerChecksum(),
+              activeFile.getCrcUpdater().isCrcValid(activeFile.getBytesWritten()),
+              activeFile.getCrcUpdater().getBlockCrc()));
       ActiveFile af = volumeMap.removeOngoingCreates(namespaceId, b);
       af.blockFinalize();
     } finally {
@@ -2272,7 +2384,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     if (!validate && blockInfo == null) {
       return false; // block is not finalized
     }
-    FSVolume v = blockInfo.getVolume();
+    FSVolume v = blockInfo.getBlockDataFile().getVolume();
     if (v == null) {
       DataNode.LOG.warn("No volume for block " + b);
       return false; // block is not finalized
@@ -2381,20 +2493,21 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   }
   
   /**
-   * Return a table of block data for given namespace
+   * Get the list of finalized blocks from in-memory blockmap for a block pool.
    */
-  public Block[] getBlockReport(int namespaceId) {
-    // getBlockReport doesn't grant the global lock as we believe it is
-    // OK to get some inconsistent partial results. The inconsistent
-    // information will finally be fixed by the next incremental
-    LightWeightHashSet<Block> blockSet = new LightWeightHashSet<Block>();
-    volumes.getBlockInfo(namespaceId, blockSet);
-    Block blockTable[] = new Block[blockSet.size()];
-    int i = 0;
-    for (Iterator<Block> it = blockSet.iterator(); it.hasNext(); i++) {
-      blockTable[i] = it.next();
+  public Block[] getBlockReport(int namespaceId) throws IOException {
+    ArrayList<Block> ret = new ArrayList<Block>();
+    org.apache.hadoop.hdfs.server.datanode.NamespaceMap nm = volumeMap
+        .getNamespaceMap(namespaceId);
+    if (nm == null) {
+      return new Block[0];
     }
-    return blockTable;
+    int n = nm.getNumBucket();
+    for (int i = 0; i < n; i++) {
+      BlockBucket bb = nm.getBucket(i);
+      bb.getBlockReport(ret);
+    }
+    return ret.toArray(new Block[ret.size()]);
   }
 
   /**
@@ -2436,7 +2549,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       if (checkSize) {
         blockInfo.verifyFinalizedSize();
       }
-      f = blockInfo.file;
+      f = blockInfo.getBlockDataFile().getFile();
       assert f != null;
 
       if(f.exists()) {
@@ -2471,7 +2584,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     // Try to find out block size
     long localBlockSize;
     if (f == null) {
-      f = info.getTmpFile(namespaceId, b);
+      f = info.getBlockDataFile().getTmpFile(namespaceId, b);
       if (f == null) {
         throw new IOException("Block " + b + " does not exist on disk.");
       }
@@ -2584,9 +2697,10 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       File f = null;
       FSVolume v;
       boolean inlineChecksum;
+      DatanodeBlockInfo dinfo = null;
       lock.writeLock().lock();
       try {
-        DatanodeBlockInfo dinfo = volumeMap.get(namespaceId, invalidBlks[i]);
+        dinfo = volumeMap.get(namespaceId, invalidBlks[i]);
         if (dinfo == null) {
           // It is possible that after block reports, Datanodes receive
           // duplicate invalidate requests from name-node. We just skip
@@ -2600,7 +2714,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         }
         inlineChecksum = dinfo.isInlineChecksum();
         f = dinfo.getDataFileToRead();
-        v = dinfo.getVolume();
+        v = dinfo.getBlockDataFile().getVolume();
         if (f == null) {
           DataNode.LOG.warn("Unexpected error trying to delete block "
                             + invalidBlks[i] + 
@@ -2631,6 +2745,9 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       } finally {
         lock.writeLock().unlock();
       }
+      
+      // close the File Channel
+      dinfo.getBlockDataFile().closeFileChannel();
 
       //rename the files to be deleted
       //for safety we add prefix instead of suffix,
@@ -2648,13 +2765,14 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       }
 
       if((!f.renameTo(blockFileRenamed)) ||
-		  (!inlineChecksum && !metaFile.renameTo(metaFileRenamed))) {
-	  DataNode.LOG.warn("Unexpected error trying to delete block "
-                  + invalidBlks[i] +
-                  ". Cannot rename files for deletion.");
-	  error = true;
-	  continue;
+          (!inlineChecksum && !metaFile.renameTo(metaFileRenamed))) {
+        DataNode.LOG.warn("Unexpected error trying to delete block "
+            + invalidBlks[i] +
+            ". Cannot rename files for deletion.");
+        error = true;
+        continue;
       }
+
       if(invalidBlks[i].getNumBytes() != BlockFlags.NO_ACK){
         datanode.notifyNamenodeDeletedBlock(namespaceId, invalidBlks[i]);
       }
@@ -2718,12 +2836,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     long total_blocks=0, removed_blocks=0;
     List<FSVolume> failed_vols = null;
 
-    lock.readLock().lock();
-    try {
-      failed_vols = volumes.checkDirs();
-    } finally {
-      lock.readLock().unlock();
-    }
+    failed_vols = volumes.checkDirs();
 
     //if there no failed volumes return
     if(failed_vols == null) 
@@ -2850,6 +2963,17 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
   }
 
   public void shutdown() {
+    if (blockCrcMapFlusher != null) {
+      blockCrcMapFlusher.setClose();
+    }
+    if (blockCrcMapFlusherThread != null) {
+      blockCrcMapFlusherThread.interrupt();
+      try {
+        this.blockCrcMapFlusherThread.join();
+        this.blockCrcMapFlusherThread = null;
+      } catch (InterruptedException ie) {
+      }
+    }
     if (mbeanName != null)
       MBeanUtil.unregisterMBean(mbeanName);
     if (versionBeanName != null) {
@@ -2886,6 +3010,44 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
       volumes.addNamespace(namespaceId, nsDir, conf);
     } finally {
       lock.writeLock().unlock();
+    }
+    
+    // Load block CRCs file files
+    int numBuckets = volumeMap.getNumBuckets(namespaceId);
+    for (FSVolume volume : volumes.getVolumes()) {
+      try {
+        File blockCrcFile = volume.getBlockCrcFile(namespaceId);
+          
+        if (blockCrcFile == null || !blockCrcFile.exists()) {
+          continue;
+        }
+        int numUpdated = 0;
+        FileInputStream fis = new FileInputStream(blockCrcFile);
+        try {
+          BlockCrcFileReader reader = new BlockCrcFileReader(
+              new DataInputStream(fis));
+          reader.readHeader();
+          if (reader.getNumBuckets() != numBuckets) {
+            // TODO: support it if needed. Now it's not clear whether we will
+            // ever need it.
+            DataNode.LOG
+                .warn("Do not yet support loading block CRCs if bucket size changes: bucket size on disk: "
+                    + reader.getNumBuckets());
+          } else {
+            numUpdated += volumeMap.updateBlockCrc(namespaceId, reader);
+          }
+        } finally {
+          fis.close();
+        }
+        DataNode.LOG.info("Finish loading Block CRC file for namespace "
+            + namespaceId + " volume " + volume + " " + numUpdated
+            + " blocks' CRC updated.");
+      } catch (IOException ioe) {
+        DataNode.LOG.warn("IOException when try to load block CRC fle from volume"
+            + volume.getDir(), ioe);
+      } finally {
+        volume.setNamespaceBlockCrcLoaded(namespaceId, true);
+      }
     }
   }
   
@@ -3057,7 +3219,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     // the same host.
     DatanodeBlockInfo blockInfo = volumeMap.get(srcNamespaceId, srcBlock);
     if (blockInfo != null) {
-      dstVol = blockInfo.getVolume();
+      dstVol = blockInfo.getBlockDataFile().getVolume();
     } else {
       for(FSVolume volume : volumes.getVolumes()) {
         String volFileSystem = volume.getFileSystem();
@@ -3143,7 +3305,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
           bytesPerChecksum, false, 0);
       volumeMap.add(dstNamespaceId, dstBlock, binfo);
       volumeMap.addOngoingCreates(dstNamespaceId, dstBlock, new ActiveFile(
-          binfo, threads, ActiveFile.UNKNOWN_SIZE));      
+          binfo, threads, ActiveFile.UNKNOWN_SIZE, false));      
     } finally {
       lock.writeLock().unlock();
     }
@@ -3186,7 +3348,7 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
         blkSize = fileSize;
       }
 
-      FSVolume dstVol = info.getVolume();
+      FSVolume dstVol = info.getBlockDataFile().getVolume();
       // Finalize block on disk.
       File dest = dstVol.addBlock(dstNamespaceId, dstBlock, dstBlockFile,
           info.isInlineChecksum(), info.getChecksumType(),
@@ -3239,7 +3401,8 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     if (!isValidBlock(namespaceId, block, false)) {
       throw new IOException("Invalid block");
     }
-    return volumeMap.get(namespaceId, block).getVolume().getFileSystem();
+    return volumeMap.get(namespaceId, block).getBlockDataFile().getVolume()
+        .getFileSystem();
   }
 
   static File createTmpFile(Block b, File f) throws IOException {
@@ -3269,6 +3432,141 @@ public class FSDataset implements FSConstants, FSDatasetInterface {
     } catch (Exception e) {
       return -1;
     }
-  }
+  }  
+  
+  /**
+   * Reconcile the difference between blocks on the disk and blocks in
+   * volumeMap
+   *
+   * Check the given block for inconsistencies. Look at the
+   * current state of the block and reconcile the differences as follows:
+   * <ul>
+   * <li>If the block file is missing, delete the block from volumeMap</li>
+   * <li>If the block file exists and the block is missing in volumeMap,
+   * add the block to volumeMap <li>
+   * <li>If generation stamp does not match, then update the block with right
+   * generation stamp</li>
+   * <li>If the block length in memory does not match the actual block file length
+   * then mark the block as corrupt and update the block length in memory</li>
+   * <li>If the file in {@link ReplicaInfo} does not match the file on
+   * the disk, update {@link ReplicaInfo} with the correct file</li>
+   * </ul>
+   *
+   * @param blockId Block that differs
+   * @param diskFile Block file on the disk
+   * @param diskMetaFile Metadata file from on the disk
+   * @param vol Volume of the block file
+   */
+  public void checkAndUpdate(Integer nsid, FSDatasetDelta delta,
+      ScanDifference info) throws IOException {
 
+    long blockId = info.getBlockId();
+
+    lock.writeLock().lock();
+    try {
+      // we don't want delta to record changes we do during reconciliation
+      delta.stopRecordingDelta();
+
+      if (delta.get(nsid, blockId) != null) {
+        // FIXME Presence of the block in delta means that it was changed
+        // somehow
+        // during the interval of time right after the difference computation in
+        // directory scanner and before acquiring of writeLock in this method.
+        // We can probably go through different operations that could happen
+        // with the block
+        // and write some logic for each of them, but this adds lots of
+        // complexity. Instead
+        // we just skip reconciliation for the block at this time. If it has
+        // problems we're likely
+        // to solve them next time
+        return;
+      }
+      Block memBlock = new Block(blockId, 0, GenerationStamp.WILDCARD_STAMP);
+      DatanodeBlockInfo memBlockInfo = volumeMap.get(nsid, memBlock);
+      if (memBlockInfo != null && !memBlockInfo.isFinalized()) {
+        // Block is not finalized - ignore the difference
+        return;
+      }
+
+      // We don't have any files for this block on disk
+      if (info.getState() == ScanDifference.DISK_FILES_MISSING) {
+        if (memBlockInfo == null) {
+          return;
+        }
+        volumeMap.remove(nsid, memBlock);
+        LOG.info("checkAndUpdate: removing block: " + memBlock
+            + " for namespace: " + nsid);
+        if (datanode.blockScanner != null) {
+          datanode.blockScanner.deleteBlock(nsid, memBlock);
+        }
+        return;
+      }
+
+      // We dont' have block in memory, but have some of its files on disk
+      if (info.getState() == ScanDifference.MEMORY_BLOCK_MISSING) {
+        // if there's a block file, then add it to volumeMap, otherwise
+        // remove metaFile if any
+        if (info.getBlockFile() != null) {
+          Block newBlock = new Block(blockId, info.getLength(),
+              info.getGenStamp());
+          boolean isInlineChecksum = info.isInlineChecksum();
+          DatanodeBlockInfo diskBlockInfo = null;
+          if (isInlineChecksum) {
+            GenStampAndChecksum sac = BlockInlineChecksumReader
+                .getGenStampAndChecksumFromInlineChecksumFile(info
+                    .getBlockFile().getName());
+            diskBlockInfo = new DatanodeBlockInfo(info.getVolume(),
+                info.getBlockFile(), info.getLength(), true, true,
+                sac.checksumType, sac.bytesPerChecksum, false, 0);
+          } else {
+            diskBlockInfo = new DatanodeBlockInfo(info.getVolume(),
+                info.getBlockFile(), info.getLength(), true, false,
+                DataChecksum.CHECKSUM_UNKNOWN, -1, false, 0);
+          }
+          volumeMap.add(nsid, newBlock, diskBlockInfo);
+          LOG.info("checkAndUpdate: adding block: " + newBlock
+              + " for namespace: " + nsid + " size: "
+              + diskBlockInfo.getBytesVisible());
+          if (datanode.blockScanner != null) {
+            datanode.blockScanner.addBlock(nsid, newBlock);
+          }
+        } else {
+          // scheduling a file for deletion
+          asyncDiskService
+              .deleteAsyncFile(info.getVolume(), info.getMetaFile());
+        }
+        return;
+      }
+
+      // We have this block in memory and some of its files on disk
+      if (info.getState() == ScanDifference.OUT_OF_SYNC) {
+        if (info.getBlockFile() == null) {
+          volumeMap.remove(nsid, memBlock);
+          LOG.info("checkAndUpdate: removing block: " + memBlock
+              + " for namespace: " + nsid);
+          if (datanode.blockScanner != null) {
+            datanode.blockScanner.deleteBlock(nsid, memBlock);
+          }
+          // scheduling a file for deletion
+          asyncDiskService
+              .deleteAsyncFile(info.getVolume(), info.getMetaFile());
+        } else {
+          if (memBlockInfo == null) {
+            return;
+          }
+          memBlockInfo.getBlock().setNumBytes(info.getLength());
+          memBlockInfo.getBlock().setGenerationStamp(info.getGenStamp());
+          LOG.info("checkAndUpdate: updating block: " + memBlockInfo
+              + " for namespace: " + nsid);
+        }
+        return;
+      }
+    } finally {
+      try {
+        delta.startRecordingDelta();
+      } finally {
+        lock.writeLock().unlock();
+      }
+    }
+  }
 }

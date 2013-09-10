@@ -132,7 +132,7 @@ public class TestDeprioritizeSlowDatanodes {
     // Create RPC connections
     ClientProtocol srcNamenode = DFSClient.createRPCNamenode(
         NameNode.getAddress(cluster.getFileSystem().getUri().getAuthority()),
-        conf, UnixUserGroupInformation.login(conf, true)).getProxy();
+        conf, UnixUserGroupInformation.login(conf, true), 0).getProxy();
 
     // Create destination file.
     LocatedBlocks lbksBeforeKill = srcNamenode.getBlockLocations(fileName, 0,

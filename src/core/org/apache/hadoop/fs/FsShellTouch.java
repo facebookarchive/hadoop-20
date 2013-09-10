@@ -24,7 +24,6 @@ import java.util.Date;
 import org.apache.hadoop.fs.FsShell.CmdHandler;
 
 class FsShellTouch {
-
   static String TOUCH_USAGE = "-touch [-acdmu] PATH...";
 
   protected static final SimpleDateFormat dateFmt =
@@ -49,6 +48,7 @@ class FsShellTouch {
 
     void touch(String src) throws IOException {
       Path f = new Path(src);
+      fs = f.getFileSystem(fs.getConf());
       boolean justCreated = false;
 
       if (!fs.exists(f)) {         // file doesn't exist

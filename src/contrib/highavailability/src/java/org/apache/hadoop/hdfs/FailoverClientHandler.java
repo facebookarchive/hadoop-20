@@ -1,12 +1,13 @@
 package org.apache.hadoop.hdfs;
 
+import java.io.Closeable;
 import java.io.EOFException;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.NoRouteToHostException;
 import java.net.PortUnreachableException;
-import java.net.SocketTimeoutException;
 import java.net.URI;
+import java.util.concurrent.Callable;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.commons.logging.Log;
@@ -14,6 +15,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.SafeModeException;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.ipc.Client.ConnectionClosedException;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.util.InjectionHandler;
@@ -22,7 +24,7 @@ import org.apache.zookeeper.data.Stat;
 /**
  * Handles failovers for clients talking to a namenode.
  */
-public class FailoverClientHandler {
+public class FailoverClientHandler implements Closeable {
 
   CachingAvatarZooKeeperClient zk;
   /*
@@ -161,8 +163,13 @@ public class FailoverClientHandler {
     if (ex instanceof ConnectException ||
         ex instanceof NoRouteToHostException ||
         ex instanceof PortUnreachableException ||
-        ex instanceof EOFException) {
-      return true; 
+        ex instanceof EOFException ||
+        ex instanceof ConnectionClosedException) {
+      return true;
+    }
+    if (ex instanceof RemoteException
+        && ((RemoteException) ex).unwrapRemoteException() instanceof SafeModeException) {
+      return true;
     }
     return false; // we rethrow all other exceptions (including remote exceptions
   }
@@ -171,7 +178,7 @@ public class FailoverClientHandler {
     zk.shutdown();
   }
 
-  void readUnlock() {
+  public void readUnlock() {
     fsLock.readLock().unlock();
   }
 
@@ -187,7 +194,7 @@ public class FailoverClientHandler {
     fsLock.writeLock().unlock();
   }
 
-  void readLock() throws IOException {
+  public void readLock() throws IOException {
     for (int i = 0; i < FAILOVER_RETRIES; i++) {
       fsLock.readLock().lock();
       boolean isFailoverInProgress = false;
@@ -203,7 +210,7 @@ public class FailoverClientHandler {
         fsLock.readLock().unlock();
         throw new RuntimeException(e);
       }
-      
+
       try {
         boolean failedOver = false;
         fsLock.writeLock().lock();
@@ -231,6 +238,15 @@ public class FailoverClientHandler {
     }
     // We retried FAILOVER_RETRIES times with no luck - fail the call
     throw new IOException("No namenode for " + logicalName);
+  }
+
+  @Override
+  public void close() throws IOException {
+    try {
+      shutdown();
+    } catch (InterruptedException e) {
+      throw new IOException(e);
+    }
   }
 
   /**
@@ -275,6 +291,28 @@ public class FailoverClientHandler {
         } finally {
           readUnlock();
         }
+      }
+    }
+  }
+
+  /**
+   * Executes call once, if it fails because of failover tries to handle failure and throws
+   * FailoverInProgressException to notify client that failover is in progress.
+   */
+  public abstract class NoRetriesFSCaller<T> implements Callable<T> {
+
+    protected abstract T callInternal() throws IOException;
+
+    @Override
+    public final T call() throws IOException {
+      readLock();
+      try {
+        return this.callInternal();
+      } catch (IOException ex) {
+        handleFailure(ex, 0);
+        throw new FailoverInProgressException();
+      } finally {
+        readUnlock();
       }
     }
   }

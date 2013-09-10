@@ -17,10 +17,18 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
+import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.WritableByteChannel;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Random;
@@ -35,6 +43,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.datanode.BlockDataFile.Reader;
 import org.apache.hadoop.hdfs.server.datanode.metrics.FSDatasetMBean;
 import org.apache.hadoop.hdfs.server.protocol.BlockRecoveryInfo;
 import org.apache.hadoop.metrics.util.MBeanUtil;
@@ -256,10 +265,24 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
     }
 
     @Override
-    public void updateBlockCrc(long offset, boolean isLastChunk, int length,
+    public void updateBlockCrc(long offset, int length,
         int crc) {
       // TODO Auto-generated method stub
       
+    }
+
+    public BlockDataFile getBlockDataFile() throws IOException {
+      FileChannel fc = null;
+      if (!finalized) {
+        fc = new SimulatedFileChannel(oStream.getLength(), DEFAULT_DATABYTE, true);
+      } else {
+        fc = new SimulatedFileChannel(
+            BlockInlineChecksumReader.getFileLengthFromBlockSize(
+                theBlock.getNumBytes(), bytesPerChecksum,
+                DataChecksum.getChecksumSizeByType(checksumType)),
+            DEFAULT_DATABYTE, true);
+      }
+      return BlockDataFile.getDummyDataFileFromFileChannel(fc);
     }
   }
   
@@ -560,20 +583,22 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
 
   static class SimulatedBlockInlineChecksumFileWriter extends
       BlockInlineChecksumWriter {
-    SimulatedBlockInlineChecksumFileWriter(OutputStream dataOut,
+    SimulatedBlockInlineChecksumFileWriter(final OutputStream dataOut,
         Block block, int checksumType, int bytesPerChecksum) {
-      super(null, checksumType, bytesPerChecksum,
+      super(new BlockDataFile(null, null) {
+        @Override
+        public Writer getWriter(int bufferSize) {
+          return new BlockDataFile.Writer(dataOut, null, null);
+        }
+      }, checksumType, bytesPerChecksum,
           HdfsConstants.DEFAULT_PACKETSIZE);
-      this.dataOut = dataOut;
       this.block = block;
-    }
-    
-    public OutputStream getDataOutputStream() {   
-      return dataOut; 
     }
   }
 
-  public synchronized DatanodeBlockWriter writeToBlock(int namespaceId, Block b, 
+  public synchronized DatanodeBlockWriter writeToBlock(int namespaceId,
+                                            Block oldBlock,
+                                            Block b,
                                             boolean isRecovery,
                                             boolean isReplicationRequest,
                                             int checksumType,
@@ -589,11 +614,12 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
     }
     BInfo binfo = new BInfo(namespaceId, b, true, DataChecksum.CHECKSUM_NULL,
         bytesPerChecksum);
+    getBlockMap(namespaceId).remove(oldBlock);    
     getBlockMap(namespaceId).put(b, binfo);
     return new SimulatedBlockInlineChecksumFileWriter(binfo.oStream, b,
         checksumType, bytesPerChecksum) {
       @Override
-      public void setChannelPosition(long dataOffset)
+      public void setChannelPosition(long dataOffset, boolean ifParitialChunk)
           throws IOException {
         BInfo binfo = getBlockMap(namespaceId).get(block);
         if (binfo == null) {
@@ -619,6 +645,131 @@ public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Conf
 
   public void checkDataDir() throws DiskErrorException {
     // nothing to check for simulated data set
+  }
+  
+  static private class SimulatedFileChannel extends FileChannel {
+    
+    boolean inlineChecksum = false;
+    byte theRepeatedData = 7;
+    long length; // bytes
+    
+    /**
+     * An input stream of size l with repeated bytes
+     * @param l
+     * @param iRepeatedData
+     */
+    SimulatedFileChannel(long l, byte iRepeatedData, boolean ic) {
+      length = l;
+      theRepeatedData = iRepeatedData;
+      inlineChecksum = ic;
+    }
+
+    @Override
+    public int read(ByteBuffer dst) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long read(ByteBuffer[] dsts, int offset, int length)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public int write(ByteBuffer src) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long write(ByteBuffer[] srcs, int offset, int length)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long position() throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public FileChannel position(long newPosition) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long size() throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public FileChannel truncate(long size) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public void force(boolean metaData) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long transferTo(long position, long count, WritableByteChannel target)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long transferFrom(ReadableByteChannel src, long position, long count)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public int read(ByteBuffer dst, long position) throws IOException {
+      if (dst == null) {
+        throw new NullPointerException();
+      }
+      if (position < 0) {
+        throw new IllegalArgumentException("Negative position");
+      }
+      if (position >= length) { // EOF
+        return -1;
+      }
+      int bytesRead = (int) Math.min(dst.remaining(), length-position);
+      
+      for (int i = 0; i < bytesRead; i++) {
+          dst.put(theRepeatedData);
+      }
+      return bytesRead;
+    }
+
+    @Override
+    public int write(ByteBuffer src, long position) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public MappedByteBuffer map(MapMode mode, long position, long size)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public FileLock lock(long position, long size, boolean shared)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public FileLock tryLock(long position, long size, boolean shared)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    protected void implCloseChannel() throws IOException {
+      throw new NotImplementedException();
+    }
+    
   }
 
   /** 

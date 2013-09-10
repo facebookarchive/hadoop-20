@@ -1,11 +1,12 @@
 <%@ page
 contentType="text/html; charset=UTF-8"
-	import="javax.servlet.*"
-	import="javax.servlet.http.*"
 	import="java.io.*"
-  import="java.net.InetSocketAddress;"
-	import="java.util.*"
-	import="org.apache.hadoop.fs.*"
+	import="java.net.InetAddress"
+	import="java.net.InetSocketAddress"
+	import="java.net.UnknownHostException"
+	import="java.util.ArrayList"
+	import="org.apache.hadoop.conf.Configuration"
+	import="org.apache.hadoop.net.NetUtils"
 	import="org.apache.hadoop.hdfs.*"
 	import="org.apache.hadoop.hdfs.server.common.*"
 	import="org.apache.hadoop.hdfs.server.namenode.*"
@@ -16,6 +17,7 @@ contentType="text/html; charset=UTF-8"
 	import="java.text.DateFormat"
 	import="java.lang.Math"
 	import="java.net.URLEncoder"
+	import="java.net.InetAddress"
 %>
 <%!
 	JspHelper jspHelper = new JspHelper();
@@ -46,7 +48,7 @@ String NodeHeaderStr(String name) {
 			order = "DSC";
 	}
 	ret += " onClick=\"window.document.location=" +
-	"'/dfsnodelist.jsp?whatNodes="+whatNodes+"&status="+status+
+	"'dfsnodelist.jsp?whatNodes="+whatNodes+"&status="+status+
   "&sorter/field=" + name + "&sorter/order=" +
 	order + "'\" title=\"sort on this column\"";
 
@@ -55,12 +57,12 @@ String NodeHeaderStr(String name) {
 
 void generateDecommissioningNodeData(JspWriter out, DatanodeDescriptor d,
       String suffix, boolean alive, int nnHttpPort, String nnAddr) throws IOException {
-    String url = "http://" + d.getHostName() + ":" + d.getInfoPort()
+    String url = "http://" + NetUtils.toIpPort(d.getHost(), d.getInfoPort())
       + "/browseDirectory.jsp?namenodeInfoPort=" + nnHttpPort + "&dir="
       + URLEncoder.encode("/", "UTF-8")
       + JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
 
-    String name = d.getHostName() + ":" + d.getPort();
+    String name = NetUtils.toIpPort(d.getHost(), d.getInfoPort());
     int idx = (suffix != null && name.endsWith(suffix)) ? name
         .indexOf(suffix) : -1;
 
@@ -94,9 +96,27 @@ enum NodeType {
 	LIVE,
 	DEAD
 }
+
+public static String getDataNodeHostName(String datanodeAddress) {
+    String datanodeHostName = "";
+    try {
+       datanodeHostName = InetAddress.getByName(datanodeAddress).getHostName();
+    } catch (Exception e) {
+    	// Ignoring all exceptions because this is a non-essential DNS resolution
+    	// and we do not want this to bubble up the stack in any way.
+    } catch (Throwable t) {
+    
+    } finally {
+        if (!datanodeHostName.equals("")) {
+    		datanodeHostName = "(" + datanodeHostName + ")";
+    	}
+    	return (datanodeHostName.equals("")) ? datanodeHostName : "(" + datanodeHostName + ")";
+    }
+}
+
 public void generateNodeData( JspWriter out, DatanodeDescriptor d,
 		String suffix, NodeType nodeType,
-		int nnHttpPort, String nnAddr)
+		int nnHttpPort, String nnAddr, String url)
 throws IOException {
 
 	/* Say the datanode is dn1.hadoop.apache.org with ip 192.168.0.5
@@ -112,20 +132,21 @@ Note that "d.getHost():d.getPort()" is what DFS clients use
 to interact with datanodes.
 	 */
 	// from nn_browsedfscontent.jsp:
-	String url = "http://" + d.getHostName() + ":" + d.getInfoPort() +
-	"/browseDirectory.jsp?namenodeInfoPort=" +
-	nnHttpPort + "&dir=" +
-	URLEncoder.encode("/", "UTF-8") +
-  JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
 
-	String name = d.getHostName() + ":" + d.getPort();
+	if(url == null) {
+		url = "http://" + NetUtils.toIpPort(d.getHost(), d.getInfoPort()) + "/browseDirectory.jsp?namenodeInfoPort=" +
+			nnHttpPort + "&dir=" +
+			URLEncoder.encode("/", "UTF-8") +
+  			JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
+	}
+	String name = NetUtils.toIpPort(d.getHost(), d.getInfoPort());
 	int idx = (suffix != null && name.endsWith( suffix )) ?
 			name.indexOf( suffix ) : -1;
-
+	String datanodeAddress = (idx > 0) ? name.substring(0, idx) : name;
 			out.print( rowTxt() + "<td class=\"name\"><a title=\""
-					+ d.getHost() + ":" + d.getPort() +
-					"\" href=\"" + url + "\">" +
-					(( idx > 0 ) ? name.substring(0, idx) : name) + "</a>" +
+					+ NetUtils.toIpPort(d.getHost(), d.getPort())+
+					"\" href=\"" + url + "\">" + datanodeAddress + getDataNodeHostName(datanodeAddress)
+					 + "</a>" +
 					(( nodeType != NodeType.DEAD ) ? "" : "\n") );
 			if (nodeType == NodeType.DEAD) {
                 long deadTime = d.getStartTime();
@@ -179,8 +200,6 @@ to interact with datanodes.
   }
 }
 
-
-
 public void generateDFSNodesList(JspWriter out, 
 		NameNode nn,
 		HttpServletRequest request)
@@ -196,7 +215,7 @@ throws IOException {
     status = "ALL";
 	sorterField = request.getParameter("sorter/field");
 	sorterOrder = request.getParameter("sorter/order");
-  String nnAddr = NameNode.getHostPortString(NameNode.getAddress(nn.getConf()));
+  String nnAddr = NetUtils.toIpPort(NameNode.getClientProtocolAddress(nn.getConf()));
 
 	if ( sorterField == null )
 		sorterField = "name";
@@ -297,7 +316,7 @@ throws IOException {
 
 				jspHelper.sortNodeList(nodes, sorterField, sorterOrder);
 				for ( int i=0; i < nodes.size(); i++ ) {
-					generateNodeData(out, nodes.get(i), port_suffix, NodeType.LIVE, nnHttpPort, nnAddr);
+					generateNodeData(out, nodes.get(i), port_suffix, NodeType.LIVE, nnHttpPort, nnAddr, null);
 				}
 			}
 			out.print("</table>\n");
@@ -342,7 +361,20 @@ throws IOException {
 
 				jspHelper.sortNodeList(nodes, "name", "ASC");
 				for ( int i=0; i < nodes.size() ; i++ ) {
-					generateNodeData(out, nodes.get(i), port_suffix, NodeType.DEAD, nnHttpPort, nnAddr);
+						String url = null;
+						String toFormat = getDeadDataNodeUrl(nn.getConf());
+						if (toFormat != null) {
+							try {
+								String hostNameToSubstitute = InetAddress.getByName(nodes.get(i).getHost()).getHostName();
+								if(hostNameToSubstitute.endsWith(".")) {
+									hostNameToSubstitute = hostNameToSubstitute.substring(0, hostNameToSubstitute.length() - 1);
+								}
+								url = String.format(toFormat, hostNameToSubstitute);
+							} catch (UnknownHostException uhe) {
+								url = null;
+							}
+						}
+					generateNodeData(out, nodes.get(i), port_suffix, NodeType.DEAD, nnHttpPort, nnAddr, url);
 				}
 
 				out.print("</table>\n");
@@ -350,7 +382,7 @@ throws IOException {
 		} else if (whatNodes.equals("DECOMMISSIONING")) {
 			// Decommissioning Nodes
 			ArrayList<DatanodeDescriptor> decommissioning = nn.getNamesystem()
-			    .getDecommissioningNodes();
+			    .getDecommissioningNodesList();
 			out.print("<br> <a name=\"DecommissioningNodes\" id=\"title\"> "
 			    + " Decommissioning Datanodes : " + decommissioning.size()
                             + "</a><br><br>\n");
@@ -378,18 +410,23 @@ throws IOException {
                         out.print("</div>");
                   }
 	}
-}%>
+}
+
+	private static String getDeadDataNodeUrl(Configuration conf) {
+		return conf.get(FSConstants.DEAD_DATANODE_URL);
+	}
+	
+%>
 
 <%
 NameNode nn = (NameNode)application.getAttribute("name.node");
 FSNamesystem fsn = nn.getNamesystem();
-InetSocketAddress nnAddr = NameNode.getAddress(nn.getConf());
-String namenodeLabel = nnAddr.getHostName() + ":" + nnAddr.getPort();
+String namenodeLabel = NameNode.getDefaultAddress(nn.getConf());
 %>
 
 <html>
 
-<link rel="stylesheet" type="text/css" href="/static/hadoop.css">
+<link rel="stylesheet" type="text/css" href="static/hadoop.css">
 <title>Hadoop NameNode <%=namenodeLabel%></title>
   
 <body>
@@ -403,9 +440,9 @@ String namenodeLabel = nnAddr.getHostName() + ":" + nnAddr.getPort();
 <tr> <td id="col1"> Upgrades: <td> <%= jspHelper.getUpgradeStatusText()%>
 </table></div><br>				      
 
-<b><a href="/nn_browsedfscontent.jsp">Browse the filesystem</a></b><br>
-<b><a href="/logs/">Namenode Logs</a></b><br>
-<b><a href=/dfshealth.jsp> Go back to DFS home</a></b>
+<b><a href="nn_browsedfscontent.jsp">Browse the filesystem</a></b><br>
+<b><a href="logs/">Namenode Logs</a></b><br>
+<b><a href=dfshealth.jsp> Go back to DFS home</a></b>
 <hr>
 <%
 	generateDFSNodesList(out, nn, request); 

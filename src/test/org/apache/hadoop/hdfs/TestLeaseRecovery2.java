@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
@@ -29,13 +30,16 @@ import org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.log4j.Level;
 
 public class TestLeaseRecovery2 extends junit.framework.TestCase {
   {
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+    DataNode.LOG.getLogger().setLevel(Level.ALL);
     ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
   }
@@ -52,6 +56,7 @@ public class TestLeaseRecovery2 extends junit.framework.TestCase {
     final long hardLease = 60 * 60 *1000;
     conf.setLong("dfs.block.size", BLOCK_SIZE);
     conf.setInt("dfs.heartbeat.interval", 1);
+    conf.setLong("dfs.socket.timeout", 2998);
   //  conf.setInt("io.bytes.per.checksum", 16);
 
     MiniDFSCluster cluster = null;
@@ -101,6 +106,43 @@ public class TestLeaseRecovery2 extends junit.framework.TestCase {
       stm.write(buffer, 0, size);
       stm.close();
       verifyFile(dfs, filepath1, actual, size);
+
+    
+      // create another file using the same client
+      Path filepath2 = new Path("/foo2" + AppendTestUtil.nextInt());
+      FSDataOutputStream stm2 = dfs.create(filepath2, true,
+          bufferSize, REPLICATION_NUM, BLOCK_SIZE);
+      stm2.write(buffer, 0, size);
+      stm2.sync();
+
+      // For one of the datanodes, hang all the block recover requests.
+      InjectionHandler.set(new InjectionHandler() {
+        AtomicInteger hangDnPort = new AtomicInteger(-1);
+        
+        @Override
+        protected void _processEvent(InjectionEventI event, Object... args) {
+          if (event == InjectionEvent.DATANODE_BEFORE_RECOVERBLOCK) {
+            DataNode dn = (DataNode) args[0];
+            int dnPort = dn.getPort();
+            hangDnPort.compareAndSet(-1, dnPort);
+            if (hangDnPort.get() == dnPort) {
+              try {
+                System.out.println("SLEEPING DN PORT: " + dnPort
+                    + " IPC PORT: " + dn.getRpcPort());
+                Thread.sleep(60000);
+              } catch (InterruptedException e) {
+                // TODO Auto-generated catch block
+                e.printStackTrace();
+              }
+            }
+          }
+        }
+      });
+      
+      // recover the file
+      recoverLease(filepath2, dfs);
+      
+      verifyFile(dfs, filepath2, actual, size);
     }
     finally {
       try {

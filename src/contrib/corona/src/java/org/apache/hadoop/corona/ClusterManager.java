@@ -303,6 +303,30 @@ public class ClusterManager implements ClusterManagerService.Iface {
     PoolInfoStrings actualPoolInfo = PoolInfo.createPoolInfoStrings(redirectedPoolInfo);
     return actualPoolInfo;
   }
+  
+  @Override
+  public ActualPoolInfoResponse getActualPoolInfoV2(ActualPoolInfoArgs actualPoolInfoArgs)
+      throws InvalidPoolInfo, SafeModeException, TException {
+    checkSafeMode("getActualPoolInfoV2");
+    PoolInfoStrings userSpecifiedPoolInfo = actualPoolInfoArgs.poolInfoString;
+    long jobSizeInfo = actualPoolInfoArgs.jobInputSize;
+    ConfigManager configManager = getScheduler().getConfigManager();
+    PoolInfo poolInfo = PoolInfo.createPoolInfo(userSpecifiedPoolInfo);
+    // Get Redirect pool info
+    PoolInfo redirectedPoolInfo = configManager.getRedirect(poolInfo, jobSizeInfo);
+    // Validate redirected  pool information
+    try {
+      PoolGroupManager.checkPoolInfoIfStrict(redirectedPoolInfo, configManager, conf);
+    } catch (InvalidSessionHandle ex) {
+      throw new InvalidPoolInfo(ex.getHandle());
+    }
+ 
+    PoolInfoStrings actualPoolInfo = PoolInfo.createPoolInfoStrings(redirectedPoolInfo);
+    ActualPoolInfoResponse actualPoolInfoResponse = new ActualPoolInfoResponse();
+    actualPoolInfoResponse.poolInfoString = actualPoolInfo;
+    actualPoolInfoResponse.whitelist = configManager.getWhitelist(redirectedPoolInfo);
+    return actualPoolInfoResponse;
+  }
 
   @Override
   public String getNextSessionId() throws SafeModeException {
@@ -326,11 +350,17 @@ public class ClusterManager implements ClusterManagerService.Iface {
     throws TException, InvalidSessionHandle, SafeModeException {
     checkSafeMode("sessionEnd");
     try {
-      InetAddress sessionAddr = sessionManager.getSession(handle).getAddress();
+      Session session = sessionManager.getSession(handle);
+      InetAddress sessionAddr = session.getAddress();
       LOG.info("sessionEnd called for session: " + handle +
         " on " + sessionAddr.getHost() + ":" + sessionAddr.getPort() +
         " with status: " + status);
-
+      if (status == SessionStatus.TIMED_OUT) {
+        if (session.getUrl() != null &&
+            session.getUrl().indexOf(handle) < 0) {
+          metrics.timeoutRemoteJT(1);
+        }
+      }
       if (status == SessionStatus.FAILED_JOBTRACKER) {
         metrics.recordCJTFailure();
       }
@@ -389,8 +419,8 @@ public class ClusterManager implements ClusterManagerService.Iface {
       Session session = sessionManager.getSession(handle);
       if (!session.checkHeartbeatInfo(jtInfo)) {
         sessionEnd(session.getSessionId(), SessionStatus.FAILED_JOBTRACKER);
-      }
-      sessionManager.heartbeat(handle);
+      } 
+      sessionManager.heartbeatV2(handle, jtInfo);
     } catch (RuntimeException e) {
       throw new TApplicationException(e.getMessage());
     }
@@ -717,13 +747,21 @@ public class ClusterManager implements ClusterManagerService.Iface {
             runningResources.put(type, session.getGrantCountForType(type));
           }
           runningSession.setRunningResources(runningResources);
-          runningSessions.add(runningSession);
+          runningSessions.add(runningSession);          
         }
       } catch (InvalidSessionHandle invalidSessionHandle) {
         // This is no big deal, just means that the session has finished
       }
     }
     return runningSessions;
+  }
+
+  @Override
+  public SessionInfo getSessionInfo(String handle)
+    throws TException, InvalidSessionHandle, SafeModeException {
+    checkSafeMode("getSessionInfo");
+    Session session = sessionManager.getSession(handle);
+    return session.getInfo();
   }
 
   @Override
@@ -881,4 +919,6 @@ public class ClusterManager implements ClusterManagerService.Iface {
   public String getHostName() {
     return hostName;
   }
+
+  
 }

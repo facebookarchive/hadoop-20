@@ -90,7 +90,7 @@ public class TestNNStorageFailures {
     } catch (IOException e) {
       LOG.info(e);
       assertTrue(e.toString()
-          .contains("No more image storage directories left"));
+          .contains("No image locations are available"));
       // image dirs are not writable
       assertEquals(2, NameNode.getNameNodeMetrics().imagesFailed.get());
       // journals are separate, and accessible

@@ -176,7 +176,8 @@ public class TestTransferBlock extends junit.framework.TestCase {
           locatedblock.getBlock());
       
       if (dbi != null) {
-        RandomAccessFile block = new RandomAccessFile(dbi.file.toString(), "rw");
+        RandomAccessFile block = new RandomAccessFile(
+            dbi.getBlockDataFile().file.toString(), "rw");
         block.setLength(0);
         block.close();
 

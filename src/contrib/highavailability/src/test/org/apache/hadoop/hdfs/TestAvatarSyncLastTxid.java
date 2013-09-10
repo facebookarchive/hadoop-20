@@ -1,3 +1,20 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package org.apache.hadoop.hdfs;
 
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
@@ -169,13 +186,13 @@ public class TestAvatarSyncLastTxid extends FailoverTestUtil {
 
   @Test
   public void testEditLogCrash() throws Exception {
-    setUp("testEditLogCrash");
+    setUp("testEditLogCrash", false);
     FailoverTestUtilHandler h = new FailoverTestUtilHandler();
     h.simulateEditLogCrash = true;
     InjectionHandler.set(h);
     cluster.shutDown();
     conf.setBoolean("fs.ha.retrywrites", true);
-    cluster = new MiniAvatarCluster(conf, 3, true, null, null);
+    cluster = new MiniAvatarCluster.Builder(conf).numDataNodes(3).enableQJM(false).build();
     fs = cluster.getFileSystem();
     zkClient = new AvatarZooKeeperClient(conf, null);
     createEdits(20);
@@ -194,7 +211,7 @@ public class TestAvatarSyncLastTxid extends FailoverTestUtil {
   
   @Test
   public void testBlocksMisMatch() throws Exception {
-    setUp("testBlocksMisMatch");
+    setUp("testBlocksMisMatch", false);
     int totalBlocks = 50;
     DFSTestUtil.createFile(fs, new Path("/testBlocksMisMatch"),
         (long) totalBlocks * 1024, (short) 3, System.currentTimeMillis());

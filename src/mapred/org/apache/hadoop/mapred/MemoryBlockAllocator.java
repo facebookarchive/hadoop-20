@@ -26,7 +26,12 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
 class MemoryBlockAllocator {
+  private static final Log LOG =
+      LogFactory.getLog(MemoryBlockAllocator.class);
   
   enum  PreferedMeoryBlockSize{
     SIZE_32K(32 * 1024),
@@ -169,7 +174,7 @@ class MemoryBlockAllocator {
   int maxMemoryBlockLength;
   //first, assume each record is 128 bytes.
   int avgRecordLen = 128;
-  int totalCollectedRecNum = 0;
+  long totalCollectedRecNum = 0;
 
   private int consumedBufferMem = 0;
   private int unassignedStartOffset;
@@ -361,10 +366,16 @@ class MemoryBlockAllocator {
     }
     consumedBufferMem += memoryBlock.getSize();
 
-    int newCollectedRecordsNum = totalCollectedRecNum + currentPtr;
+    long newCollectedRecordsNum = totalCollectedRecNum + currentPtr;
+    int oldAvgRecordLen = avgRecordLen;
     avgRecordLen =
-        ((avgRecordLen * totalCollectedRecNum) + memoryBlock.getUsed())
-            / newCollectedRecordsNum;
+        (int) (((avgRecordLen * totalCollectedRecNum) + memoryBlock.getUsed())
+            / newCollectedRecordsNum);
+    if (avgRecordLen == 0) {
+      String errAvgRecordLen = String.format("oldAvgRecordLen:%d, totalCollectedRecNum:%d, memroryBlock.used:%d", 
+          oldAvgRecordLen, totalCollectedRecNum, memoryBlock.getUsed());
+      LOG.info(errAvgRecordLen);
+    }
     totalCollectedRecNum = newCollectedRecordsNum;
   }
   

@@ -47,6 +47,7 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
+import org.apache.hadoop.hdfs.server.datanode.metrics.DatanodeThreadLivenessReporter.BackgroundThread;
 import org.apache.hadoop.hdfs.util.LightWeightHashSet;
 import org.apache.hadoop.hdfs.util.LightWeightLinkedSet;
 import org.apache.hadoop.io.IOUtils;
@@ -263,7 +264,7 @@ class DataBlockScanner {
     }
     
     synchronized (this) {
-      throttler = new DataTransferThrottler(200, MAX_SCAN_RATE);
+      throttler = new DataTransferThrottler(MAX_SCAN_RATE);
     }
   }
   
@@ -697,6 +698,8 @@ class DataBlockScanner {
       while (datanode.shouldRun && !Thread.interrupted()
           && datanode.isNamespaceAlive(namespaceId)
           ) {
+        datanode.updateAndReportThreadLiveness(BackgroundThread.BLOCK_SCANNER);
+
         long now = System.currentTimeMillis();
         synchronized (this) {
           if ( now >= (currentPeriodStart + scanPeriod)) {

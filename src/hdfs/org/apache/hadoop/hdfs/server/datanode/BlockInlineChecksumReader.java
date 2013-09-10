@@ -36,6 +36,7 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.datanode.BlockSender.InputStreamFactory;
+import org.apache.hadoop.hdfs.server.datanode.BlockWithChecksumFileReader.MemoizedBlock;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.net.NetUtils;
@@ -85,8 +86,8 @@ import org.apache.hadoop.util.StringUtils;
  * 
  */
 public class BlockInlineChecksumReader extends DatanodeBlockReader {
-  private InputStreamFactory streamFactory;
-  private InputStream blockIn; // data stream
+  private BlockInputStreamFactory streamFactory;
+  private BlockDataFile.Reader blockDataFileReader;
   long blockInPosition = -1;
   MemoizedBlock memoizedBlock;
   private int initChecksumType;
@@ -95,13 +96,24 @@ public class BlockInlineChecksumReader extends DatanodeBlockReader {
 
   BlockInlineChecksumReader(int namespaceId, Block block,
       boolean isFinalized, boolean ignoreChecksum, boolean verifyChecksum,
-      boolean corruptChecksumOk, InputStreamFactory streamFactory,
+      boolean corruptChecksumOk, BlockInputStreamFactory streamFactory,
       int checksumType, int bytesPerChecksum) {
     super(namespaceId, block, isFinalized, ignoreChecksum, verifyChecksum,
         corruptChecksumOk);
     this.streamFactory = streamFactory;
     this.initChecksumType = checksumType;
     this.initBytesPerChecksum = bytesPerChecksum;
+  }
+
+  @Override
+  public void fadviseStream(int advise, long offset, long len)
+      throws IOException {
+    long fileOffset = BlockInlineChecksumReader.getPosFromBlockOffset(offset,
+        bytesPerChecksum, checksumSize);
+    long fileLen = BlockInlineChecksumReader.getFileLengthFromBlockSize(len
+        + offset, bytesPerChecksum, checksumSize)
+        - fileOffset;
+    blockDataFileReader.posixFadviseIfPossible(fileOffset, fileLen, advise);
   }
 
   @Override
@@ -159,15 +171,10 @@ public class BlockInlineChecksumReader extends DatanodeBlockReader {
     return getFileLengthFromBlockSize(offsetInBlock, bytesPerChecksum, checksumSize);
   }
 
-  public void initializeStream(long offset, long blockLength)
+  public void initialize(long offset, long blockLength)
       throws IOException {
-    // seek to the right offsets
-    long offsetInFile = BlockInlineChecksumReader
-        .getPosFromBlockOffset(offset, bytesPerChecksum, checksumSize);
-    // Seek to to start of the chunk. The new position will be the same 
-    // as the file size if block size is current offset.
-    blockIn = streamFactory.createStream(offsetInFile);
-    memoizedBlock = new MemoizedBlock(blockIn, blockLength);
+    blockDataFileReader = streamFactory.getBlockDataFileReader();
+    memoizedBlock = new MemoizedBlock(blockLength);
   }
 
   @Override
@@ -177,69 +184,137 @@ public class BlockInlineChecksumReader extends DatanodeBlockReader {
 
   @Override
   public void sendChunks(OutputStream out, byte[] buf, long startOffset,
-      int startChecksumOff, int numChunks, int len, BlockCrcUpdater crcUpdater)
+      int bufStartOff, int numChunks, int len, BlockCrcUpdater crcUpdater, int packetVersion)
       throws IOException {
     long offset = startOffset;
     long endOffset = startOffset + len;
-    int checksumOff = startChecksumOff;
+    int checksumOff = bufStartOff;
     int checksumLen =  ignoreChecksum ? 0 : (numChunks * checksumSize);
-    int dataOff = checksumOff + checksumLen;
-    int remain = len;
     
     int bytesToRead = len + checksumSize * numChunks;
-    if (tempBuffer == null || tempBuffer.length < bytesToRead) {
-      tempBuffer = new byte[bytesToRead];
-    }
-    IOUtils.readFully(blockIn, tempBuffer, 0, bytesToRead);
+    
+    long offsetInFile = BlockInlineChecksumReader
+        .getPosFromBlockOffset(offset, bytesPerChecksum, checksumSize);
 
-    int tempBufferPos = 0;
-    for (int i = 0; i < numChunks; i++) {
-      assert remain > 0;
-
-      int lenToRead = (remain > bytesPerChecksum) ? bytesPerChecksum : remain;
-
-      System.arraycopy(tempBuffer, tempBufferPos, buf, dataOff, lenToRead);
-      tempBufferPos += lenToRead;
-      if (!ignoreChecksum) {
-        System.arraycopy(tempBuffer, tempBufferPos, buf, checksumOff,
-            checksumSize);
-        if (crcUpdater != null) {
-          crcUpdater.updateBlockCrc(offset + dataOff - startChecksumOff
-              - checksumLen, true, lenToRead,
-              DataChecksum.getIntFromBytes(buf, checksumOff));
-        }
-      } else {
-        IOUtils.skipFully(blockIn, checksumSize);
-        if (crcUpdater != null) {
-          crcUpdater.disable();
-        }
+    if (packetVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_FIRST) {
+      if (tempBuffer == null || tempBuffer.length < bytesToRead) {
+        tempBuffer = new byte[bytesToRead];
       }
-      tempBufferPos += checksumSize;
+      blockDataFileReader.readFully(tempBuffer, 0, bytesToRead, offsetInFile,
+          true);
+
+      if (dnData != null) {
+        dnData.recordReadChunkInlineTime();
+      }
+
+      int tempBufferPos = 0;
+      int dataOff = checksumOff + checksumLen;
+
+      int remain = len;
+      for (int i = 0; i < numChunks; i++) {
+        assert remain > 0;
+
+        int lenToRead = (remain > bytesPerChecksum) ? bytesPerChecksum : remain;
+
+        System.arraycopy(tempBuffer, tempBufferPos, buf, dataOff, lenToRead);
+        if (dnData != null) {
+          dnData.recordCopyChunkDataTime();
+        }
+        tempBufferPos += lenToRead;
+        if (!ignoreChecksum) {
+          System.arraycopy(tempBuffer, tempBufferPos, buf, checksumOff,
+              checksumSize);
+          if (dnData != null) {
+            dnData.recordCopyChunkChecksumTime();
+          }
+          if (crcUpdater != null) {
+            crcUpdater.updateBlockCrc(offset + dataOff - bufStartOff
+                - checksumLen, lenToRead,
+                DataChecksum.getIntFromBytes(buf, checksumOff));
+          }
+        } else {
+          if (crcUpdater != null) {
+            crcUpdater.disable();
+          }
+        }
+        tempBufferPos += checksumSize;
+
+        if (verifyChecksum && !corruptChecksumOk) {
+          checksum.reset();
+          checksum.update(buf, dataOff, lenToRead);
+          if (!checksum.compare(buf, checksumOff)) {
+            throw new ChecksumException("Checksum failed at "
+                + (offset + len - remain), len);
+          }
+          if (dnData != null) {
+            dnData.recordVerifyCheckSumTime();
+          }
+        }
+        dataOff += lenToRead;
+        checksumOff += checksumSize;
+        remain -= lenToRead;
+      }
+
+      // only recompute checksum if we can't trust the meta data due to
+      // concurrent writes
+      if ((checksumSize != 0 && endOffset % bytesPerChecksum != 0)
+          && memoizedBlock.hasBlockChanged(endOffset)) {
+        ChecksumUtil.updateChunkChecksum(buf, bufStartOff, bufStartOff
+            + checksumLen, len, checksum);
+      }
+    } else if (packetVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_INLINE){
+
+      blockDataFileReader.readFully(buf, bufStartOff, bytesToRead,
+          offsetInFile, true);
+
+      if (dnData != null) {
+        dnData.recordReadChunkInlineTime();
+      }
 
       if (verifyChecksum && !corruptChecksumOk) {
-        checksum.reset();
-        checksum.update(buf, dataOff, lenToRead);
-        if (!checksum.compare(buf, checksumOff)) {
-          throw new ChecksumException("Checksum failed at "
-              + (offset + len - remain), len);
+        int dataOff = bufStartOff;
+        int remain = len;
+
+        for (int i = 0; i < numChunks; i++) {
+          assert remain > 0;
+
+          int lenToRead = (remain > bytesPerChecksum) ? bytesPerChecksum : remain;
+
+          checksum.reset();
+          checksum.update(buf, dataOff, lenToRead);
+          dataOff += lenToRead;
+          if (!checksum.compare(buf, dataOff)) {
+            throw new ChecksumException("Checksum failed at "
+                + (offset + len - remain), len);
+          }
+
+          dataOff += checksumSize;
+          remain -= lenToRead;
+        }
+        if (dnData != null) {
+          dnData.recordVerifyCheckSumTime();
         }
       }
 
-      dataOff += lenToRead;
-      checksumOff += checksumSize;
-      remain -= lenToRead;
-    }
-    
-    // only recompute checksum if we can't trust the meta data due to
-    // concurrent writes
-    if ((checksumSize != 0 && endOffset % bytesPerChecksum != 0)
-        && memoizedBlock.hasBlockChanged(endOffset)) {
-      ChecksumUtil.updateChunkChecksum(buf, startChecksumOff, startChecksumOff
-          + checksumLen, len, checksum);
+      // only recompute checksum if we can't trust the meta data due to
+      // concurrent writes
+      if ((checksumSize != 0 && endOffset % bytesPerChecksum != 0)
+          && memoizedBlock.hasBlockChanged(endOffset)) {
+        ChecksumUtil.updateChunkChecksum(buf, bufStartOff + len, bufStartOff,
+            len, checksum);
+        if (dnData != null) {
+          dnData.recordUpdateChunkCheckSumTime();
+        }
+      }
+    } else {
+      throw new IOException("Unidentified packet version.");
     }
 
     try {
-      out.write(buf, 0, dataOff);
+      out.write(buf, 0, bufStartOff + bytesToRead);
+      if (dnData != null) {
+        dnData.recordSendChunkToClientTime();
+      }
     } catch (IOException e) {
       if (LOG.isDebugEnabled()) {
         LOG.debug("IOException when reading block " + block + " offset "
@@ -248,20 +323,16 @@ public class BlockInlineChecksumReader extends DatanodeBlockReader {
       throw BlockSender.ioeToSocketException(e);
     }
   }
+  
+  @Override
+  public int getPreferredPacketVersion() {
+    return DataTransferProtocol.PACKET_VERSION_CHECKSUM_INLINE;
+  }
 
   @Override
   public void close() throws IOException {
     IOException ioe = null;
 
-    // close data file
-    if (blockIn != null) {
-      try {
-        blockIn.close();
-      } catch (IOException e) {
-        ioe = e;
-      }
-      blockIn = null;
-    }
     // throw IOException if there is any
     if (ioe != null) {
       throw ioe;
@@ -272,19 +343,16 @@ public class BlockInlineChecksumReader extends DatanodeBlockReader {
    * helper class used to track if a block's meta data is verifiable or not
    */
   class MemoizedBlock {
-    // block data stream
-    private InputStream inputStream;
     // visible block length
     private long blockLength;
 
-    private MemoizedBlock(InputStream inputStream, long blockLength)
+    private MemoizedBlock(long blockLength)
         throws IOException {
-      this.inputStream = inputStream;
       this.blockLength = blockLength;
     }
     
     boolean isChannelSizeMatchBlockLength() throws IOException {
-      long currentLength = ((FileInputStream) inputStream).getChannel().size();
+      long currentLength = blockDataFileReader.size(); 
       return (currentLength == BlockInlineChecksumReader
           .getFileLengthFromBlockSize(blockLength, bytesPerChecksum,
               checksumSize));
@@ -460,6 +528,7 @@ public class BlockInlineChecksumReader extends DatanodeBlockReader {
       rawStreamIn = ri.getBlockInputStream(datanode, 0);
       streamIn = new DataInputStream(new BufferedInputStream(rawStreamIn,
           FSConstants.BUFFER_SIZE));
+      IOUtils.skipFully(streamIn, BlockInlineChecksumReader.getHeaderSize());
 
       long lengthLeft = ((FileInputStream) rawStreamIn).getChannel().size()
           - BlockInlineChecksumReader.getHeaderSize();
@@ -485,7 +554,7 @@ public class BlockInlineChecksumReader extends DatanodeBlockReader {
                 + " block " + block + " seems to be corrupted");
           }
 
-          streamIn.skip(dataByteLengh);
+          IOUtils.skipFully(streamIn, dataByteLengh);
           IOUtils.readFully(streamIn, buffer, 0, buffer.length);
           int intChecksum = DataChecksum.getIntFromBytes(buffer, 0);
           if (firstChecksum) {

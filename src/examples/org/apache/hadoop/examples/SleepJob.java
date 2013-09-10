@@ -334,6 +334,7 @@ public class SleepJob extends Configured implements Tool,
                         countersPerTask, hosts,
                         hostsPerSplit, setup, sortMemory);
   }
+  @SuppressWarnings({ "deprecation", "unchecked" })
   public JobConf setupJobConf(Class classToSet,
                                 int numMapper, int numReducer, 
                                 long mapSleepTime, int mapSleepCount, 

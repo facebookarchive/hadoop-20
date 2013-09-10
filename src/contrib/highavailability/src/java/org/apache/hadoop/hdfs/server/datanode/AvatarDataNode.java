@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
+import static org.apache.hadoop.hdfs.server.namenode.NameNode.DATANODE_PROTOCOL_ADDRESS;
+
 import java.io.File;
 import java.io.IOException;
 import java.net.ConnectException;
@@ -34,34 +36,32 @@ import java.util.List;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.AvatarZooKeeperClient;
 import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.FastProtocolHDFS;
+import org.apache.hadoop.hdfs.FastWritableHDFS;
 import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
 import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.protocol.UnregisteredDatanodeException;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
-import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
+import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
+import org.apache.hadoop.hdfs.server.protocol.DisallowedDatanodeException;
 import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
-import org.apache.hadoop.hdfs.server.protocol.DisallowedDatanodeException;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
-import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.protocol.UnregisteredDatanodeException;
-import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.DiskChecker;
+import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.zookeeper.data.Stat;
@@ -95,57 +95,23 @@ public class AvatarDataNode extends DataNode {
     AvatarDataNode.dnThreadName = dnThreadName;
   }
 
-
-  private static List<InetSocketAddress> getDatanodeProtocolAddresses(
-      Configuration conf, Collection<String> serviceIds) throws IOException {
-    // Use default address as fall back
-    String defaultAddress;
-    try {
-      defaultAddress = conf.get(FileSystem.FS_DEFAULT_NAME_KEY);
-      if (defaultAddress != null) {
-        Configuration newConf = new Configuration(conf);
-        newConf.set(FileSystem.FS_DEFAULT_NAME_KEY, defaultAddress);
-        defaultAddress = NameNode.getHostPortString(NameNode.getAddress(newConf));
-      }
-    } catch (IllegalArgumentException e) {
-      defaultAddress = null;
-    }
-    
-    List<InetSocketAddress> addressList = DFSUtil.getAddresses(conf,
-        serviceIds, defaultAddress,
-        NameNode.DATANODE_PROTOCOL_ADDRESS,
-        FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
-    if (addressList == null) {
-      throw new IOException("Incorrect configuration: namenode address "
-          + FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY
-          + " is not configured.");
-    }
-    return addressList;
-  }
-  
-
   @Override
-  void startDataNode(Configuration conf, 
-                     AbstractList<File> dataDirs
-                     ) throws IOException {
+  void startDataNode(Configuration conf, AbstractList<File> dataDirs)
+      throws IOException {
     initGlobalSetting(conf, dataDirs);
-    
     Collection<String> serviceIds = DFSUtil.getNameServiceIds(conf);
-    List<InetSocketAddress> defaultNameAddrs =
-      AvatarDataNode.getDatanodeProtocolAddresses(conf, serviceIds);
-    List<InetSocketAddress> nameAddrs0 = 
-        DFSUtil.getRPCAddresses("0", conf, serviceIds,
-           NameNode.DATANODE_PROTOCOL_ADDRESS, FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
-    List<InetSocketAddress> nameAddrs1 = 
-        DFSUtil.getRPCAddresses("1", conf, serviceIds,
-           NameNode.DATANODE_PROTOCOL_ADDRESS, FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
-    List<InetSocketAddress> avatarAddrs0 =
-      AvatarDataNode.getAvatarNodeAddresses("0", conf, serviceIds);
-    List<InetSocketAddress> avatarAddrs1 =
-      AvatarDataNode.getAvatarNodeAddresses("1", conf, serviceIds);
+    List<String> defaultAddresses = getZnodePaths(serviceIds, conf);
+    List<InetSocketAddress> nameAddrs0 = DFSUtil.getRPCAddresses("0", conf,
+        serviceIds, DATANODE_PROTOCOL_ADDRESS, DFS_NAMENODE_RPC_ADDRESS_KEY);
+    List<InetSocketAddress> nameAddrs1 = DFSUtil.getRPCAddresses("1", conf,
+        serviceIds, DATANODE_PROTOCOL_ADDRESS, DFS_NAMENODE_RPC_ADDRESS_KEY);
+    List<InetSocketAddress> avatarAddrs0 = AvatarDataNode
+        .getAvatarNodeAddresses("0", conf, serviceIds);
+    List<InetSocketAddress> avatarAddrs1 = AvatarDataNode
+        .getAvatarNodeAddresses("1", conf, serviceIds);
 
     namespaceManager = new AvatarNamespaceManager(nameAddrs0, nameAddrs1,
-        avatarAddrs0, avatarAddrs1, defaultNameAddrs, 
+        avatarAddrs0, avatarAddrs1, defaultAddresses,
         DFSUtil.getNameServiceIds(conf));
 
     initDataSetAndScanner(conf, dataDirs, nameAddrs0.size());
@@ -183,7 +149,7 @@ public class AvatarDataNode extends DataNode {
         List<InetSocketAddress> nameAddrs1,
         List<InetSocketAddress> avatarAddrs0,
         List<InetSocketAddress> avatarAddrs1,
-        List<InetSocketAddress> defaultAddrs,
+        List<String> defaultAddrs,
         Collection<String> nameserviceIds) throws IOException {
       Iterator<String> it = nameserviceIds.iterator();
        for ( int i = 0; i<nameAddrs0.size(); i++) {
@@ -228,23 +194,34 @@ public class AvatarDataNode extends DataNode {
         List<InetSocketAddress> nameAddrs1,
         List<InetSocketAddress> avatarAddrs0,
         List<InetSocketAddress> avatarAddrs1,
-        List<InetSocketAddress> defaultAddrs,
+        List<String> defaultAddrs,
         Collection<String> nameserviceIds)
         throws IOException, InterruptedException{
       List<Integer> toStart = new ArrayList<Integer>();
       List<String> toStartNameserviceIds = new ArrayList<String>();
       List<NamespaceService> toStop = new ArrayList<NamespaceService>();
+      List<InetSocketAddress> toStopNNs = new ArrayList<InetSocketAddress>();
       synchronized (refreshNamenodesLock) {
         synchronized (this) {
           for (InetSocketAddress nnAddr : nameNodeThreads.keySet()) {
-            if (!nameAddrs0.contains(nnAddr)){
-              toStop.add(nameNodeThreads.get(nnAddr));
+            if (!nameAddrs0.contains(nnAddr)) {
+              LOG.info("To remove service at " + nnAddr);
+              toStopNNs.add(nnAddr);
+            }
+          }
+          for (InetSocketAddress nnAddr : toStopNNs) {
+            NamespaceService ns = remove(nnAddr);
+            if (ns != null) {
+              LOG.info("Removing service: " + nnAddr);
+              toStop.add(ns);
             }
           }
           Iterator<String> it = nameserviceIds.iterator();
           for (int i = 0; i < nameAddrs0.size(); i++) {
             String nameserviceId = it.hasNext()? it.next() : null;
-            if (!nameNodeThreads.containsKey(nameAddrs0.get(i))) {
+            InetSocketAddress nnAddr = nameAddrs0.get(i);
+            if (!nameNodeThreads.containsKey(nnAddr)) {
+              LOG.info("Adding service " + nameserviceId + " at " + nnAddr);
               toStart.add(i);
               toStartNameserviceIds.add(nameserviceId);
             }
@@ -257,9 +234,6 @@ public class AvatarDataNode extends DataNode {
                     avatarAddrs0.get(i), avatarAddrs1.get(i),
                     defaultAddrs.get(i), it.next()));
           }
-          for (NamespaceService nsos : toStop) {
-            remove(nsos);
-          }
         }
         for (NamespaceService nsos : toStop) {
           nsos.stop();
@@ -270,6 +244,66 @@ public class AvatarDataNode extends DataNode {
         startAll();
       }
     }
+
+    /**
+     * Refreshes the corresponding offer service if there were any
+     * changes for that avatarnode in the config file.
+     * 
+     * @param zeroOrOne
+     *          whether to refresh for AvatarZero or AvatarOne
+     */
+    void refreshOfferService(InetSocketAddress nameAddrs0,
+        InetSocketAddress nameAddrs1, InetSocketAddress avatarAddrs0,
+        InetSocketAddress avatarAddrs1, String serviceName) throws IOException {
+      LOG.info("OfferService refresh called.");
+      synchronized (refreshNamenodesLock) {
+        synchronized (this) {
+          Collection<NamespaceService> allServices = nameNodeThreads.values();
+          NamespaceService theServicePairToUpdate = null;
+          for (NamespaceService aService : allServices) {
+            if (aService.getNameserviceId().equalsIgnoreCase(serviceName)) {
+              theServicePairToUpdate = aService;
+              break;
+            }
+          }
+          if (theServicePairToUpdate == null) {
+            throw new IOException("Invalid service name.");
+          }
+          boolean wasZeroRefreshed = false;
+          ServicePair toBeRefreshed = (ServicePair) theServicePairToUpdate;
+          if (!(nameAddrs0.equals(toBeRefreshed.nameAddr1) && avatarAddrs0
+              .equals(toBeRefreshed.avatarAddr1))) {
+            LOG.info("Refreshing offer service to node zero for service: "
+                + serviceName);
+            logChangeOf(toBeRefreshed.nameAddr1, nameAddrs0);
+            logChangeOf(toBeRefreshed.avatarAddr1, avatarAddrs0);
+            toBeRefreshed.restartServiceZeroWith(nameAddrs0, avatarAddrs0);
+            remapNameservice(toBeRefreshed.nameAddr1, nameAddrs0);
+            wasZeroRefreshed = true;
+          }
+          boolean wasOneRefreshed = false;
+          if (!(nameAddrs1.equals(toBeRefreshed.nameAddr2) && avatarAddrs1
+              .equals(toBeRefreshed.avatarAddr2))) {
+            LOG.info("Refreshing offer service to node zero for service: "
+                + serviceName);
+            logChangeOf(toBeRefreshed.nameAddr2, nameAddrs1);
+            logChangeOf(toBeRefreshed.avatarAddr2, avatarAddrs1);
+            toBeRefreshed.restartServiceOneWith(nameAddrs1, avatarAddrs1);
+            wasOneRefreshed = true;
+          }
+          if (!wasZeroRefreshed && !wasOneRefreshed) {
+            LOG.warn("Neither of the offerservices were refreshed");
+          }
+        }
+      }
+    }
+  }
+
+  private static void logChangeOf(InetSocketAddress prev, InetSocketAddress next) {
+    if (prev.equals(next)) {
+      return;
+    }
+    LOG.info("From: <" + prev + "> To: <" + next + ">");
   }
 
   public class ServicePair extends NamespaceService {
@@ -291,7 +325,7 @@ public class AvatarDataNode extends DataNode {
     OfferService offerService2;
     
     volatile OfferService primaryOfferService = null;
-    volatile String primaryAddr = null;
+    volatile InetSocketAddress primaryAddr = null;
     Thread of1;
     Thread of2;
     
@@ -313,12 +347,12 @@ public class AvatarDataNode extends DataNode {
     
     private ServicePair(InetSocketAddress nameAddr1, InetSocketAddress nameAddr2,
         InetSocketAddress avatarAddr1, InetSocketAddress avatarAddr2,
-        InetSocketAddress defaultAddr, String nameserviceId) {
+        String defaultAddr, String nameserviceId) {
       this.nameAddr1 = nameAddr1;
       this.nameAddr2 = nameAddr2;
       this.avatarAddr1 = avatarAddr1;
       this.avatarAddr2 = avatarAddr2;
-      this.defaultAddr = defaultAddr.getHostName() + ":" + defaultAddr.getPort();
+      this.defaultAddr = defaultAddr;
       this.nameserviceId = nameserviceId;
       zkClient = new AvatarZooKeeperClient(getConf(), null);
       this.nsRegistration = new DatanodeRegistration(getMachineName());
@@ -414,6 +448,7 @@ public class AvatarDataNode extends DataNode {
         //Thread is started already
         return;
       }
+      LOG.info("start service " + this.nameserviceId);
       spThread = new Thread(this, dnThreadName + " for namespace " + namespaceId);
       spThread.setDaemon(true);
       spThread.start();
@@ -442,6 +477,10 @@ public class AvatarDataNode extends DataNode {
     }
 
     private void initProxy2() throws IOException {
+      InjectionHandler.processEventIO(
+          InjectionEvent.OFFERSERVICE_BEFORE_INIT_PROXY2, nameAddr2,
+          avatarAddr2);
+
       synchronized (avatarAddr2) {
         if (namenode2 == null) {
           namenode2 = (DatanodeProtocol) RPC.getProxy(DatanodeProtocol.class,
@@ -452,6 +491,24 @@ public class AvatarDataNode extends DataNode {
               AvatarProtocol.versionID, avatarAddr2, getConf());
         }
       }
+    }
+
+    private void restartServiceZeroWith(InetSocketAddress namenodeZero,
+        InetSocketAddress avatarZero) throws IOException {
+      synchronized (avatarAddr1) {
+        nameAddr1 = namenodeZero;
+        avatarAddr1 = avatarZero;
+      }
+      restartService1();
+    }
+
+    private void restartServiceOneWith(InetSocketAddress namenodeOne,
+        InetSocketAddress avatarOne) throws IOException {
+      synchronized (avatarAddr2) {
+        nameAddr2 = namenodeOne;
+        avatarAddr2 = avatarOne;
+      }
+      restartService2();
     }
 
     public void restartService1() throws IOException {
@@ -555,7 +612,7 @@ public class AvatarDataNode extends DataNode {
       if(upgradeManager != null)
         upgradeManager.shutdownUpgrade();
       
-      namespaceManager.remove(this);
+      namespaceManager.remove(this.getNNSocketAddress());
       shouldServiceRun = false;
       try {
         RPC.stopProxy(namenode1);
@@ -596,11 +653,6 @@ public class AvatarDataNode extends DataNode {
     // we failover and hence we can speak to any one of the nodes to find out
     // the NamespaceInfo.
     boolean noPrimary = false;
-    boolean needResolveNNAddr1 = false;
-    long lastResolveTime1 = 0;
-    boolean needResolveNNAddr2 = false;
-    long lastResolveTime2 = 0;
-    long DNS_RESOLVE_MIN_INTERVAL = 120 * 1000;
     
     do {
       if (startup) {
@@ -610,8 +662,7 @@ public class AvatarDataNode extends DataNode {
         try {
           getPrimaryAddr();
           noPrimary = (this.primaryAddr == null);
-          String firstNNAddress = getAddrStr(nameAddr1);
-          firstIsPrimary = firstNNAddress.equalsIgnoreCase(primaryAddr);
+          firstIsPrimary = nameAddr1.equals(primaryAddr);
         } catch (Exception ex) {
           LOG.error("Could not get the primary address from ZooKeeper", ex);
         }
@@ -622,49 +673,22 @@ public class AvatarDataNode extends DataNode {
             // startup connection or if it is primary on startup
             // This way if it is standby we are not wasting datanode startup
             // time
-            if (needResolveNNAddr1
-                && System.currentTimeMillis() - lastResolveTime1 > DNS_RESOLVE_MIN_INTERVAL) {
-              // Try to resolve DNS address again
-              InetSocketAddress newAddr;
-              boolean addressChanged = false;
-              newAddr = NetUtils.resolveAddress(nameAddr1);
-              if (newAddr != null) {
-                nameAddr1 = newAddr;
-                addressChanged = true;
-              }
-              newAddr = NetUtils.resolveAddress(avatarAddr1);
-              if (newAddr != null) {
-                avatarAddr1 = newAddr;
-                addressChanged = true;
-              }
-              lastResolveTime1 = System.currentTimeMillis();
-              needResolveNNAddr1 = false;
-              
-              if (addressChanged) {
-                stopService1();
-              }
-            }
             initProxy1();
-
             if (startup) {
               nsInfo = handshake(namenode1, nameAddr1);
             }
         }
       } catch(ConnectException se) {  // namenode has not been started
         LOG.info("Server at " + nameAddr1 + " not available yet, Zzzzz...");
-        needResolveNNAddr1 = true;
       } catch (NoRouteToHostException nrhe) {
         LOG.info("NoRouteToHostException connecting to server. " + nameAddr1,
             nrhe);
-        needResolveNNAddr1 = true;
       } catch (PortUnreachableException pue) {
         LOG.info("PortUnreachableException connecting to server. "
             + nameAddr1, pue);
-        needResolveNNAddr1 = true;
        } catch (UnknownHostException uhe) {
          LOG.info("UnknownHostException connecting to server. " + nameAddr1,
              uhe);
-        needResolveNNAddr1 = true;
       } catch(SocketTimeoutException te) {  // namenode is busy
         LOG.info("Problem connecting to server timeout. " + nameAddr1);
       } catch (IOException ioe) {
@@ -672,32 +696,7 @@ public class AvatarDataNode extends DataNode {
       }
       try {
         if ((!firstIsPrimary && startup) || !startup || noPrimary) {
-            if (needResolveNNAddr2
-                && System.currentTimeMillis() - lastResolveTime2 > DNS_RESOLVE_MIN_INTERVAL) {
-            // Try to resolve DNS address again
-            InetSocketAddress newAddr;
-            boolean addressChanged = false;
-            newAddr = NetUtils.resolveAddress(nameAddr2);
-            if (newAddr != null) {
-              nameAddr2 = newAddr;
-              addressChanged = true;
-            }
-            newAddr = NetUtils.resolveAddress(avatarAddr2);
-            if (newAddr != null) {
-              avatarAddr2 = newAddr;
-              addressChanged = true;
-            }
-            lastResolveTime2 = System.currentTimeMillis();
-            needResolveNNAddr2 = false;
-            
-            if (addressChanged) {
-              stopService2();
-            }
-
-          }
-
           initProxy2();
-
           if (startup) {
             NamespaceInfo tempInfo = handshake(namenode2, nameAddr2);
             // During failover both layouts should match.
@@ -712,19 +711,15 @@ public class AvatarDataNode extends DataNode {
         }
       } catch(ConnectException se) {  // namenode has not been started
         LOG.info("Server at " + nameAddr2 + " not available yet, Zzzzz...");
-        needResolveNNAddr2 = true;
       } catch (NoRouteToHostException nrhe) {
         LOG.info("NoRouteToHostException connecting to server. " + nameAddr2,
             nrhe);
-        needResolveNNAddr2 = true;
       } catch (PortUnreachableException pue) {
         LOG.info("PortUnreachableException connecting to server. "
             + nameAddr2, pue);
-        needResolveNNAddr2 = true;
        } catch (UnknownHostException uhe) {
          LOG.info("UnknownHostException connecting to server. " + nameAddr2,
              uhe);
-        needResolveNNAddr2 = true;
       } catch(SocketTimeoutException te) {  // namenode is busy
         LOG.info("Problem connecting to server timeout. " + nameAddr2);
       } catch (RemoteException re) {
@@ -738,7 +733,7 @@ public class AvatarDataNode extends DataNode {
 
   private NamespaceInfo handshake(DatanodeProtocol node,
         InetSocketAddress machine) throws IOException {
-    NamespaceInfo nsInfo = new NamespaceInfo();
+    NamespaceInfo nsInfo = null;
     while (shouldServiceRun) {
       try {
         nsInfo = node.versionRequest();
@@ -749,6 +744,9 @@ public class AvatarDataNode extends DataNode {
           Thread.sleep(1000);
         } catch (InterruptedException ie) {}
       }
+    }
+    if (nsInfo == null) { // because shouldServiceRun becomes false
+      return null;
     }
     LOG.info("Handshake with namenode server: " + machine);
     String errorMsg = null;
@@ -776,7 +774,7 @@ public class AvatarDataNode extends DataNode {
       errorMsg = "Datanode has older layout versions than namenode: namenode LV = " 
             + nsInfo.getLayoutVersion() + "; datanode BV = "
             + FSConstants.LAYOUT_VERSION
-            + " Datanode will shut down.";
+            + " Datanode will shut down. namenode server: " + machine;
       LOG.fatal(errorMsg);
       try {
         node.errorReport(nsRegistration,
@@ -918,29 +916,28 @@ public class AvatarDataNode extends DataNode {
     if (this.primaryAddr == null) {
       return false;
     }
-    String namenodeAddr = getAddrStr(namenodeAddress);
-    return this.primaryAddr.equalsIgnoreCase(namenodeAddr);
+    return this.primaryAddr.equals(namenodeAddress);
   }
   
-  private void getPrimaryAddr() throws InterruptedException {
-    try {
-      Stat stat = new Stat();
-      this.primaryAddr = this.zkClient.getPrimaryAvatarAddress(
-          this.defaultAddr, stat, false);
-    } catch (InterruptedException ie) {
-      throw ie;
-    } catch (Exception ex) {
-      LOG.error("Could not get the primary from ZooKeeper", ex);
-      this.primaryAddr = null;
+    private void getPrimaryAddr() throws InterruptedException {
+      try {
+        Stat stat = new Stat();
+        this.primaryAddr = NetUtils.createSocketAddr(this.zkClient.getPrimaryAvatarAddress(
+            this.defaultAddr, stat, false));
+      } catch (InterruptedException ie) {
+        throw ie;
+      } catch (Exception ex) {
+        LOG.error("Could not get the primary from ZooKeeper", ex);
+        this.primaryAddr = null;
+      }
     }
-  }
   
   void handleRegistrationError(RemoteException re, InetSocketAddress failedNode) {
     // If either the primary or standby NN throws these exceptions, this
     // datanode will exit. I think this is the right behaviour because
     // the excludes list on both namenode better be the same.
     String reClass = re.getClassName(); 
-    if (getAddrStr(failedNode).equalsIgnoreCase(this.primaryAddr) &&
+    if (failedNode.equals(primaryAddr) &&
         (UnregisteredDatanodeException.class.getName().equals(reClass) ||
         DisallowedDatanodeException.class.getName().equals(reClass) ||
         IncorrectVersionException.class.getName().equals(reClass))
@@ -995,7 +992,7 @@ public class AvatarDataNode extends DataNode {
       } catch (IOException ioe) {
         // Initial handshake, storage recovery or registration failed
         LOG.fatal(nsRegistration + " initialization failed for namespaceId "
-            + namespaceId, ioe);
+            + namespaceId + " default addr: " + defaultAddr, ioe);
         return;
       }
       
@@ -1017,8 +1014,8 @@ public class AvatarDataNode extends DataNode {
           startDistributedUpgradeIfNeeded();
         } catch (RemoteException re) {
           handleRegistrationError(re, failedNode);
-        } catch (Exception ex) {
-          LOG.error("Exception: ", ex);
+        } catch (IOException ioe) { //other io exception
+          LOG.warn("IOException: ", ioe);
         }
         if (shouldServiceRun && shouldRun) {
           try {
@@ -1027,6 +1024,8 @@ public class AvatarDataNode extends DataNode {
           }
         }
       }
+    } catch (Exception e) {
+        LOG.warn("Exception: ", e);
     } finally {
       LOG.info(nsRegistration + ":Finishing AvatarDataNode in: "+data);
       stopServices();
@@ -1218,26 +1217,10 @@ public class AvatarDataNode extends DataNode {
     return DataNode.getNameNodeAddress(newconf);
   }
 
-  @Override
-  public InetSocketAddress getNameNodeAddr() {
-    return NameNode.getAddress(getConf());
-  }
-
   /**
    * Returns the IP:port address of the avatar node
    */
-  private static InetSocketAddress getAvatarNodeAddress(Configuration conf,
-                                                        String cname) {
-    String fs = conf.get(cname);
-    Configuration newconf = new Configuration(conf);
-    newconf.set("fs.default.name", fs);
-    return AvatarNode.getAddress(newconf);
-  }
-
-  /**
-   * Returns the IP:port address of the avatar node
-   */
-  public static List<InetSocketAddress> getAvatarNodeAddresses(String suffix,
+  private static List<InetSocketAddress> getAvatarNodeAddresses(String suffix,
       Configuration conf, Collection<String> serviceIds) throws IOException{
     List<InetSocketAddress> namenodeAddresses = DFSUtil.getRPCAddresses(suffix,
         conf, serviceIds, FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
@@ -1245,7 +1228,7 @@ public class AvatarDataNode extends DataNode {
       new ArrayList<InetSocketAddress>(namenodeAddresses.size());
     for (InetSocketAddress namenodeAddress : namenodeAddresses) {
       avatarnodeAddresses.add(
-          new InetSocketAddress(namenodeAddress.getHostName(),conf.getInt(
+          new InetSocketAddress(namenodeAddress.getAddress(), conf.getInt(
               "dfs.avatarnode.port", namenodeAddress.getPort() + 1)));
     }
     return avatarnodeAddresses;
@@ -1298,43 +1281,69 @@ public class AvatarDataNode extends DataNode {
     dn.runDatanodeDaemon();
     return dn;
   }
-  
+
   @Override
   public void refreshNamenodes(Configuration conf) throws IOException {
     LOG.info("refresh namenodes");
     try {
       Collection<String> serviceIds = DFSUtil.getNameServiceIds(conf);
-      List<InetSocketAddress> defaultNameAddrs = 
-          AvatarDataNode.getDatanodeProtocolAddresses(conf, serviceIds);
-      List<InetSocketAddress> nameAddrs0 = 
-          DFSUtil.getRPCAddresses("0", conf, serviceIds,
-              NameNode.DATANODE_PROTOCOL_ADDRESS,
-              FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
-      List<InetSocketAddress> nameAddrs1 =
-          DFSUtil.getRPCAddresses("1", conf, serviceIds,
-              NameNode.DATANODE_PROTOCOL_ADDRESS, 
-              FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
-      List<InetSocketAddress> avatarAddrs0 =
-          AvatarDataNode.getAvatarNodeAddresses("0", conf, serviceIds);
-      List<InetSocketAddress> avatarAddrs1 =
-          AvatarDataNode.getAvatarNodeAddresses("1", conf, serviceIds);
-      ((AvatarNamespaceManager)namespaceManager).refreshNamenodes(
-          nameAddrs0, nameAddrs1,
-          avatarAddrs0, avatarAddrs1, 
-          defaultNameAddrs, serviceIds);
+      List<InetSocketAddress> nameAddrs0 = DFSUtil.getRPCAddresses("0", conf, serviceIds, DATANODE_PROTOCOL_ADDRESS,
+          DFS_NAMENODE_RPC_ADDRESS_KEY);
+      List<InetSocketAddress> nameAddrs1 = DFSUtil.getRPCAddresses("1", conf, serviceIds, DATANODE_PROTOCOL_ADDRESS,
+          DFS_NAMENODE_RPC_ADDRESS_KEY);
+      List<InetSocketAddress> avatarAddrs0 = getAvatarNodeAddresses("0", conf, serviceIds);
+      List<InetSocketAddress> avatarAddrs1 = getAvatarNodeAddresses("1", conf, serviceIds);
+      List<String> defaultAddresses = getZnodePaths(serviceIds, conf);
+      ((AvatarNamespaceManager) namespaceManager).refreshNamenodes(nameAddrs0, nameAddrs1, avatarAddrs0, avatarAddrs1,
+          defaultAddresses, serviceIds);
     } catch (InterruptedException e) {
       throw new IOException(e.getCause());
     }
   }
 
-  /** Return the node address in String format hostname:port */ 
-  private static String getAddrStr(InetSocketAddress nodeAddr) {
-    return nodeAddr.getHostName() + ":" + nodeAddr.getPort();
+  private static List<String> getZnodePaths(Collection<String> serviceIds,
+      Configuration conf) {
+    List<String> datanodeProtocolZnodePaths = new ArrayList<String>(Math.max(
+        serviceIds.size(), 1));
+    if (serviceIds.isEmpty()) {
+      datanodeProtocolZnodePaths.add(conf
+          .get(NameNode.DATANODE_PROTOCOL_ADDRESS));
+    } else {
+      for (String service : serviceIds) {
+        datanodeProtocolZnodePaths.add(conf
+            .get(NameNode.DATANODE_PROTOCOL_ADDRESS + "." + service));
+      }
+    }
+    return datanodeProtocolZnodePaths;
+  }
+
+  @Override
+  public void refreshOfferService(String serviceNameToRefresh) throws IOException {
+    Configuration currentConf = new Configuration();
+    Collection<String> serviceIds = DFSUtil.getNameServiceIds(currentConf);
+    String[] allServices = serviceIds.toArray(new String[] {});
+    for (int i = 0; i < allServices.length; i++) {
+      if (((String) allServices[i]).equalsIgnoreCase(serviceNameToRefresh)) {
+        List<InetSocketAddress> nameAddrs0 = DFSUtil.getRPCAddresses("0", currentConf, serviceIds,
+            DATANODE_PROTOCOL_ADDRESS, DFS_NAMENODE_RPC_ADDRESS_KEY);
+        List<InetSocketAddress> nameAddrs1 = DFSUtil.getRPCAddresses("1", currentConf, serviceIds,
+            DATANODE_PROTOCOL_ADDRESS, DFS_NAMENODE_RPC_ADDRESS_KEY);
+        List<InetSocketAddress> avatarAddrs0 = getAvatarNodeAddresses("0", currentConf, serviceIds);
+        List<InetSocketAddress> avatarAddrs1 = getAvatarNodeAddresses("1", currentConf, serviceIds);
+        ((AvatarNamespaceManager) namespaceManager).refreshOfferService(nameAddrs0.get(i), nameAddrs1.get(i),
+            avatarAddrs0.get(i), avatarAddrs1.get(i), serviceNameToRefresh);
+        return;
+      }
+    }
+    throw new IOException("Service name  (=" + serviceNameToRefresh + ") not found. ");
   }
   
   public static void main(String argv[]) {
+    org.apache.hadoop.hdfs.DnsMonitorSecurityManager.setTheManager();
     try {
       StringUtils.startupShutdownMessage(AvatarDataNode.class, argv, LOG);
+      FastWritableHDFS.init();
+      FastProtocolHDFS.init();
       AvatarDataNode avatarnode = createDataNode(argv, null);
       if (avatarnode != null) {
         avatarnode.waitAndShutdown();
@@ -1344,6 +1353,4 @@ public class AvatarDataNode extends DataNode {
       System.exit(-1);
     }
   }
-
-
 }

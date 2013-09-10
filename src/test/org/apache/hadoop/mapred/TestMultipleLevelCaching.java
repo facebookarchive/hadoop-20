@@ -86,7 +86,7 @@ public class TestMultipleLevelCaching extends TestCase {
       Configuration conf = new Configuration();
       // Run a datanode on host1 under /a/b/c/..../d1/e1/f1
       dfs = new MiniDFSCluster(conf, 1, true, new String[] {rack1}, 
-                               new String[] {"host1.com"});
+                               new String[] {"127.0.0.1"});
       dfs.waitActive();
       fileSys = dfs.getFileSystem();
       if (!fileSys.mkdirs(inDir)) {
@@ -104,14 +104,14 @@ public class TestMultipleLevelCaching extends TestCase {
       //               + 1 (for host)
       jc.setInt("mapred.task.cache.levels", level + 2);
       mr = new MiniMRCluster(taskTrackers, namenode, 1, new String[] {rack2}, 
-    		                 new String[] {"host2.com"}, jc);
+    		                 new String[] {"127.0.0.1"}, jc);
 
       /* The job is configured with 1 map for one (non-splittable) file. 
        * Since the datanode is running under different subtree, there is no
        * node-level data locality but there should be topological locality.
        */
       TestRackAwareTaskPlacement.launchJobAndTestCounters(
-    		  testName, mr, fileSys, inDir, outputPath, 1, 1, 0, 0);
+    		  testName, mr, fileSys, inDir, outputPath, 1, 0, 1, 0);
       mr.shutdown();
     } finally {
       fileSys.delete(inDir, true);

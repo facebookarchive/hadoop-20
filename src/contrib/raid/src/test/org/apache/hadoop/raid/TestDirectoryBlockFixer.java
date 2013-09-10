@@ -51,6 +51,7 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.JobID;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Worker.LostFileInfo;
 import org.apache.hadoop.raid.LogUtils.LOGRESULTS;
 import org.apache.hadoop.raid.LogUtils.LOGTYPES;
@@ -94,7 +95,7 @@ public class TestDirectoryBlockFixer extends TestCase {
   static {
     ParityFilePair.disableCacheUsedInTestOnly();
   }
-  
+
   public Configuration getRaidNodeConfig(Configuration conf, boolean local) {
     // create an instance of the RaidNode
     Configuration localConf = new Configuration(conf);
@@ -109,9 +110,9 @@ public class TestDirectoryBlockFixer extends TestCase {
     localConf.setLong("raid.blockfix.filespertask", 2L);
     return localConf;
   }
-  
+
   @Test
-  public void testDirectoryFilterUnfixableFiles() throws IOException {
+  public void testDirectoryFilterUnfixableFiles() throws Exception {
     conf = new Configuration();
     dfsCluster = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
     dfsCluster.waitActive();
@@ -122,7 +123,7 @@ public class TestDirectoryBlockFixer extends TestCase {
     try {
       Configuration testConf = fs.getConf();
       BlockIntegrityMonitor blockFixer = new
-          LocalBlockIntegrityMonitor(testConf);
+          LocalBlockIntegrityMonitor(testConf, false);
 
       String p1 = "/user/foo/f1";
       String p2 = "/user/foo/f2";
@@ -207,6 +208,8 @@ public class TestDirectoryBlockFixer extends TestCase {
     Path destPath = new Path("/destraidrs/user/dhruba");
     LOG.info("Test testDirBlockFix created test files");
     Configuration localConf = this.getRaidNodeConfig(conf, local);
+    // Not allow multiple running jobs
+    localConf.setLong("raid.blockfix.maxpendingjobs", 1L);
 
     try {
       cnode = RaidNode.createRaidNode(null, localConf);
@@ -270,25 +273,25 @@ public class TestDirectoryBlockFixer extends TestCase {
           }
         } else {
           TestBlockFixer.verifyMetrics(fileSys, cnode, local, 0L, 0L);
-          assertEquals("should fail to fix 3 files", 3L,
-              cnode.blockIntegrityMonitor.getNumFileFixFailures());
+          assertTrue("should fail to fix more than 3 files", 
+              cnode.blockIntegrityMonitor.getNumFileFixFailures() >= 3L);
           TestBlockFixer.verifyMetrics(fileSys, cnode, 
-              LOGTYPES.OFFLINE_RECONSTRUCTION_FILE, LOGRESULTS.FAILURE, 3L);
+              LOGTYPES.OFFLINE_RECONSTRUCTION_FILE, LOGRESULTS.FAILURE, 3L, true);
           // Will throw stripe mismatch exception for the first blocks of 3 files
           TestBlockFixer.verifyMetrics(fileSys, cnode,
               LOGTYPES.OFFLINE_RECONSTRUCTION_STRIPE_VERIFICATION,
-              LOGRESULTS.FAILURE, 3L);
+              LOGRESULTS.FAILURE, 3L, true);
         }
       } else {
         TestBlockFixer.verifyMetrics(fileSys, cnode, local, 0L, 0L);
-        assertEquals("should fail to fix 3 files", 3L,
-            cnode.blockIntegrityMonitor.getNumFileFixFailures());
+        assertTrue("should fail to fix more than 3 files",  
+            cnode.blockIntegrityMonitor.getNumFileFixFailures() >= 3L);
         TestBlockFixer.verifyMetrics(fileSys, cnode,
             LOGTYPES.OFFLINE_RECONSTRUCTION_GET_STRIPE, LOGRESULTS.FAILURE,
-            totalCorruptBlocks);
+            totalCorruptBlocks, true);
         TestBlockFixer.verifyMetrics(fileSys, cnode, 
             LOGTYPES.OFFLINE_RECONSTRUCTION_FILE, LOGRESULTS.FAILURE,
-            3L);
+            3L, true);
       }
     } catch (Exception e) {
       LOG.info("Test testDirBlockFix Exception " + e, e);
@@ -554,6 +557,14 @@ public class TestDirectoryBlockFixer extends TestCase {
     
     LOG.info("Test testConcurrentJobs created test files");
     Configuration localConf = this.getRaidNodeConfig(conf, false);
+    localConf.setLong(BlockIntegrityMonitor.BLOCKCHECK_INTERVAL, 15000L);
+    localConf.setLong(
+        DistBlockIntegrityMonitor.RAIDNODE_BLOCK_FIX_SUBMISSION_INTERVAL_KEY,
+        15000L);
+    localConf.setLong(
+        DistBlockIntegrityMonitor.RAIDNODE_BLOCK_FIX_SCAN_SUBMISSION_INTERVAL_KEY,
+        3600000);
+    
     try {
       cnode = RaidNode.createRaidNode(null, localConf);
       TestRaidDfs.waitForDirRaided(LOG, fileSys, dirPath1, destPath);
@@ -592,7 +603,7 @@ public class TestDirectoryBlockFixer extends TestCase {
         LOG.info("Test testDirBlockFix waiting for fixing job 2 and 3 to start");
         Thread.sleep(1000);
       }
-      assertEquals("3 jobs are running", 3, blockFixer.jobsRunning());
+      assertTrue("more than 3 jobs are running", blockFixer.jobsRunning() >= 3);
 
       while (blockFixer.getNumFilesFixed() < 6 &&
              System.currentTimeMillis() - start < 240000) {
@@ -705,14 +716,14 @@ public class TestDirectoryBlockFixer extends TestCase {
   static class FakeDistBlockIntegrityMonitor extends DistBlockIntegrityMonitor {
     Map<String, List<String>> submittedJobs =
       new HashMap<String, List<String>>();
-    FakeDistBlockIntegrityMonitor(Configuration conf) {
+    FakeDistBlockIntegrityMonitor(Configuration conf) throws Exception {
       super(conf);
     }
 
     @Override
     void submitJob(Job job, List<String> filesInJob, Priority priority,
-        Map<Job, List<LostFileInfo>> jobIndex) {
-
+        Map<Job, List<LostFileInfo>> jobIndex, 
+        Map<JobID, TrackingUrlInfo> idToTrackingUrlMap) {
       LOG.info("Job " + job.getJobName() + " was submitted ");
       submittedJobs.put(job.getJobName(), filesInJob);
     }
@@ -744,14 +755,18 @@ public class TestDirectoryBlockFixer extends TestCase {
       // Create Block Fixer and fix.
       FakeDistBlockIntegrityMonitor distBlockFixer = new FakeDistBlockIntegrityMonitor(conf);
       assertEquals(0, distBlockFixer.submittedJobs.size());
-
-      // One job should be submitted.
-      distBlockFixer.getCorruptionMonitor().checkAndReconstructBlocks();
-      assertEquals(1, distBlockFixer.submittedJobs.size());
-
-      // No new job should be submitted since we already have one.
-      distBlockFixer.getCorruptionMonitor().checkAndReconstructBlocks();
-      assertEquals(1, distBlockFixer.submittedJobs.size());
+      // waiting for one job to submit
+      long startTime = System.currentTimeMillis();
+      while (System.currentTimeMillis() - startTime < 120000 &&
+             distBlockFixer.submittedJobs.size() == 0) { 
+        distBlockFixer.getCorruptionMonitor().checkAndReconstructBlocks();
+        LOG.info("Waiting for jobs to submit");
+        Thread.sleep(10000);
+      }
+      int submittedJob = distBlockFixer.submittedJobs.size();
+      LOG.info("Already Submitted " + submittedJob + " jobs");
+      assertTrue("Should submit more than 1 jobs", submittedJob >= 1);
+      
 
       // Corrupt two more blocks
       corruptBlockIdxs = new Integer[]{4, 5};
@@ -760,8 +775,16 @@ public class TestDirectoryBlockFixer extends TestCase {
           crcs, corruptBlockIdxs, fileSys, dfsCluster, false, true);
       
       // A new job should be submitted since two blocks are corrupt.
-      distBlockFixer.getCorruptionMonitor().checkAndReconstructBlocks();
-      assertEquals(2, distBlockFixer.submittedJobs.size());
+      startTime = System.currentTimeMillis();
+      while (System.currentTimeMillis() - startTime < 120000 &&
+             distBlockFixer.submittedJobs.size() == submittedJob) { 
+        distBlockFixer.getCorruptionMonitor().checkAndReconstructBlocks();
+        LOG.info("Waiting for more jobs to submit");
+        Thread.sleep(10000);
+      }
+      LOG.info("Already Submitted " + distBlockFixer.submittedJobs.size()  + " jobs");
+      assertTrue("should submit more than 1 jobs",
+          distBlockFixer.submittedJobs.size() - submittedJob >= 1);
     } finally {
       myTearDown();
     }
@@ -796,7 +819,7 @@ public class TestDirectoryBlockFixer extends TestCase {
 
     // do not use map-reduce cluster for Raiding
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
-    conf.set("raid.server.address", "localhost:0");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
     conf.set("mapred.raid.http.address", "localhost:0");
 
     Utils.loadTestCodecs(conf, stripeLength, stripeLength, 1, 3, "/destraid",

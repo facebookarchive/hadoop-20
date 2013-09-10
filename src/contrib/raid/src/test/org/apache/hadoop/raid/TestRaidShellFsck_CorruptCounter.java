@@ -29,6 +29,14 @@ import org.junit.Test;
 import org.junit.After;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertEquals;
+import static org.mockito.Matchers.anyInt;
+import static org.mockito.Matchers.any;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -42,6 +50,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.TestRaidDfs;
 import org.apache.hadoop.hdfs.DFSUtil;
@@ -210,7 +219,11 @@ public class TestRaidShellFsck_CorruptCounter extends TestCase{
     args[0] = "-fsck";
     args[1] = DIR_PATH;
     args[2] = "-retNumStrpsMissingBlks";
-
+    
+    Runtime runtime = Runtime.getRuntime();
+    runtime = spy(runtime);
+    doNothing().when(runtime).exit(anyInt());
+    FSEditLog.setRuntimeForTesting(runtime);
   }
 
   /**
@@ -254,6 +267,7 @@ public class TestRaidShellFsck_CorruptCounter extends TestCase{
 
       Path parityFilePath = new Path(RAID_DIR, 
           filePath.toString().substring(1));
+      FileStatus fileStat = dfs.getFileStatus(filePath);
 
       while (!raided) {
         try {
@@ -286,9 +300,13 @@ public class TestRaidShellFsck_CorruptCounter extends TestCase{
               // case without HAR
               for (FileStatus f : listPaths) {
                 Path found = new Path(f.getPath().toUri().getPath());
-                if (parityFilePath.equals(found)) {
-                  LOG.info("raid file found: " + f.getPath().toString());
-                  raided = true;
+                if (parityFilePath.equals(found) ) {
+                  ParityFilePair ppair =
+                      ParityFilePair.getParityFile(Codec.getCodec(CODE_USED), fileStat, conf);
+                  if (ppair != null) {
+                    LOG.info("raid file found: " + ppair.getPath());
+                    raided = true;
+                  }
                   break;
                 }
               }
@@ -482,7 +500,6 @@ public class TestRaidShellFsck_CorruptCounter extends TestCase{
         Integer.toString(result), result == 0);
   }
 
-
   /**
    * checks fsck with missing block in file block but not in parity block
    */
@@ -634,7 +651,7 @@ public class TestRaidShellFsck_CorruptCounter extends TestCase{
 
     tearDown();
   }
-
+  
   public void testRaidNodeMetricsNumFilesToFixDropped() 
       throws Exception {
     LOG.info("testRaidNodeMetricsNumFileToFixDropped");
@@ -659,20 +676,25 @@ public class TestRaidShellFsck_CorruptCounter extends TestCase{
     Configuration localConf = new Configuration(conf);
     //disabling corrupt file counter
     localConf.setBoolean("raid.corruptfile.counter.disable", true);
-    localConf.setInt("raid.blockfix.interval", 2000);
-    localConf.setInt("raid.blockcheck.interval", 2000);
+    localConf.setInt(BlockIntegrityMonitor.BLOCKCHECK_INTERVAL, 2000);
+    localConf.setLong(
+        DistBlockIntegrityMonitor.RAIDNODE_BLOCK_FIX_SUBMISSION_INTERVAL_KEY,
+        2000L);
     localConf.set("raid.blockfix.classname", 
         "org.apache.hadoop.raid.DistBlockIntegrityMonitor");
     localConf.setLong("raid.blockfix.filespertask", 2L);
     localConf.setLong("raid.blockfix.maxpendingjobs", 1L);
-    localConf.set("raid.corruptfile.counter.dirs", MONITOR_DIRS);
+    localConf.set("raid.corruptfile.counter.dirs", "/user");
     localConf.setInt("raid.corruptfilecount.interval", 2000);
     rnode = RaidNode.createRaidNode(null, localConf);
-    Thread.sleep(3000);
-
     LOG.info("Checking Raid Node Metric numFilesToFixDropped") ;
     RaidNodeMetrics inst = RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
-    long result=inst.numFilesToFixDropped.get();
+    long startTime = System.currentTimeMillis();
+    long result = 0;
+    while (System.currentTimeMillis() - startTime < 60000 && result != 2) {
+      result = inst.numFilesToFixDropped.get();
+      Thread.sleep(1000);
+    }
     LOG.info("Num files to fix dropped in raid node metrics is " + result);
     assertTrue("Number of files to fix dropped with missing blocks should be 2 but got "+Long.toString(result),result==2);
     tearDown();

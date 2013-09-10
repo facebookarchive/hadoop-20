@@ -5,8 +5,12 @@ import java.util.Random;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.qjournal.client.QuorumJournalManager;
+import org.apache.hadoop.hdfs.qjournal.server.Journal;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.util.InjectionEventI;
@@ -14,6 +18,7 @@ import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.log4j.Level;
 
 import org.junit.After;
 import org.junit.AfterClass;
@@ -25,25 +30,33 @@ public class TestAvatarIngesting {
 
   final static Log LOG = LogFactory.getLog(TestAvatarIngesting.class);
 
-  private MiniAvatarCluster cluster;
+  protected MiniAvatarCluster cluster;
   private Configuration conf;
   private FileSystem fs;
   private Random random = new Random();
+
+  {
+  	((Log4JLogger)QuorumJournalManager.LOG).getLogger().setLevel(Level.ALL);
+  	((Log4JLogger)Journal.LOG).getLogger().setLevel(Level.ALL);
+  	((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
+  }
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
+  
 
-  private void setUp(long ckptPeriod, String name, boolean ckptEnabled) throws Exception {
+  void setUp(long ckptPeriod, String name, boolean ckptEnabled,
+      boolean enableQJM) throws Exception {
     LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
-
+    
     conf.setBoolean("fs.ha.retrywrites", true);
     conf.setBoolean("fs.checkpoint.enabled", ckptEnabled);
     conf.setLong("fs.checkpoint.period", 3600);
 
-    cluster = new MiniAvatarCluster(conf, 2, true, null, null);
+    cluster = new MiniAvatarCluster.Builder(conf).numDataNodes(2).enableQJM(enableQJM).build();
     fs = cluster.getFileSystem();
   }
 
@@ -72,12 +85,12 @@ public class TestAvatarIngesting {
 
   // ////////////////////////////
 
-  private void testIngestFailure(InjectionEvent event)
+  protected void testIngestFailure(InjectionEvent event, boolean enableQJM)
       throws Exception {
     LOG.info("TEST Ingest Failure : " + event);
     TestAvatarIngestingHandler h = new TestAvatarIngestingHandler(event);
     InjectionHandler.set(h);
-    setUp(3, "testIngestFailure: " + event, false); 
+    setUp(3, "testIngestFailure: " + event, false, enableQJM); 
           // simulate interruption, no ckpt failure
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -85,11 +98,13 @@ public class TestAvatarIngesting {
 
     createEdits(20);
     h.setDisabled(true);
-    standby.quiesceStandby(getCurrentTxId(primary) - 1);
     
-    // SLS + 20 edits
-    assertEquals(21, getCurrentTxId(primary));
-    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    if (!enableQJM) {
+	    standby.quiesceStandby(getCurrentTxId(primary) - 1);
+	    // SLS + 20 edits
+	    assertEquals(21, getCurrentTxId(primary));
+	    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
+    }
     tearDown();
   }
   
@@ -98,7 +113,7 @@ public class TestAvatarIngesting {
     TestAvatarIngestingHandler h = new TestAvatarIngestingHandler(
         InjectionEvent.FSEDIT_LOG_WRITE_END_LOG_SEGMENT);
     InjectionHandler.set(h);
-    setUp(3, "testCheckpointWithRestarts", true);
+    setUp(3, "testCheckpointWithRestarts", true, false);
     // simulate interruption, no ckpt failure
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -117,13 +132,34 @@ public class TestAvatarIngesting {
 
     assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
   }
+  
+  @Test
+  public void testPrimaryRestart() throws Exception {
+    // checks whether standby can continue ingesting with finalized segments
+    // with no ending transaction
+    TestAvatarIngestingHandler h = new TestAvatarIngestingHandler(null);
+    InjectionHandler.set(h);
+    h.gracefulShutdown = false;
+    
+    setUp(0, "testPrimaryRestart", false, false);
+    // simulate interruption, no ckpt failure
+    cluster.killStandby();   
+    cluster.killPrimary();
+    
+    // this will produce finalized segment with no ending marker
+    // and a new segment with txid = 1
+    cluster.restartAvatarNodes();
+    
+    // current txid is the one to be written 1 + 1 = 2
+    assertEquals(2, getCurrentTxId(cluster.getStandbyAvatar(0).avatar));
+  }
 
   /*
    * Simulate exception when reading from edits
    */
   @Test
   public void testIngestFailureReading() throws Exception {
-    testIngestFailure(InjectionEvent.INGEST_READ_OP);
+    testIngestFailure(InjectionEvent.INGEST_READ_OP, false);
   }
   
   /*
@@ -132,7 +168,7 @@ public class TestAvatarIngesting {
    */
   @Test
   public void testIngestFailureTxidMismatch() throws Exception {
-    testIngestFailure(InjectionEvent.INGEST_TXID_CHECK);
+    testIngestFailure(InjectionEvent.INGEST_TXID_CHECK, false);
   }
   
   @Test
@@ -142,7 +178,7 @@ public class TestAvatarIngesting {
     InjectionHandler.set(h);
     h.setDisabled(false);
 
-    setUp(3, "testIngestFailure: " + event, false);
+    setUp(3, "testIngestFailure: " + event, false, false);
     h.setDisabled(true);
 
     assertEquals(1, h.exceptions);
@@ -153,7 +189,7 @@ public class TestAvatarIngesting {
     TestAvatarIngestingHandler h = new TestAvatarIngestingHandler(
         InjectionEvent.STANDBY_RECOVER_STATE);
     InjectionHandler.set(h);
-    setUp(3, "testRecoverState", true);
+    setUp(3, "testRecoverState", true, false);
     // simulate interruption, no ckpt failure
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -167,10 +203,7 @@ public class TestAvatarIngesting {
     h.setDisabled(false);
 
     // sleep to see if the state recovers correctly
-    try {
-      Thread.sleep(5000);
-    } catch (Exception e) {
-    }
+    DFSTestUtil.waitNSecond(5);
     h.doCheckpoint();
     standby.quiesceStandby(getCurrentTxId(primary) - 1);
 
@@ -179,6 +212,7 @@ public class TestAvatarIngesting {
   }
     
   class TestAvatarIngestingHandler extends InjectionHandler {
+    boolean gracefulShutdown = true;
     int exceptions = 0;
     private InjectionEvent synchronizationPoint;
     int simulatedFailure = 0;
@@ -257,6 +291,9 @@ public class TestAvatarIngesting {
           && event == InjectionEvent.FSEDIT_LOG_WRITE_END_LOG_SEGMENT
           && !disabled) {
         return false;
+      }
+      if (event == InjectionEvent.FSEDIT_LOG_WRITE_END_LOG_SEGMENT) {
+        return gracefulShutdown;
       }
       return true;
     }

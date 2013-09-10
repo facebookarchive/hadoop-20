@@ -12,7 +12,7 @@
   import="org.apache.hadoop.hdfs.protocol.*"
   import="org.apache.hadoop.io.*"
   import="org.apache.hadoop.conf.*"
-  import="org.apache.hadoop.net.DNS"
+  import="org.apache.hadoop.net.NetUtils"
   import="org.apache.hadoop.util.*"
   import="java.text.DateFormat"
 %>
@@ -73,14 +73,13 @@
         } else {
           DatanodeInfo chosenNode = jspHelper.bestNode(firstBlock);
           String fqdn = InetAddress.getByName(chosenNode.getHost()).
-            getCanonicalHostName();
+            getHostAddress();
           String datanodeAddr = chosenNode.getName();
           int datanodePort = Integer.parseInt(
                                               datanodeAddr.substring(
                                                                      datanodeAddr.indexOf(':') + 1, 
                                                                      datanodeAddr.length())); 
-          String redirectLocation = "http://"+fqdn+":" +
-            chosenNode.getInfoPort() + 
+          String redirectLocation = "http://" + NetUtils.toIpPort(fqdn, chosenNode.getInfoPort()) + 
             "/browseBlock.jsp?blockId=" +
             firstBlock.getBlock().getBlockId() +
             "&blockSize=" + firstBlock.getBlock().getNumBytes() +
@@ -173,10 +172,9 @@
         jspHelper.addTableFooter(out);
       }
     } 
-    String namenodeHost = namenodeAddress.getHostName();
+    String namenodeHost = namenodeAddress.getAddress().getHostAddress();
     out.print("<br><a href=\"http://" + 
-              InetAddress.getByName(namenodeHost).getCanonicalHostName() + ":" +
-              namenodeInfoPort + "/dfshealth.jsp\">Go back to DFS home</a>");
+              NetUtils.toIpPort(namenodeHost, namenodeInfoPort) + "/dfshealth.jsp\">Go back to DFS home</a>");
     dfs.close();
   }
 

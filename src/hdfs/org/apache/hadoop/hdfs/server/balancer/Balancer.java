@@ -30,19 +30,7 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.text.DateFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Date;
-import java.util.Formatter;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
+import java.util.*;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -59,10 +47,8 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
-import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException;
 import org.apache.hadoop.hdfs.protocol.Block;
@@ -73,6 +59,7 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.ReplaceBlockHeader;
+import org.apache.hadoop.hdfs.server.balancer.metrics.BalancerMetrics;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy;
@@ -82,7 +69,6 @@ import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.BlocksWithLocations.BlockWithLocations;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.io.IOUtils;
-import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.retry.RetryPolicies;
 import org.apache.hadoop.io.retry.RetryPolicy;
@@ -90,7 +76,6 @@ import org.apache.hadoop.io.retry.RetryProxy;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.net.NetUtils;
-import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.StringUtils;
@@ -116,23 +101,23 @@ import org.apache.hadoop.util.ToolRunner;
  * </pre>
  *
  * <p>DESCRIPTION
- * <p>The threshold parameter is a fraction in the range of (0%, 100%) with a
- * default value of 10%. The threshold sets a target for whether the cluster
- * is balanced. A cluster is balanced if for each datanode, the utilization
- * of the node (ratio of used space at the node to total capacity of the node)
- * differs from the utilization of the (ratio of used space in the cluster
- * to total capacity of the cluster) by no more than the threshold value.
- * The smaller the threshold, the more balanced a cluster will become.
+ * <p>The threshold parameter is a fraction in the range of (0%, 100%)
+ * with a default value of 10%. The threshold sets a target for whether the cluster
+ * is balanced. Let the utilization of the node be equal to the ratio of used space
+ * at the node to total capacity of the node, analogically let the utilization
+ * of the cluster be equal to the ratio of used space in the cluster to total
+ * capacity of the cluster. Let the lower threshold be the maximum of (cluster utilization -
+ * threshold) and (cluster utilization / 2), let the upper threshold be the minimum of
+ * (cluster utilization + threshold) and 100% (only for consistency).
+ * A cluster is balanced iff for each datanode, lower threshold <= node's utilization <= upper
+ * threshold. The smaller the threshold, the more balanced a cluster will become.
  * It takes more time to run the balancer for small threshold values.
  * Also for a very small threshold the cluster may not be able to reach the
  * balanced state when applications write and delete files concurrently.
  *
- * <p>The tool moves blocks from highly utilized datanodes to poorly
- * utilized datanodes iteratively. In each iteration a datanode moves or
- * receives no more than the lesser of 10G bytes or the threshold fraction
- * of its capacity. Each iteration runs no more than 20 minutes.
- * At the end of each iteration, the balancer obtains updated datanodes
- * information from the namenode.
+ * <p>The tool moves blocks from highly utilized datanodes to poorly utilized
+ * datanodes iteratively. At the end of each iteration, the balancer obtains updated
+ * datanodes information from the namenode.
  *
  * <p>A system property that limits the balancer's use of bandwidth is
  * defined in the default configuration file:
@@ -182,7 +167,7 @@ import org.apache.hadoop.util.ToolRunner;
  * following messages to the output file in corresponding to the above exit
  * reasons:
  * <ol>
- * <li>The cluster is balanced. Exiting
+ * <li>The cluster is balanced after X iterations. Exiting
  * <li>No block can be moved. Exiting...
  * <li>No block has been moved for 3 iterations. Exiting...
  * <li>Received an IO exception: failure reason. Exiting...
@@ -197,7 +182,13 @@ import org.apache.hadoop.util.ToolRunner;
 public class Balancer implements Tool {
   protected static final Log LOG =
       LogFactory.getLog(Balancer.class.getName());
-  final private static long MAX_BLOCKS_SIZE_TO_FETCH = 2*1024*1024*1024L; //2GB
+
+  /** How big chunk of blocks can be fetched at once */
+  private long fetchBlocksSize;
+  /** Only blocks with no less replicas will be moved */
+  private int minBlockReplicas;
+  /** Max number of block fetches for single source */
+  private int maxFetchCount;
 
   /** The maximum number of concurrent blocks moves for
    * balancing purpose at a datanode
@@ -206,41 +197,23 @@ public class Balancer implements Tool {
   public static int maxConcurrentMoves = MAX_NUM_CONCURRENT_MOVES;
   private static long maxIterationTime = 20*60*1000L; //20 mins
   protected Configuration conf;
-  private static double threshold = 10D;
-  
+  double threshold = 10D;
+
   private InetSocketAddress namenodeAddress;
   protected NamenodeProtocol namenode;
   protected ClientProtocol client;
   protected FileSystem fs;
   private OutputStream out = null;
 
-  private final static Random rnd = new Random();
   private int namespaceId;
 
-  // all data node lists
-  private Collection<Source> overUtilizedDatanodes
-                               = new LinkedList<Source>();
-  private Collection<Source> aboveAvgUtilizedDatanodes
-                               = new LinkedList<Source>();
-  private Collection<BalancerDatanode> belowAvgUtilizedDatanodes
-                               = new LinkedList<BalancerDatanode>();
-  private Collection<BalancerDatanode> underUtilizedDatanodes
-                               = new LinkedList<BalancerDatanode>();
-
-  private Collection<Source> sources
-                               = new HashSet<Source>();
-  private Collection<BalancerDatanode> targets
-                               = new HashSet<BalancerDatanode>();
+  private BalancePlan plan;
+  private BalancerMetrics myMetrics;
 
   private Map<Block, BalancerBlock> globalBlockList
                  = new HashMap<Block, BalancerBlock>();
   private MovedBlocks movedBlocks = new MovedBlocks();
-  private Map<String, BalancerDatanode> datanodes
-                 = new HashMap<String, BalancerDatanode>();
 
-  private NetworkTopology cluster = new NetworkTopology();
-
-  private double avgRemaining = 0.0D;
   final static private int MOVER_THREAD_POOL_SIZE = 1000;
   private static int moveThreads = MOVER_THREAD_POOL_SIZE;
   private ExecutorService moverExecutor = null;
@@ -313,7 +286,7 @@ public class Balancer implements Tool {
     private boolean chooseProxySource() {
       // check if there is replica which is on the same rack with the target
       for (BalancerDatanode loc : block.getLocations()) {
-        if (cluster.isOnSameRack(loc.getDatanode(), target.getDatanode())) {
+        if (plan.cluster.isOnSameRack(loc.getDatanode(), target.getDatanode())) {
           if (loc.addPendingBlock(this)) {
             proxySource = loc;
             return true;
@@ -347,6 +320,7 @@ public class Balancer implements Tool {
             sock.getInputStream(), FSConstants.BUFFER_SIZE));
         receiveResponse(in);
         bytesMoved.inc(block.getNumBytes());
+        myMetrics.bytesMoved.inc(block.getNumBytes());
         LOG.info("Moving block " + block.getBlock().getBlockId() + " of size "
             + block.getNumBytes() +
               " from "+ source.getName() + " to " +
@@ -433,52 +407,63 @@ public class Balancer implements Tool {
   }
 
   /* A class for keeping track of blocks in the Balancer */
-  static private class BalancerBlock {
+  static class BalancerBlock {
     private Block block; // the block
     private List<BalancerDatanode> locations
             = new ArrayList<BalancerDatanode>(3); // its locations
 
     /* Constructor */
-    private BalancerBlock(Block block) {
+    public BalancerBlock(Block block) {
       this.block = block;
     }
 
     /* clean block locations */
-    private synchronized void clearLocations() {
+    public synchronized void clearLocations() {
       locations.clear();
     }
 
     /* add a location */
-    private synchronized void addLocation(BalancerDatanode datanode) {
+    public synchronized void addLocation(BalancerDatanode datanode) {
       if (!locations.contains(datanode)) {
         locations.add(datanode);
       }
     }
 
     /* Return if the block is located on <code>datanode</code> */
-    private synchronized boolean isLocatedOnDatanode(
+    public synchronized boolean isLocatedOnDatanode(
         BalancerDatanode datanode) {
       return locations.contains(datanode);
     }
 
     /* Return its locations */
-    private synchronized List<BalancerDatanode> getLocations() {
+    public synchronized List<BalancerDatanode> getLocations() {
       return locations;
     }
 
     /* Return the block */
-    private Block getBlock() {
+    public Block getBlock() {
       return block;
     }
 
     /* Return the block id */
-    private long getBlockId() {
+    public long getBlockId() {
       return block.getBlockId();
     }
 
     /* Return the length of the block */
-    private long getNumBytes() {
+    public long getNumBytes() {
       return block.getNumBytes();
+    }
+
+    /** Implements prioritization of blocks according to number of replicas */
+    public static class BalancerBlockComparator implements Comparator<BalancerBlock> {
+      @Override
+      public int compare(BalancerBlock b0, BalancerBlock b1) {
+        // Decreasing order by number of locations
+        int ret = Integer.valueOf(b1.getLocations().size()).compareTo(b0.getLocations().size());
+        // We have to distinguish blocks which are different
+        return ret != 0 ? ret : Long.valueOf(b0.getBlockId()).compareTo(b1.getBlockId());
+      }
     }
   }
 
@@ -486,12 +471,12 @@ public class Balancer implements Tool {
    * and the target.
    * An object of this class is stored in a source node.
    */
-  static private class NodeTask {
+  static class NodeTask {
     private BalancerDatanode datanode; //target node
     private long size;  //bytes scheduled to move
 
     /* constructor */
-    private NodeTask(BalancerDatanode datanode, long size) {
+    public NodeTask(BalancerDatanode datanode, long size) {
       this.datanode = datanode;
       this.size = size;
     }
@@ -502,47 +487,30 @@ public class Balancer implements Tool {
     }
 
     /* Get the number of bytes that need to be moved */
-    private long getSize() {
+    public long getSize() {
       return size;
     }
   }
-  
-  /* Return the utilization of a datanode */
-  static private double getRemaining(DatanodeInfo datanode) {
-    return ((double)datanode.getRemaining())/datanode.getCapacity()*100;
-  }
-  
+
   /* A class that keeps track of a datanode in Balancer */
-  private static class BalancerDatanode implements Writable {
-    final private static long MAX_SIZE_TO_MOVE = 10*1024*1024*1024L; //10GB
-    final DatanodeInfo datanode;
-    final double remaining;
-    final long maxSizeToMove;
-    protected long scheduledSize = 0L;
+  static abstract class BalancerDatanode implements Writable {
+    public final DatanodeInfo datanode;
+    public final double initialRemaining;
+    protected double currentRemaining = 0.0;
+    /** Number of bytes that can be moved */
+    protected long freeMoveSize;
+    /** Number of connections with this node that can be planned */
+    protected int freeConnections;
     //  blocks being moved but not confirmed yet
     private List<PendingBlockMove> pendingBlocks =
       new ArrayList<PendingBlockMove>(maxConcurrentMoves);
 
-    /* Constructor
-     * Depending on avgutil & threshold, calculate maximum bytes to move
-     */
-    private BalancerDatanode(
-        DatanodeInfo node, double avgRemaining, double threshold) {
+    public BalancerDatanode(DatanodeInfo node, double avgRemaining) {
       datanode = node;
-      remaining = Balancer.getRemaining(node);
-      long sizeToMove; 
-      
-      if (remaining + threshold <= avgRemaining 
-          || remaining - threshold  >= avgRemaining) {
-        sizeToMove = (long)(threshold*datanode.getCapacity()/100);
-      } else {
-        sizeToMove =
-          (long)(Math.abs(avgRemaining-remaining)*datanode.getCapacity()/100);
-      }
-      if (remaining > avgRemaining) {
-        sizeToMove = Math.min(datanode.getRemaining(), sizeToMove);
-      }
-      this.maxSizeToMove = Math.min(MAX_SIZE_TO_MOVE, sizeToMove);
+      initialRemaining = currentRemaining = BalancePlan.getRemaining(node);
+      freeMoveSize = (long) (Math.abs(avgRemaining - currentRemaining) * datanode.getCapacity()
+          / BalancePlan.PERCENTAGE_BASE);
+      freeConnections = 1; // TODO balancing concurrency
     }
 
     /** Get the datanode */
@@ -560,21 +528,24 @@ public class Balancer implements Tool {
       return datanode.getStorageID();
     }
 
-    /** Decide if still need to move more bytes */
-    protected boolean isMoveQuotaFull() {
-      return scheduledSize<maxSizeToMove;
+    /** PLAN PREPARATION */
+    public int getFreeConnections() {
+      return freeConnections;
     }
 
-    /** Return the total number of bytes that need to be moved */
-    protected long availableSizeToMove() {
-      return maxSizeToMove-scheduledSize;
+    public long getAvailableMoveSize() {
+      return freeConnections > 0 ? freeMoveSize : 0;
     }
 
-    /* increment scheduled size */
-    protected void incScheduledSize(long size) {
-      scheduledSize += size;
+    /** Return remaining as it will be when all planned moves are executed */
+    public double getCurrentRemaining() {
+      return currentRemaining;
     }
 
+    /** Add a node task */
+    public abstract void addNodeTask(NodeTask task);
+
+    /** PLAN EXECUTION */
     /* Check if the node can schedule more blocks to move */
     synchronized private boolean isPendingQNotFull() {
       if ( pendingBlocks.size() < maxConcurrentMoves ) {
@@ -621,8 +592,46 @@ public class Balancer implements Tool {
     }
   }
 
-  /** A node that can be the sources of a block move */
-  private class Source extends BalancerDatanode {
+  /** A node that can be the target of a block move */
+  static class Target extends BalancerDatanode {
+    public Target(DatanodeInfo node, double avgRemaining) {
+      super(node, avgRemaining);
+    }
+
+    @Override
+    public void addNodeTask(NodeTask task) {
+      assert task.datanode != this : "Source and target are the same " + getName();
+      freeMoveSize -= task.getSize();
+      assert freeMoveSize >= 0 : "freeMoveSize < 0 for " + getName();
+      freeConnections--;
+      assert freeConnections >= 0 : "freeConnections < 0 for " + getName();
+      currentRemaining -= (double) task.getSize() / datanode.getCapacity() * BalancePlan.PERCENTAGE_BASE;
+    }
+  }
+
+  /** A node that can be the source of a block move */
+  class Source extends BalancerDatanode {
+    /** How many times we can ask NameNode for blocks */
+    private int remainingFetchCount;
+
+    public Source(DatanodeInfo node, double avgRemaining) {
+      super(node, avgRemaining);
+      freeConnections = 100; // TODO balancing concurrency
+    }
+
+    @Override
+    public void addNodeTask(NodeTask task) {
+      assert task.datanode != this : "Source and target are the same " + getName();
+      scheduledSize += task.getSize();
+      freeMoveSize -= task.getSize();
+      assert freeMoveSize >= 0 : "freeMoveSize < 0 for " + getName();
+      freeConnections--;
+      assert freeConnections >= 0 : "freeConnections < 0 for " + getName();
+      currentRemaining += (double) task.getSize() / datanode.getCapacity() * BalancePlan.PERCENTAGE_BASE;
+      nodeTasks.add(task);
+    }
+
+    /** PLAN EXECUTION */
     /* A thread that initiates a block move
      * and waits for block move to complete */
     private class BlockMoveDispatcher implements Runnable {
@@ -636,42 +645,27 @@ public class Balancer implements Tool {
     }
 
     private ArrayList<NodeTask> nodeTasks = new ArrayList<NodeTask>(2);
-    private long blocksToReceive = 0L;
     /* source blocks point to balancerBlocks in the global list because
      * we want to keep one copy of a block in balancer and be aware that
      * the locations are changing over time.
      */
-    private List<BalancerBlock> srcBlockList
-            = new ArrayList<BalancerBlock>();
-
-    /* constructor */
-    private Source(DatanodeInfo node, double avgRemaining, double threshold) {
-      super(node, avgRemaining, threshold);
-    }
-
-    /** Add a node task */
-    private void addNodeTask(NodeTask task) {
-      assert (task.datanode != this) :
-        "Source and target are the same " + datanode.getName();
-      incScheduledSize(task.getSize());
-      nodeTasks.add(task);
-    }
+    private Collection<BalancerBlock> srcBlockList =
+        new TreeSet<BalancerBlock>(new BalancerBlock.BalancerBlockComparator());
+    /** Total size of all scheduled move requests */
+    long scheduledSize = 0L;
 
     /* Return an iterator to this source's blocks */
     private Iterator<BalancerBlock> getBlockIterator() {
       return srcBlockList.iterator();
     }
 
-    /* fetch new blocks of this source from namenode and
-     * update this source's block list & the global block list
-     * Return the total size of the received blocks in the number of bytes.
-     */
-    private long getBlockList() throws IOException {
-      BlockWithLocations[] newBlocks = namenode.getBlocks(datanode,
-        (long)Math.min(MAX_BLOCKS_SIZE_TO_FETCH, blocksToReceive)).getBlocks();
-      long bytesReceived = 0;
+    /** Fetch new blocks of this source from NameNode and update this source's block list & the
+     * global block list */
+    private void getBlockList() throws IOException {
+      BlockWithLocations[] newBlocks = namenode.getBlocks(datanode, fetchBlocksSize).getBlocks();
+      remainingFetchCount--;
       for (BlockWithLocations blk : newBlocks) {
-        bytesReceived += blk.getBlock().getNumBytes();
+        myMetrics.blocksFetched.inc();
         BalancerBlock block;
         synchronized(globalBlockList) {
           block = globalBlockList.get(blk.getBlock());
@@ -685,19 +679,22 @@ public class Balancer implements Tool {
           synchronized (block) {
             // update locations
             for ( String location : blk.getDatanodes() ) {
-              BalancerDatanode datanode = datanodes.get(location);
+              BalancerDatanode datanode = plan.datanodes.get(location);
               if (datanode != null) { // not an unknown datanode
                 block.addLocation(datanode);
               }
             }
           }
-          if (!srcBlockList.contains(block) && isGoodBlockCandidate(block)) {
+          if (!srcBlockList.contains(block)
+              && (block.getLocations().size() >= minBlockReplicas)
+              && isGoodBlockCandidate(block)) {
             // filter bad candidates
             srcBlockList.add(block);
+          } else {
+            myMetrics.blocksFetchedAndDropped.inc();
           }
         }
       }
-      return bytesReceived;
     }
 
     /* Decide if the given block is a good candidate to move or not */
@@ -756,8 +753,7 @@ public class Balancer implements Tool {
     private static final int SOURCE_BLOCK_LIST_MIN_SIZE=5;
     /* Return if should fetch more blocks from namenode */
     private boolean shouldFetchMoreBlocks() {
-      return srcBlockList.size()<SOURCE_BLOCK_LIST_MIN_SIZE &&
-                 blocksToReceive>0;
+      return srcBlockList.size() < SOURCE_BLOCK_LIST_MIN_SIZE && remainingFetchCount > 0;
     }
 
     /* This method iteratively does the following:
@@ -769,12 +765,11 @@ public class Balancer implements Tool {
      * it has received enough blocks from the namenode, or
      * the elapsed time of the iteration has exceeded the max time limit.
      */
-    private static final long MAX_ITERATION_TIME = 20*60*1000L; //20 mins
     private void dispatchBlocks(long startTime) {
-      this.blocksToReceive = 2*scheduledSize;
+      remainingFetchCount = Balancer.this.maxFetchCount;
       boolean isTimeUp = false;
-      while(!isTimeUp && scheduledSize>0 &&
-          (!srcBlockList.isEmpty() || blocksToReceive>0)) {
+      while (!isTimeUp && scheduledSize > 0 &&
+          (!srcBlockList.isEmpty() || remainingFetchCount > 0)) {
 
         // check if time is up or not
         // Even if not sent everything the iteration is over
@@ -799,7 +794,7 @@ public class Balancer implements Tool {
         if (shouldFetchMoreBlocks()) {
           // fetch new blocks
           try {
-            blocksToReceive -= getBlockList();
+            getBlockList();
             continue;
           } catch (IOException e) {
             LOG.warn(StringUtils.stringifyException(e));
@@ -818,6 +813,10 @@ public class Balancer implements Tool {
         }
       }
     }
+  }
+
+  Source getSource(DatanodeInfo datanode, double avgRemaining) {
+    return new Source(datanode, avgRemaining);
   }
 
   /*
@@ -848,7 +847,7 @@ public class Balancer implements Tool {
   Balancer(Configuration conf, double threshold) {
     setConf(conf);
     checkReplicationPolicyCompatibility(conf);
-    Balancer.threshold = threshold;
+    this.threshold = threshold;
   }
 
   /**
@@ -902,6 +901,13 @@ public class Balancer implements Tool {
    */
   private void init(InetSocketAddress namenodeAddress) throws IOException {
     this.namenodeAddress = namenodeAddress;
+    this.myMetrics = new BalancerMetrics(conf, namenodeAddress);
+    this.fetchBlocksSize = conf.getLong(BalancerConfigKeys.DFS_BALANCER_FETCH_SIZE_KEY,
+        BalancerConfigKeys.DFS_BALANCER_FETCH_SIZE_DEFAULT);
+    this.minBlockReplicas = conf.getInt(BalancerConfigKeys.DFS_BALANCER_MIN_REPLICAS_KEY,
+        BalancerConfigKeys.DFS_BALANCER_MIN_REPLICAS_DEFAULT);
+    this.maxFetchCount = conf.getInt(BalancerConfigKeys.DFS_BALANCER_FETCH_COUNT_KEY,
+        BalancerConfigKeys.DFS_BALANCER_FETCH_COUNT_DEFAULT);
     initFS();
     initNameNodes();
     this.moverExecutor = Executors.newFixedThreadPool(moveThreads);
@@ -951,300 +957,14 @@ public class Balancer implements Tool {
         methodNameToPolicyMap);
   }
 
-  /* Shuffle datanode array */
-  static private void shuffleArray(DatanodeInfo[] datanodes) {
-    for (int i=datanodes.length; i>1; i--) {
-      int randomIndex = rnd.nextInt(i);
-      DatanodeInfo tmp = datanodes[randomIndex];
-      datanodes[randomIndex] = datanodes[i-1];
-      datanodes[i-1] = tmp;
-    }
-  }
-  
-  /* get all live datanodes of a cluster and their disk usage
-   * decide the number of bytes need to be moved
-   */
-  private long initNodes() throws IOException {
-    return initNodes(client.getDatanodeReport(DatanodeReportType.LIVE));
-  }
-
-  /* Given a data node set, build a network topology and decide
-   * over-utilized datanodes, above average utilized datanodes,
-   * below average utilized datanodes, and underutilized datanodes.
-   * The input data node set is shuffled before the datanodes
-   * are put into the over-utilized datanodes, above average utilized
-   * datanodes, below average utilized datanodes, and
-   * underutilized datanodes lists. This will add some randomness
-   * to the node matching later on.
-   *
-   * @return the total number of bytes that are
-   *                needed to move to make the cluster balanced.
-   * @param datanodes a set of datanodes
-   */
-  private long initNodes(DatanodeInfo[] datanodes) {
-    // compute average remaining
-    long totalCapacity=0L, totalRemainingSpace=0L;
-    for (DatanodeInfo datanode : datanodes) {
-      if (datanode.isDecommissioned() || datanode.isDecommissionInProgress()) {
-        continue; // ignore decommissioning or decommissioned nodes
-      }
-      totalCapacity += datanode.getCapacity();
-      totalRemainingSpace += datanode.getRemaining();
-    }
-    avgRemaining = ((double)totalRemainingSpace)/totalCapacity*100;
-
-    /*create network topology and all data node lists:
-     * overloaded, above-average, below-average, and underloaded
-     * we alternates the accessing of the given datanodes array either by
-     * an increasing order or a decreasing order.
-     */
-    long overLoadedBytes = 0L, underLoadedBytes = 0L;
-    shuffleArray(datanodes);
-    for (DatanodeInfo datanode : datanodes) {
-      if (datanode.isDecommissioned() || datanode.isDecommissionInProgress()) {
-        continue; // ignore decommissioning or decommissioned nodes
-      }
-      cluster.add(datanode);
-      BalancerDatanode datanodeS;
-      if (getRemaining(datanode) < avgRemaining) {
-        datanodeS = new Source(datanode, avgRemaining, threshold);
-        if (isAboveAvgUtilized(datanodeS)) {
-          this.aboveAvgUtilizedDatanodes.add((Source)datanodeS);
-        } else {
-          assert(isOverUtilized(datanodeS)) :
-            datanodeS.getName()+ "is not an overUtilized node";
-          this.overUtilizedDatanodes.add((Source)datanodeS);
-          overLoadedBytes += (long)((avgRemaining - threshold - 
-              datanodeS.remaining)*datanodeS.datanode.getCapacity()/100.0);
-        }
-      } else {
-        datanodeS = new BalancerDatanode(datanode, avgRemaining, threshold);
-        if ( isBelowAvgUtilized(datanodeS)) {
-          this.belowAvgUtilizedDatanodes.add(datanodeS);
-        } else {
-          assert (isUnderUtilized(datanodeS)) :
-            datanodeS.getName()+ "is not an underUtilized node";
-          this.underUtilizedDatanodes.add(datanodeS);
-          underLoadedBytes += (long)((datanodeS.remaining - avgRemaining-
-              threshold)*datanodeS.datanode.getCapacity()/100.0);
-        }
-      }
-      this.datanodes.put(datanode.getStorageID(), datanodeS);
-    }
-
-    //logging
-    logImbalancedNodes();
-
-    assert (this.datanodes.size() ==
-      overUtilizedDatanodes.size()+underUtilizedDatanodes.size()+
-      aboveAvgUtilizedDatanodes.size()+belowAvgUtilizedDatanodes.size())
-      : "Mismatched number of datanodes";
-
-    // return number of bytes to be moved in order to make the cluster balanced
-    return Math.max(overLoadedBytes, underLoadedBytes);
-  }
-
-  /* log the over utilized & under utilized nodes */
-  private void logImbalancedNodes() {
-    StringBuilder msg = new StringBuilder();
-    msg.append(overUtilizedDatanodes.size());
-    msg.append(" over utilized nodes:");
-    for (Source node : overUtilizedDatanodes) {
-      msg.append( " " );
-      msg.append( node.getName() );
-    }
-    LOG.info(msg);
-    msg = new StringBuilder();
-    msg.append(underUtilizedDatanodes.size());
-    msg.append(" under utilized nodes: ");
-    for (BalancerDatanode node : underUtilizedDatanodes) {
-      msg.append( " " );
-      msg.append( node.getName() );
-    }
-    LOG.info(msg);
-  }
-
-  /* Decide all <source, target> pairs and
-   * the number of bytes to move from a source to a target
-   * Maximum bytes to be moved per node is
-   * Min(1 Band worth of bytes,  MAX_SIZE_TO_MOVE).
-   * Return total number of bytes to move in this iteration
-   */
-  private long chooseNodes() {
-    // Match nodes on the same rack first
-    chooseNodes(true);
-    // Then match nodes on different racks
-    chooseNodes(false);
-
-    assert (datanodes.size() ==
-      overUtilizedDatanodes.size()+underUtilizedDatanodes.size()+
-      aboveAvgUtilizedDatanodes.size()+belowAvgUtilizedDatanodes.size()+
-      sources.size()+targets.size())
-      : "Mismatched number of datanodes";
-
-    long bytesToMove = 0L;
-    for (Source src : sources) {
-      bytesToMove += src.scheduledSize;
-    }
-    return bytesToMove;
-  }
-
-  /* if onRack is true, decide all <source, target> pairs
-   * where source and target are on the same rack; Otherwise
-   * decide all <source, target> pairs where source and target are
-   * on different racks
-   */
-  private void chooseNodes(boolean onRack) {
-    /* first step: match each overUtilized datanode (source) to
-     * one or more underUtilized datanodes (targets).
-     */
-    chooseTargets(underUtilizedDatanodes.iterator(), onRack);
-
-    /* match each remaining overutilized datanode (source) to
-     * below average utilized datanodes (targets).
-     * Note only overutilized datanodes that haven't had that max bytes to move
-     * satisfied in step 1 are selected
-     */
-    chooseTargets(belowAvgUtilizedDatanodes.iterator(), onRack);
-
-    /* match each remaining underutilized datanode to
-     * above average utilized datanodes.
-     * Note only underutilized datanodes that have not had that max bytes to
-     * move satisfied in step 1 are selected.
-     */
-    chooseSources(aboveAvgUtilizedDatanodes.iterator(), onRack);
-  }
-
-  /* choose targets from the target candidate list for each over utilized
-   * source datanode. OnRackTarget determines if the chosen target
-   * should be on the same rack as the source
-   */
-  private void chooseTargets(
-      Iterator<BalancerDatanode> targetCandidates, boolean onRackTarget ) {
-    for (Iterator<Source> srcIterator = overUtilizedDatanodes.iterator();
-        srcIterator.hasNext();) {
-      Source source = srcIterator.next();
-      while (chooseTarget(source, targetCandidates, onRackTarget)) {
-      }
-      if (!source.isMoveQuotaFull()) {
-        srcIterator.remove();
+  private void preparePlan() throws IOException {
+    ArrayList<DatanodeInfo> report = new ArrayList<DatanodeInfo>();
+    for (DatanodeInfo node : client.getDatanodeReport(DatanodeReportType.LIVE)) {
+      if (!node.isDecommissioned() && !node.isDecommissionInProgress()) {
+        report.add(node);
       }
     }
-    return;
-  }
-
-  /* choose sources from the source candidate list for each under utilized
-   * target datanode. onRackSource determines if the chosen source
-   * should be on the same rack as the target
-   */
-  private void chooseSources(
-      Iterator<Source> sourceCandidates, boolean onRackSource) {
-    for (Iterator<BalancerDatanode> targetIterator =
-      underUtilizedDatanodes.iterator(); targetIterator.hasNext();) {
-      BalancerDatanode target = targetIterator.next();
-      while (chooseSource(target, sourceCandidates, onRackSource)) {
-      }
-      if (!target.isMoveQuotaFull()) {
-        targetIterator.remove();
-      }
-    }
-    return;
-  }
-
-  /* For the given source, choose targets from the target candidate list.
-   * OnRackTarget determines if the chosen target
-   * should be on the same rack as the source
-   */
-  private boolean chooseTarget(Source source,
-      Iterator<BalancerDatanode> targetCandidates, boolean onRackTarget) {
-    if (!source.isMoveQuotaFull()) {
-      return false;
-    }
-    boolean foundTarget = false;
-    BalancerDatanode target = null;
-    while (!foundTarget && targetCandidates.hasNext()) {
-      target = targetCandidates.next();
-      if (!target.isMoveQuotaFull()) {
-        targetCandidates.remove();
-        continue;
-      }
-      if (onRackTarget) {
-        // choose from on-rack nodes
-        if (cluster.isOnSameRack(source.datanode, target.datanode)) {
-          foundTarget = true;
-        }
-      } else {
-        // choose from off-rack nodes
-        if (!cluster.isOnSameRack(source.datanode, target.datanode)) {
-          foundTarget = true;
-        }
-      }
-    }
-    if (foundTarget) {
-      assert(target != null):"Choose a null target";
-      long size = Math.min(source.availableSizeToMove(),
-          target.availableSizeToMove());
-      NodeTask nodeTask = new NodeTask(target, size);
-      source.addNodeTask(nodeTask);
-      target.incScheduledSize(nodeTask.getSize());
-      sources.add(source);
-      targets.add(target);
-      if (!target.isMoveQuotaFull()) {
-        targetCandidates.remove();
-      }
-      LOG.info("Decided to move "+StringUtils.byteDesc(size)+" bytes from "
-          +source.datanode.getName() + " to " + target.datanode.getName());
-      return true;
-    }
-    return false;
-  }
-
-  /* For the given target, choose sources from the source candidate list.
-   * OnRackSource determines if the chosen source
-   * should be on the same rack as the target
-   */
-  private boolean chooseSource(BalancerDatanode target,
-      Iterator<Source> sourceCandidates, boolean onRackSource) {
-    if (!target.isMoveQuotaFull()) {
-      return false;
-    }
-    boolean foundSource = false;
-    Source source = null;
-    while (!foundSource && sourceCandidates.hasNext()) {
-      source = sourceCandidates.next();
-      if (!source.isMoveQuotaFull()) {
-        sourceCandidates.remove();
-        continue;
-      }
-      if (onRackSource) {
-        // choose from on-rack nodes
-        if ( cluster.isOnSameRack(source.getDatanode(), target.getDatanode())) {
-          foundSource = true;
-        }
-      } else {
-        // choose from off-rack nodes
-        if (!cluster.isOnSameRack(source.datanode, target.datanode)) {
-          foundSource = true;
-        }
-      }
-    }
-    if (foundSource) {
-      assert(source != null):"Choose a null source";
-      long size = Math.min(source.availableSizeToMove(),
-          target.availableSizeToMove());
-      NodeTask nodeTask = new NodeTask(target, size);
-      source.addNodeTask(nodeTask);
-      target.incScheduledSize(nodeTask.getSize());
-      sources.add(source);
-      targets.add(target);
-      if ( !source.isMoveQuotaFull()) {
-        sourceCandidates.remove();
-      }
-      LOG.info("Decided to move "+StringUtils.byteDesc(size)+" bytes from "
-          +source.datanode.getName() + " to " + target.datanode.getName());
-      return true;
-    }
-    return false;
+    plan = new BalancePlan(this, report);
   }
 
   private static class BytesMoved {
@@ -1269,9 +989,9 @@ public class Balancer implements Tool {
   private long dispatchBlockMoves() throws InterruptedException {
     long bytesLastMoved = bytesMoved.get();
 
-    Future<?>[] futures = new Future<?>[sources.size()];
+    Future<?>[] futures = new Future<?>[plan.sources.size()];
     int i=0;
-    for (Source source : sources) {
+    for (Source source : plan.sources) {
       futures[i++] = dispatcherExecutor.submit(
                         source.new BlockMoveDispatcher(Util.now()));
     }
@@ -1309,7 +1029,7 @@ public class Balancer implements Tool {
     int waitedIterations = 0;
     do {
       shouldWait = false;
-      for (BalancerDatanode target : targets) {
+      for (BalancerDatanode target : plan.targets) {
         if (!target.isPendingQEmpty()) {
           shouldWait = true;
         }
@@ -1317,7 +1037,7 @@ public class Balancer implements Tool {
       if (shouldWait) {
         try {
           if (waitedIterations > MAX_WAIT_ITERATIONS) {
-            for (BalancerDatanode target : targets) {
+            for (BalancerDatanode target : plan.targets) {
               target.killPending();
             }
             continue;
@@ -1351,12 +1071,12 @@ public class Balancer implements Tool {
       movedBlocks.add(new HashMap<Block,BalancerBlock>());
       movedBlocks.add(new HashMap<Block,BalancerBlock>());
     }
-    
+
     public void setWinWidth(Configuration conf) {
       winWidth = conf.getLong(
           "dfs.balancer.movedWinWidth", 5400*1000L);
     }
-    
+
     /* add a block thus marking a block to be moved */
     synchronized private void add(BalancerBlock block) {
       movedBlocks.get(CUR_WIN).put(block.getBlock(), block);
@@ -1403,14 +1123,14 @@ public class Balancer implements Tool {
     }
 
     boolean goodBlock = false;
-    if (cluster.isOnSameRack(source.getDatanode(), target.getDatanode())) {
+    if (plan.cluster.isOnSameRack(source.getDatanode(), target.getDatanode())) {
       // good if source and target are on the same rack
       goodBlock = true;
     } else {
       boolean notOnSameRack = true;
       synchronized (block) {
         for (BalancerDatanode loc : block.locations) {
-          if (cluster.isOnSameRack(loc.datanode, target.datanode)) {
+          if (plan.cluster.isOnSameRack(loc.datanode, target.datanode)) {
             notOnSameRack = false;
             break;
           }
@@ -1423,7 +1143,7 @@ public class Balancer implements Tool {
         // good if source is on the same rack as on of the replicas
         for (BalancerDatanode loc : block.locations) {
           if (loc != source &&
-              cluster.isOnSameRack(loc.datanode, source.datanode)) {
+              plan.cluster.isOnSameRack(loc.datanode, source.datanode)) {
             goodBlock = true;
             break;
           }
@@ -1435,15 +1155,7 @@ public class Balancer implements Tool {
 
   /* reset all fields in a balancer preparing for the next iteration */
   private void resetData() {
-    this.cluster = new NetworkTopology();
-    this.overUtilizedDatanodes.clear();
-    this.aboveAvgUtilizedDatanodes.clear();
-    this.belowAvgUtilizedDatanodes.clear();
-    this.underUtilizedDatanodes.clear();
-    this.datanodes.clear();
-    this.sources.clear();
-    this.targets.clear();
-    this.avgRemaining = 0.0D;
+    this.plan = null;
     cleanGlobalBlockList();
     this.movedBlocks.cleanup();
   }
@@ -1459,30 +1171,6 @@ public class Balancer implements Tool {
         globalBlockListIterator.remove();
       }
     }
-  }
-
-  /* Return true if the given datanode is overUtilized */
-  private boolean isOverUtilized(BalancerDatanode datanode) {
-    return datanode.remaining < (avgRemaining-threshold);
-  }
-
-  /* Return true if the given datanode is above average utilized
-   * but not overUtilized */
-  private boolean isAboveAvgUtilized(BalancerDatanode datanode) {
-    return (datanode.remaining >= (avgRemaining-threshold))
-        && (datanode.remaining < avgRemaining);
-  }
-
-  /* Return true if the given datanode is underUtilized */
-  private boolean isUnderUtilized(BalancerDatanode datanode) {
-    return datanode.remaining > (avgRemaining+threshold);
-  }
-
-  /* Return true if the given datanode is below average utilized
-   * but not underUtilized */
-  private boolean isBelowAvgUtilized(BalancerDatanode datanode) {
-    return (datanode.remaining <= (avgRemaining+threshold))
-           && (datanode.remaining < avgRemaining);
   }
 
   @SuppressWarnings(value = { "static-access" })
@@ -1505,7 +1193,7 @@ public class Balancer implements Tool {
         .create("par_moves"));
     return cliOpts;
   }
-  
+
   // Exit status
   final public static int SUCCESS = 0;
   final public static int IN_PROGRESS = 1;
@@ -1516,7 +1204,7 @@ public class Balancer implements Tool {
   final public static int ILLEGAL_ARGS = -5;
   final public static int INTERRUPTED = -6;
   final public static int NOT_ALL_BALANCED = -7;
-  
+
   public int run(String[] args) throws Exception {
     final long startTime = Util.now();
     try {
@@ -1532,12 +1220,12 @@ public class Balancer implements Tool {
       return INTERRUPTED;
     } catch (Exception e) {
       e.printStackTrace();
-      return ILLEGAL_ARGS; 
+      return ILLEGAL_ARGS;
     } finally {
       System.out.println("Balancing took " + time2Str(Util.now()-startTime));
     }
   }
-  
+
   /** parse command line arguments */
   private void parse(String[] args) {
     Options cliOpts = setupOptions();
@@ -1558,7 +1246,7 @@ public class Balancer implements Tool {
       moveThreads = Integer.parseInt(cl.getOptionValue("par_moves",
                                      String.valueOf(MOVER_THREAD_POOL_SIZE)));
       maxIterationTime = iterationTime * 60 * 1000L;
-      
+
       threshold = checkThreshold(newThreshold);
       System.out.println("Running with threshold of " + threshold
           + " and iteration time of " + maxIterationTime + " milliseconds");
@@ -1577,21 +1265,21 @@ public class Balancer implements Tool {
     return (Balancer) ReflectionUtils.newInstance(clazz, conf);
   }
 
-  
+
   /**
    * Balance all namenodes.
    * For each iteration,
    * for each namenode,
-   * execute a {@link Balancer} to work through all datanodes once.  
+   * execute a {@link Balancer} to work through all datanodes once.
    */
   static int run(List<InetSocketAddress> namenodes,
       Configuration conf) throws IOException, InterruptedException {
-    final long sleeptime = 2*conf.getLong("dfs.heartbeat.interval", 3);
+    final long sleepms = 1000L * 2 * conf.getLong("dfs.heartbeat.interval", 3);
     LOG.info("namenodes = " + namenodes);
     Formatter formatter = new Formatter(System.out);
     System.out.println("Time Stamp               Iteration#  Bytes Already Moved  Bytes Left To Move  Bytes Being Moved  Iterations Left  Seconds Left");
-    
-    final List<Balancer> balancers 
+
+    final List<Balancer> balancers
         = new ArrayList<Balancer>(namenodes.size());
     boolean failNN = false;
     try {
@@ -1606,7 +1294,7 @@ public class Balancer implements Tool {
           failNN = true;
         }
       }
-    
+
       boolean done = false;
       for(int iterations = 0; !done && balancers.size() > 0; iterations++) {
         done = true;
@@ -1628,7 +1316,7 @@ public class Balancer implements Tool {
         }
 
         if (!done) {
-          Thread.sleep(sleeptime);
+          Thread.sleep(sleepms);
         }
       }
     } finally {
@@ -1645,30 +1333,20 @@ public class Balancer implements Tool {
 
   public int run(int iterations, Formatter formatter){
     try {
-      /* get all live datanodes of a cluster and their disk usage
-       * decide the number of bytes need to be moved
-       */
-      long bytesLeftToMove = initNodes();
-      if (bytesLeftToMove == 0) {
-        System.out.println("The cluster is balanced. Exiting...");
+      preparePlan();
+      if (plan.bytesLeftToMove == 0) {
+        System.out.println("The cluster is balanced after " + iterations
+            + " iterations. Exiting...");
         return SUCCESS;
       } else {
-        LOG.info( "Need to move "+ StringUtils.byteDesc(bytesLeftToMove)
-            +" bytes to make the cluster balanced." );
+        LOG.info("Need to move " + StringUtils.byteDesc(plan.bytesLeftToMove)
+            + " bytes to make the cluster balanced.");
       }
-
-      /* Decide all the nodes that will participate in the block move and
-       * the number of bytes that need to be moved from one node to another
-       * in this iteration. Maximum bytes to be moved per node is
-       * Min(1 Band worth of bytes,  MAX_SIZE_TO_MOVE).
-       */
-      final long bytesToMove = chooseNodes();
-      if (bytesToMove == 0) {
+      if (plan.bytesToMove == 0) {
         System.out.println("No block can be moved. Exiting...");
         return NO_MOVE_BLOCK;
       } else {
-        LOG.info( "Will move " + StringUtils.byteDesc(bytesToMove) +
-            "bytes in this iteration");
+        LOG.info("Will move " + StringUtils.byteDesc(plan.bytesToMove) + "bytes in this iteration");
       }
 
       long moved = bytesMoved.get();
@@ -1676,7 +1354,7 @@ public class Balancer implements Tool {
       String timeLeft = "N/A";
       if (iterations != 0 && moved != 0) {
         long bytesPerIteration = moved / iterations;
-        long iterLeft = bytesLeftToMove / bytesPerIteration;
+        long iterLeft = plan.bytesLeftToMove / bytesPerIteration;
         iterationsLeft = String.valueOf(iterLeft );
         long secondsPerIteration = (maxIterationTime + blockMoveWaitTime)/1000;
         long secondsLeft = secondsPerIteration * iterLeft;
@@ -1701,8 +1379,8 @@ public class Balancer implements Tool {
           DateFormat.getDateTimeInstance().format(new Date()),
           iterations,
           StringUtils.byteDesc(bytesMoved.get()),
-          StringUtils.byteDesc(bytesLeftToMove),
-          StringUtils.byteDesc(bytesToMove),
+          StringUtils.byteDesc(plan.bytesLeftToMove),
+          StringUtils.byteDesc(plan.bytesToMove),
           iterationsLeft,
           timeLeft
           );
@@ -1745,7 +1423,7 @@ public class Balancer implements Tool {
     } finally {
     }
   }
-  
+
   /** Close the connection. */
   void close() {
     shuttingDown = true;
@@ -1761,7 +1439,7 @@ public class Balancer implements Tool {
       }
     }
   }
-  
+
   private Path BALANCER_ID_PATH = new Path("/system/balancer.id");
   /* The idea for making sure that there is no more than one balancer
    * running in an HDFS is to create a file in the HDFS, writes the IP address
@@ -1811,7 +1489,7 @@ public class Balancer implements Tool {
 
     return time+" "+unit;
   }
-  
+
   /** return this balancer's configuration */
   public Configuration getConf() {
     return conf;
@@ -1822,5 +1500,4 @@ public class Balancer implements Tool {
     this.conf = conf;
     movedBlocks.setWinWidth(conf);
   }
-  
 }

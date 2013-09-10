@@ -18,7 +18,11 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
+
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NNStorageDirectory;
@@ -28,11 +32,11 @@ import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
  * Interface responsible for inspecting a set of storage directories and devising
  * a plan to load the namespace from them.
  */
-abstract class FSImageStorageInspector {
+public abstract class FSImageStorageInspector {
   /**
    * Inspect the contents of the given storage directory.
    */
-  abstract void inspectDirectory(StorageDirectory sd) throws IOException;
+  public abstract void inspectDirectory(StorageDirectory sd) throws IOException;
 
   /**
    * @return false if any of the storage directories have an unfinalized upgrade 
@@ -65,25 +69,34 @@ abstract class FSImageStorageInspector {
   /**
    * Record of an image that has been located and had its filename parsed.
    */
-  static class FSImageFile {
+  public static class FSImageFile {
     final StorageDirectory sd;    
     final long txId;
     private final File file;
+    private ImageManager im;
     
-    FSImageFile(StorageDirectory sd, File file, long txId) {
-      assert txId >= 0 || txId == HdfsConstants.INVALID_TXID 
-        : "Invalid txid on " + file +": " + txId;
+    public FSImageFile(StorageDirectory sd, File file, long txId,
+        ImageManager im) {
+      assert txId >= 0 || txId == HdfsConstants.INVALID_TXID : "Invalid txid on "
+          + file + ": " + txId;
       
       this.sd = sd;
       this.txId = txId;
       this.file = file;
+      this.im = im;
     } 
     
-    File getFile() {
+    public File getFile() {
       return file;
     }
     
+    public ImageManager getImageManager() {
+      return im;
+    }
+    
     public boolean isLocal() {
+      if (sd == null)
+        return false;
       return NNStorage.isPreferred(StorageLocationType.LOCAL, sd);
     }
 
@@ -93,8 +106,8 @@ abstract class FSImageStorageInspector {
     
     @Override
     public String toString() {
-      return String.format("FSImageFile(file=%s, cpktTxId=%019d)", 
-                           file.toString(), txId);
+      return String.format("FSImageFile(file=%s, cpktTxId=%019d)",
+          (file != null ? file.toString() : " null "), txId);
     }
   }
 

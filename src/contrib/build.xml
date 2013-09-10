@@ -26,9 +26,20 @@
   <!-- ====================================================== -->
   <!-- Compile contribs.                                      -->
   <!-- ====================================================== -->
+  <target name="jar-source">
+    <subant target="jar-source">
+      <fileset dir="." includes="highavailability/build.xml"/>
+      <fileset dir="." includes="storageservice/build.xml"/>
+      <fileset dir="." includes="raid/build.xml"/>
+      <fileset dir="." includes="corona/build.xml"/>
+      <fileset dir="." includes="seekablecompression/build.xml"/>
+    </subant>
+  </target>
+
   <target name="compile">
     <subant target="compile">
       <fileset dir="." includes="highavailability/build.xml"/>
+      <fileset dir="." includes="storageservice/build.xml"/>
       <fileset dir="." includes="raid/build.xml"/>
       <fileset dir="." includes="benchmark/build.xml"/>
       <fileset dir="." includes="streaming/build.xml"/>
@@ -38,6 +49,7 @@
       <fileset dir="." includes="seekablecompression/build.xml"/>
       <fileset dir="." includes="fsshellservice/build.xml" />
       <fileset dir="." includes="namespace-notifier/build.xml" />
+      <fileset dir="." includes="bittorrent/build.xml" />
     </subant>
   </target>
 
@@ -66,6 +78,9 @@
       <fileset dir="." includes="gridmix/build.xml"/>
     </subant>
     <subant target="test" failonerror="false">
+      <fileset dir="." includes="storageservice/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="raid/build.xml"/>
     </subant>
     <subant target="test" failonerror="false">
@@ -90,6 +105,9 @@
   <!-- ====================================================== -->
   <target name="test-hdfs">
     <subant target="test" failonerror="false">
+      <fileset dir="." includes="storageservice/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="raid/build.xml"/>
     </subant>
     <subant target="test" failonerror="false">
@@ -110,6 +128,7 @@
       <fileset dir="." includes="corona/build.xml"/>
       <fileset dir="." includes="highavailability/build.xml"/>
       <fileset dir="." includes="namespace-notifier/build.xml"/>
+      <fileset dir="." includes="storageservice/build.xml"/>
       <fileset dir="." includes="seekablecompression/build.xml"/>
     </subant>
   </target>

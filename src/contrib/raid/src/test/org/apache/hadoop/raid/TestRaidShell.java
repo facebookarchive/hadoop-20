@@ -291,7 +291,7 @@ public class TestRaidShell extends TestCase {
 
     // do not use map-reduce cluster for Raiding
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
-    conf.set("raid.server.address", "localhost:0");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
 
     conf.setBoolean("dfs.permissions", false);
 

@@ -24,9 +24,9 @@ exception FsShellFileNotFoundException {
 
 service FsShellService
 {
-  void copyFromLocal(1:string src, 2:string dest)
+  void copyFromLocal(1:string src, 2:string dest, 3:bool validate)
       throws (1:FsShellException e),
-  void copyToLocal(1:string src, 2:string dest)
+  void copyToLocal(1:string src, 2:string dest, 3:bool validate)
       throws (1:FsShellException e),
   /**
    * remove() returns true only if the existing file or directory
@@ -55,5 +55,19 @@ service FsShellService
   DfsFileStatus getFileStatus(1:string path)
       throws (1:FsShellException e, 2:FsShellFileNotFoundException efnf),
   bool exists(1:string path)
+      throws (1:FsShellException e),
+  /**
+   * CRC32 of a file's data is returned. It works for either HDFS file
+   * or a local file (in the form of file:///foo/foo). Since it's CRC32
+   * of pure data. The return value for a local file and a remote file
+   * with the same data will be the same.
+   *
+   * Either the path is a directory, or the file doesn't exist,
+   * FsShellException is thrown.
+   *
+   * TODO: improve exception thrown here. Currently it's not easy for
+   *       DFSClient to identify different failure cases.
+   */
+  i32 getFileCrc(1:string path)
       throws (1:FsShellException e),
 }

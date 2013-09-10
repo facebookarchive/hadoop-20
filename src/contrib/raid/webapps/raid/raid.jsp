@@ -9,6 +9,7 @@
   import="org.apache.hadoop.util.*"
   import="org.apache.hadoop.hdfs.*"
   import="org.apache.hadoop.hdfs.DistributedFileSystem.*"
+  import="org.apache.hadoop.fs.FileSystem"
   import="org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptFileCounter"
   import="java.lang.Integer"
   import="java.text.SimpleDateFormat"
@@ -20,7 +21,8 @@
   PurgeMonitor purge = raidNode.getPurgeMonitor();
   CorruptFileCounter counter = raidNode.getCorruptFileCounter();
   PlacementMonitor place = raidNode.getPlacementMonitor();
-  DiskStatus ds = new DFSClient(raidNode.getConf()).getNSDiskStatus();
+  DiskStatus ds = ((DistributedFileSystem)FileSystem.get(raidNode.getConf()))
+                     .getClient().getNSDiskStatus();
   String name = raidNode.getHostName();
   name = name.substring(0, name.indexOf(".")).toUpperCase();
 %>
@@ -43,7 +45,7 @@
 
 <html>
   <head>
-    <title><%=name%> Hadoop RaidNode Administration</title> <link rel="stylesheet" type="text/css" href="/static/hadoop.css">
+    <title><%=name%> Hadoop RaidNode Administration</title> <link rel="stylesheet" type="text/css" href="static/hadoop.css">
   </head>
 <body>
 <h1><%=name%> Hadoop RaidNode Administration</h1>
@@ -95,8 +97,8 @@
     String paritySize, estParitySize;
     if (codeStats != null) {
       out.print(codeStats.htmlTable());
-      saving = StringUtils.byteDesc(codeStats.getSaving());
-      doneSaving = StringUtils.byteDesc(codeStats.getDoneSaving());
+      saving = StringUtils.byteDesc(codeStats.getSaving(raidNode.getConf()));
+      doneSaving = StringUtils.byteDesc(codeStats.getDoneSaving(raidNode.getConf()));
       repl = StringUtils.limitDecimalTo2(codeStats.getEffectiveReplication());
       paritySize = StringUtils.byteDesc(codeStats.getParityCounters()
           .getNumBytes());
@@ -122,7 +124,11 @@
 <h2>Block Placement</h2>
 <%
   if (place.lastUpdateTime() != 0) {
+    out.println("Block Placement Per Node");
     out.print(place.htmlTable());
+    out.println();
+    out.println("Block Placement Per Rack");
+    out.print(place.htmlTablePerRack());
     tableStr = "";
     lastUpdate =
         StringUtils.formatTime(now() - place.lastUpdateTime()) + " ago";

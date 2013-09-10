@@ -38,6 +38,11 @@
 #include "file_descriptor.h"
 #include "errno_enum.h"
 
+// Copied from ioprio.h
+#define IOPRIO_CLASS_SHIFT	(13)
+#define IOPRIO_PRIO_VALUE(class, data)	(((class) << IOPRIO_CLASS_SHIFT) | data)
+#define	IOPRIO_WHO_PROCESS (1)
+
 // the NativeIO$Stat inner class and its constructor
 static jclass stat_clazz;
 static jmethodID stat_ctor;
@@ -283,6 +288,77 @@ cleanup:
   return jStat;
 }
 
+/**
+ * public static native int ioprio_get() throws IOException;
+ */
+JNIEXPORT int JNICALL
+Java_org_apache_hadoop_io_nativeio_NativeIO_ioprio_1get(
+  JNIEnv *env, jclass clazz) {
+#ifndef SYS_ioprio_get
+  THROW(env, "java/lang/UnsupportedOperationException",
+        "ioprio_get support not available");
+#else
+  pid_t tid = syscall(SYS_gettid);
+  int prio = syscall(SYS_ioprio_get, IOPRIO_WHO_PROCESS, tid);
+  if(prio == -1) {
+    if (errno == ENOSYS) {
+      // we know the syscall number, but it's not compiled
+      // into the running kernel
+      THROW(env, "java/lang/UnsupportedOperationException",
+          "ioprio_get kernel support not available");
+    } else {
+      THROW(env, "java/io/IOException", strerror(errno));
+    }
+  }
+  return prio;
+#endif
+}
+
+void syscall_ioprio_set(JNIEnv *env, jint ioprio_prio_value) {
+  pid_t tid = syscall(SYS_gettid);
+  if(syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, tid,
+        ioprio_prio_value) == -1) {
+    if (errno == ENOSYS) {
+      // we know the syscall number, but it's not compiled
+      // into the running kernel
+      THROW(env, "java/lang/UnsupportedOperationException",
+          "ioprio_set kernel support not available");
+    } else {
+      THROW(env, "java/io/IOException", strerror(errno));
+    }
+  }
+}
+
+/**
+ * public static native void ioprio_set(int ioprio_prio_value)
+ * throws IOException;
+ */
+JNIEXPORT void JNICALL
+Java_org_apache_hadoop_io_nativeio_NativeIO_ioprio_1set__I(
+  JNIEnv *env, jclass clazz, jint ioprio_prio_value) {
+#ifndef SYS_ioprio_set
+  THROW(env, "java/lang/UnsupportedOperationException",
+        "ioprio_set support not available");
+#else
+  syscall_ioprio_set(env, ioprio_prio_value);
+#endif
+}
+
+/**
+ * public static native void ioprio_set(int classOfService, int priority)
+ * throws IOException;
+ */
+JNIEXPORT void JNICALL
+Java_org_apache_hadoop_io_nativeio_NativeIO_ioprio_1set__II(
+  JNIEnv *env, jclass clazz, jint class, jint priority) {
+#ifndef SYS_ioprio_set
+  THROW(env, "java/lang/UnsupportedOperationException",
+        "ioprio_set support not available");
+#else
+  syscall_ioprio_set(env, IOPRIO_PRIO_VALUE(class, priority));
+#endif
+}
+
 
 /**
  * public static native void posix_fadvise(
@@ -356,6 +432,41 @@ Java_org_apache_hadoop_io_nativeio_NativeIO_sync_1file_1range(
     }
   }
 #endif
+}
+
+/*
+ * public static native void fsync(String path);
+ */
+JNIEXPORT void JNICALL
+Java_org_apache_hadoop_io_nativeio_NativeIO_fsync(
+  JNIEnv *env, jclass clazz, jstring j_path) {
+  int fd = -1;
+  const char *path = (*env)->GetStringUTFChars(env, j_path, NULL);
+  if (path == NULL) {
+    THROW(env, "java/io/IOException", "Invalid argument passed");
+    goto cleanup;
+  }
+
+  fd = open(path, 0);
+  if (fd == -1) {
+    throw_ioe(env, errno);
+    goto cleanup;
+  }
+
+  if (fsync(fd) == -1) {
+    throw_ioe(env, errno);
+    goto cleanup;
+  }
+
+cleanup:
+  if (path != NULL) {
+    (*env)->ReleaseStringUTFChars(env, j_path, path);
+  }
+  if (fd != -1) {
+    if (close(fd) == -1) {
+      throw_ioe(env, errno);
+    }
+  }
 }
 
 /*

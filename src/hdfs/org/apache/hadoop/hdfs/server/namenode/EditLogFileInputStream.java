@@ -19,6 +19,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.BufferedInputStream;
+import java.io.Closeable;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
@@ -27,25 +28,42 @@ import java.io.DataInputStream;
 import java.io.RandomAccessFile;
 import java.nio.channels.FileChannel;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.io.IOUtils;
+
+import com.google.common.base.Preconditions;
 
 /**
  * An implementation of the abstract class {@link EditLogInputStream}, which
  * reads edits from a local file.
  */
-public class EditLogFileInputStream extends EditLogInputStream {
+public class EditLogFileInputStream
+    extends EditLogInputStream implements Closeable {
+ 
+  static final Log LOG = LogFactory.getLog(EditLogInputStream.class);
+   
   private File file;
-  private final FileInputStream fStream;
-  private final FileChannel fc;
-  private final RandomAccessFile rp;
+  private FileInputStream fStream;
+  private FileChannel fc;
+  private RandomAccessFile rp;
   final private long firstTxId;
   final private long lastTxId;
-  private final int logVersion;
+  private int logVersion;
   private FSEditLogOp.Reader reader;
   private FSEditLogLoader.PositionTrackingInputStream tracker;
+  
+  static private enum State {
+    UNINIT,
+    OPEN,
+    CLOSED
+  }
+  private State state = State.UNINIT;
+  private final Object stateLock = new Object();
   
   /**
    * Open an EditLogInputStream for the given file.
@@ -58,7 +76,7 @@ public class EditLogFileInputStream extends EditLogInputStream {
    */
   public EditLogFileInputStream(File name)
       throws LogHeaderCorruptException, IOException {
-    this(name, HdfsConstants.INVALID_TXID, HdfsConstants.INVALID_TXID);
+    this(name, HdfsConstants.INVALID_TXID, HdfsConstants.INVALID_TXID, true);
   }
 
   /**
@@ -71,48 +89,71 @@ public class EditLogFileInputStream extends EditLogInputStream {
    * @throws IOException if an actual IO error occurs while reading the
    *         header
    */
-  EditLogFileInputStream(File name, long firstTxId, long lastTxId)
+  EditLogFileInputStream(File name, long firstTxId, long lastTxId,
+      boolean isInProgress)
       throws LogHeaderCorruptException, IOException {
     file = name;
-    rp = new RandomAccessFile(file, "r");    
-    fStream = new FileInputStream(rp.getFD());
-    fc = rp.getChannel();
-
-    BufferedInputStream bin = new BufferedInputStream(fStream);  
-    tracker = new FSEditLogLoader.PositionTrackingInputStream(bin);  
-    DataInputStream in = new DataInputStream(tracker);
-
-    try {
-      logVersion = readLogVersion(in);
-    } catch (EOFException eofe) {
-      throw new LogHeaderCorruptException("No header found in log");
-    }
-    reader = new FSEditLogOp.Reader(in, logVersion);
     this.firstTxId = firstTxId;
     this.lastTxId = lastTxId;
+    super.setIsInProgress(isInProgress);
+  }
+  
+  private void init() throws LogHeaderCorruptException, IOException {
+    synchronized (stateLock) {
+      if (state != State.UNINIT) {
+        return;
+      }
+      Preconditions.checkState(state == State.UNINIT);
+      BufferedInputStream bin = null;
+      DataInputStream in = null;
+      try {
+        rp = new RandomAccessFile(file, "r");    
+        fStream = new FileInputStream(rp.getFD());
+        fc = rp.getChannel();
+  
+        bin = new BufferedInputStream(fStream);  
+        tracker = new FSEditLogLoader.PositionTrackingInputStream(bin);  
+        in = new DataInputStream(tracker);
+  
+        try {
+          logVersion = readLogVersion(in);
+        } catch (EOFException eofe) {
+          throw new LogHeaderCorruptException("No header found in log");
+        }
+        reader = new FSEditLogOp.Reader(in, logVersion);
+        state = State.OPEN;
+      } finally {
+        if (reader == null) {
+          IOUtils.cleanup(LOG, in, tracker, bin, rp, fStream);
+          state = State.CLOSED;
+        }
+      }
+    }
   }
 
   @Override
-  public long getFirstTxId() throws IOException {
+  public long getFirstTxId() {
     return firstTxId;
   }
   
   @Override
-  public void refresh(long position) throws IOException {
+  public void refresh(long position, long skippedUntilTxid) throws IOException {
+    init();
     fc.position(position);
     BufferedInputStream bin = new BufferedInputStream(fStream);
-    tracker = new FSEditLogLoader.PositionTrackingInputStream(bin, position);    
-    DataInputStream in = new DataInputStream(tracker); 
+    tracker = new FSEditLogLoader.PositionTrackingInputStream(bin, position);
+    DataInputStream in = new DataInputStream(tracker);
     reader = new FSEditLogOp.Reader(in, logVersion);
   }
   
   @Override
   public void position(long position) throws IOException {
+    init();
     fc.position(position);
   }
   
   @Override
-  public long getLastTxId() throws IOException {
+  public long getLastTxId() {
     return lastTxId;
   }
 
@@ -122,18 +163,51 @@ public class EditLogFileInputStream extends EditLogInputStream {
   }
 
   @Override
-  public FSEditLogOp readOp() throws IOException {
-    return reader.readOp();
+  public FSEditLogOp nextOp() throws IOException {
+    FSEditLogOp op = null;
+    switch (state) {
+    case UNINIT:
+      try {
+        init();
+      } catch (Throwable e) {
+        LOG.error("caught exception initializing " + this, e);
+        throw new IOException("Exception when initializing input stream");
+      }
+      Preconditions.checkState(state != State.UNINIT);
+      return nextOp();
+    case OPEN:
+      op = reader.readOp(false);
+      break;
+    case CLOSED:
+      break; // return null
+    }
+    return op;
+  }
+
+  @Override
+  public FSEditLogOp nextValidOp() {
+    try {
+      return reader.readOp(true);
+    } catch (Throwable e) {
+      LOG.error("nextValidOp: got exception while reading " + this, e);
+      return null;
+    }
   }
 
   @Override
   public int getVersion() throws IOException {
+    init();
     return logVersion;
   }
 
   @Override
   public void close() throws IOException {
-    fStream.close();
+    synchronized (stateLock) {
+      if (state == State.OPEN) {
+        IOUtils.cleanup(LOG, rp, fStream);
+      }
+      state = State.CLOSED;
+    }
   }
 
   @Override
@@ -150,12 +224,13 @@ public class EditLogFileInputStream extends EditLogInputStream {
     EditLogFileInputStream in;
     try {
       in = new EditLogFileInputStream(file);
+      in.getVersion();
     } catch (LogHeaderCorruptException corrupt) {
       // If it's missing its header, this is equivalent to no transactions
       FSImage.LOG.warn("Log at " + file + " has no valid header",
           corrupt);
       return new FSEditLogLoader.EditLogValidation(0, HdfsConstants.INVALID_TXID, 
-                                                   HdfsConstants.INVALID_TXID);
+                                                   HdfsConstants.INVALID_TXID, true);
     }
     
     try {
@@ -194,6 +269,13 @@ public class EditLogFileInputStream extends EditLogInputStream {
                 + ". Current version = " + FSConstants.LAYOUT_VERSION + ".");
       }
     }
+    if (logVersion < FSConstants.LAYOUT_VERSION || // future version
+        logVersion > Storage.LAST_UPGRADABLE_LAYOUT_VERSION) { // unsupported
+      throw new LogHeaderCorruptException(
+          "Unexpected version of the file system log file: "
+          + logVersion + ". Current version = "
+          + FSConstants.LAYOUT_VERSION + ".");
+    }
     return logVersion;
   }
   
@@ -213,14 +295,23 @@ public class EditLogFileInputStream extends EditLogInputStream {
   
   @Override
   public long getPosition() throws IOException{
-    return tracker.getPos();
+    init();
+    if (state == State.OPEN) {
+      return tracker.getPos();
+    } else {
+      return 0;
+    }
   }
   
   @Override
   public long getReadChecksum() {
-    return reader.getChecksum();
+    if (state == State.OPEN) {
+      return reader.getChecksum();
+    } else {
+      return 0;
+    }
   }
-
+  
   @Override
   public JournalType getType() {
     return JournalType.FILE;

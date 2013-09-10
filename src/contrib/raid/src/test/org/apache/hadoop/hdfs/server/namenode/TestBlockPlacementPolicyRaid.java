@@ -18,7 +18,10 @@
 
 package org.apache.hadoop.hdfs.server.namenode;
 
+import static org.junit.Assert.*;
+
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -37,10 +40,14 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid.CachedFullPathNames;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid.CachedLocatedBlocks;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.net.Node;
+import org.apache.hadoop.net.StaticMapping;
 import org.apache.hadoop.raid.Codec;
 import org.apache.hadoop.raid.Utils;
 import org.apache.hadoop.util.InjectionEventI;
@@ -87,6 +94,53 @@ public class TestBlockPlacementPolicyRaid {
     raidTempPrefix = Codec.getCodec("xor").tmpParityDirectory;
     raidrsTempPrefix = Codec.getCodec("rs").parityDirectory;
     raidrsHarTempPrefix = Codec.getCodec("rs").tmpParityDirectory;
+  }
+
+  @Test
+  public void test3rdReplicaPlacement() throws Exception {
+    conf = new Configuration();
+    conf.set("dfs.block.replicator.classname",
+    "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
+    // start the cluster with 3 datanodes and 3 racks
+    String[] racks = new String[]{
+        "/rack0", "/rack0", "/rack1", "/rack1", "/rack2", "/rack2"};
+    String[] hosts = new String[]{
+        "host0", "host1", "host2", "host3", "host4", "host5"};
+    
+    try {
+    cluster = new MiniDFSCluster(conf, 6, true, racks, hosts);
+    cluster.waitActive();
+    
+    namesystem = cluster.getNameNode().getNamesystem();
+    Assert.assertTrue("BlockPlacementPolicy type is not correct.",
+        namesystem.replicator instanceof BlockPlacementPolicyRaid);
+    policy = (BlockPlacementPolicyRaid) namesystem.replicator;
+    fs = cluster.getFileSystem();
+    
+    final String filename = "/dir/file1";
+    
+    // an out-of-cluster client
+    DatanodeDescriptor targets[] = policy.chooseTarget(filename, 3, null,
+        new ArrayList<DatanodeDescriptor>(), new ArrayList<Node>(), 100L);
+    verifyNetworkLocations(targets, 2);
+    
+    
+    // an in-cluster client
+    targets = policy.chooseTarget(filename, 3, targets[0],
+        new ArrayList<DatanodeDescriptor>(), new ArrayList<Node>(), 100L);
+    verifyNetworkLocations(targets, 3);
+    } finally {
+      if (cluster != null) cluster.shutdown();
+    }
+  }
+  
+  private void verifyNetworkLocations(
+      DatanodeDescriptor[] locations, int expectedNumOfRacks) {
+    HashSet<String> racks = new HashSet<String>();
+    for (DatanodeDescriptor loc : locations) {
+      racks.add(loc.getNetworkLocation());
+    }
+    assertEquals(expectedNumOfRacks, racks.size());
   }
   
   @Test
@@ -483,7 +537,7 @@ public class TestBlockPlacementPolicyRaid {
       FSNamesystem namesystem, BlockPlacementPolicyRaid policy,
       Block block) throws IOException {
     INodeFile inode = namesystem.blocksMap.getINode(block);
-    BlockPlacementPolicyRaid.FileInfo info = policy.getFileInfo(inode.getFullPathName());
+    BlockPlacementPolicyRaid.FileInfo info = policy.getFileInfo(inode, inode.getFullPathName());
     return policy.getCompanionBlocks(inode.getFullPathName(), info, block, inode);
   }
 

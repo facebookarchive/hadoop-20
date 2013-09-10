@@ -41,8 +41,10 @@ import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.PacketBlockReceiverProfileData;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol.PipelineAck;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.DataTransferThrottler;
@@ -58,11 +60,11 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   static final Log ClientTraceLog = DataNode.ClientTraceLog;
   
   private Block block; // the block to receive
-  protected boolean finalized;
   private DataInputStream in = null; // from where data are read
   private DataChecksum checksum; // from where chunks of a block can be read
   private int bytesPerChecksum;
   private int checksumSize;
+  private boolean pktIncludeVersion;
   private ByteBuffer buf; // contains one full packet.
   private int bufRead; //amount of valid data in the buf
   private int maxPacketReadLen;
@@ -77,17 +79,40 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
   private DataTransferThrottler throttler;
   private ReplicaBeingWritten replicaBeingWritten;
   private boolean isRecovery = false;
+  final private boolean profileEnabled;
   private String clientName;
   DatanodeInfo srcDataNode = null;
   private DataNode datanode = null;
   volatile private boolean mirrorError;
   private int namespaceId;
   private DatanodeBlockWriter blockWriter;
+  private boolean isBlockClosed = false;
+  // Whether or not this datanode is not the first in the write pipeline.
+  private boolean isSecondary;
+  // Whether or not we need to fadvise secondary replica.
+  private boolean fadviseSecondaryReplica;
+  // The actual fadvise for the block.
+  private final int fadvise;
+  // Controls the size of chunks after which
+  private final int fadviseFileRangeSize;
+  // The number of bytes at the end of the file to exclude while using fadvise
+  // file range. This is because we might overwrite the end of the block when we
+  // use inline checksums and we don't want to evict a page to which we want to
+  // write to.
+  private final int FADVISE_FILE_RANGE_BUFFER = 1024 * 1024; // 1MB
+  private int bytesSinceLastFadvise;
   
+ 
+  private PacketReceiveProfile profileForCurrentPacket;
+  private final long slowPacketThreshold;
+  private final int syncFileRange;
 
-  BlockReceiver(int namespaceId, Block block, DataInputStream in, String inAddr,
-                String myAddr, boolean isRecovery, String clientName, 
-                DatanodeInfo srcDataNode, DataNode datanode) throws IOException {
+  BlockReceiver(int namespaceId, Block oldBlock, Block block,
+      DataInputStream in, String inAddr, String myAddr, boolean isRecovery,
+      String clientName, DatanodeInfo srcDataNode, DataNode datanode,
+      boolean isSecondary, int fadvise, boolean profileEnabled,
+      boolean pktIncludeVersion, int syncFileRange) throws IOException {
+
     try{
       this.namespaceId = namespaceId;
       this.block = block;
@@ -99,20 +124,33 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       this.offsetInBlock = 0;
       this.srcDataNode = srcDataNode;
       this.datanode = datanode;
+      this.pktIncludeVersion = pktIncludeVersion;
       this.checksum = DataChecksum.newDataChecksum(in);
       this.bytesPerChecksum = checksum.getBytesPerChecksum();
       this.checksumSize = checksum.getChecksumSize();
       this.flushKb = datanode.conf.getInt("dfs.datanode.flush_kb", 1024);
       this.bufSizeSinceLastSync = 0;
+      this.isBlockClosed = false;
+      this.isSecondary = isSecondary;
+      this.fadviseSecondaryReplica = datanode.conf.getBoolean(
+          "dfs.datanode.fadvise.secondary.replicas", false);
+      this.fadvise = fadvise;
+      this.fadviseFileRangeSize = datanode.conf.getInt(
+          "dfs.datanode.fadvise.filerange.size", 1024 * 1024);
+      bytesSinceLastFadvise = 0;
+      this.profileEnabled = profileEnabled;
+      this.slowPacketThreshold = datanode.conf.getLong(
+          "dfs.datanode.slow.packet.threshold", 500);
+      this.syncFileRange = syncFileRange;
 
       //
       // Open local disk out
       //
-      blockWriter = datanode.data.writeToBlock(namespaceId, this.block,
-          isRecovery, clientName == null || clientName.length() == 0,
+      blockWriter = datanode.data.writeToBlock(namespaceId,
+          (oldBlock != null) ? oldBlock : this.block, this.block, isRecovery,
+          clientName == null || clientName.length() == 0,
           checksum.getChecksumType(), checksum.getBytesPerChecksum());
       replicaBeingWritten = datanode.data.getReplicaBeingWritten(namespaceId, this.block);
-      this.finalized = false;
       if (blockWriter != null) {
         blockWriter.initializeStreams(bytesPerChecksum, checksumSize, block,
             inAddr, namespaceId, datanode);
@@ -142,12 +180,16 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     }
   }
 
+  public void close() throws IOException {
+    close(0);
+  }
+
   /**
    * close files.
    */
-  public void close() throws IOException {
+  public void close(int fadviseOnClose) throws IOException {
     if (blockWriter != null) {
-      blockWriter.close();
+      blockWriter.close(fadviseOnClose);
     }
   }
 
@@ -164,8 +206,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
    * Issue a file range sync of last lastBytesToSync bytes
    * @throws IOException
    */
-  void fileRangeSync(long lastBytesToSync) throws IOException {
-    blockWriter.fileRangeSync(lastBytesToSync);
+  void fileRangeSync(long lastBytesToSync, int flags) throws IOException {
+    blockWriter.fileRangeSync(lastBytesToSync, flags);
   }
 
   
@@ -191,14 +233,28 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
    * Verify multiple CRC chunks. 
    */
   private void verifyChunks( byte[] dataBuf, int dataOff, int len, 
-                             byte[] checksumBuf, int checksumOff ) 
+                             byte[] checksumBuf, int checksumOff,
+                             int firstChunkOffset, int packetVersion) 
                              throws IOException {
+    int chunkOffset = firstChunkOffset;
     while (len > 0) {
-      int chunkLen = Math.min(len, bytesPerChecksum);
+      int chunkLen = Math.min(len, bytesPerChecksum - chunkOffset);
+      chunkOffset = 0;
       
       checksum.update(dataBuf, dataOff, chunkLen);
+      dataOff += chunkLen;
 
-      if (!checksum.compare(checksumBuf, checksumOff)) {
+      boolean checksumCorrect;
+      if (packetVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_FIRST) {
+        checksumCorrect = checksum.compare(checksumBuf, checksumOff);
+        checksumOff += checksumSize;
+      } else {
+        // Expect packetVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_INLINE
+        checksumCorrect = checksum.compare(dataBuf, dataOff);
+        dataOff += checksumSize;
+      }
+
+      if (!checksumCorrect) {
         if (srcDataNode != null) {
           try {
             LOG.info("report corrupt block " + block + " from datanode " +
@@ -216,8 +272,6 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       }
 
       checksum.reset();
-      dataOff += chunkLen;
-      checksumOff += checksumSize;
       len -= chunkLen;
     }
   }
@@ -277,6 +331,14 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     return nRead;
   }
   
+  private int getPacketHeaderLen() {
+    return DataNode.getPacketHeaderLen(pktIncludeVersion);
+  }
+  
+  private int getPktVersionSize() {
+    return DataNode.getPktVersionSize(pktIncludeVersion);
+  }
+
   
   /**
    * Reads (at least) one packet and returns the packet length.
@@ -299,9 +361,9 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
        * calculation in DFSClient to make the guess accurate.
        */
       int chunkSize = bytesPerChecksum + checksumSize;
-      int chunksPerPacket = (datanode.writePacketSize - DataNode.PKT_HEADER_LEN - 
+      int chunksPerPacket = (datanode.writePacketSize - getPacketHeaderLen() - 
     SIZE_OF_INTEGER + chunkSize - 1)/chunkSize;
-      buf = ByteBuffer.allocate(DataNode.PKT_HEADER_LEN + SIZE_OF_INTEGER +
+      buf = ByteBuffer.allocate(getPacketHeaderLen() + SIZE_OF_INTEGER +
                                 Math.max(chunksPerPacket, 1) * chunkSize);
       buf.limit(0);
     }
@@ -336,7 +398,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                             payloadLen);
     }
     
-    int pktSize = payloadLen + DataNode.PKT_HEADER_LEN;
+    int pktSize = payloadLen + getPacketHeaderLen();
     
     if (buf.remaining() < pktSize) {
       //we need to read more data
@@ -375,13 +437,34 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     return payloadLen;
   }
   
+  private void attemptFadvise(int len) throws IOException {
+    if (fadvise != 0 || (fadviseSecondaryReplica && isSecondary)) {
+      bytesSinceLastFadvise += len;
+      if (this.bytesSinceLastFadvise > this.fadviseFileRangeSize
+          + FADVISE_FILE_RANGE_BUFFER) {
+        long offset = this.offsetInBlock - this.bytesSinceLastFadvise;
+        if (fadvise != 0) {
+          blockWriter.fadviseStream(fadvise, 0, offset + this.fadviseFileRangeSize);
+        } else if (fadviseSecondaryReplica && isSecondary) {
+          blockWriter.fadviseStream(NativeIO.POSIX_FADV_DONTNEED, 0,
+              offset + this.fadviseFileRangeSize);
+        }
+        bytesSinceLastFadvise -= fadviseFileRangeSize;
+      }
+    }
+  }
+
   /** 
    * Receives and processes a packet. It can contain many chunks.
    * returns size of the packet.
    */
   private int receivePacket() throws IOException {
+    eventStartReceivePacket();
     
-    long startTime = System.currentTimeMillis();;
+    long startTime = System.currentTimeMillis();
+    
+    // The packet format is documented in DFSOuputStream.Packet.getBuffer().
+    //
     int payloadLen = readNextPacket();
     
     if (payloadLen <= 0) {
@@ -391,6 +474,12 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     buf.mark();
     //read the header
     buf.getInt(); // packet length
+    int packetVersion;
+    if (pktIncludeVersion) {
+      packetVersion = buf.getInt();
+    } else {
+      packetVersion = DataTransferProtocol.PACKET_VERSION_CHECKSUM_FIRST;
+    }
     offsetInBlock = buf.getLong(); // get offset of packet in block
     long seqno = buf.getLong();    // get seqno
     
@@ -413,6 +502,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                 " lastPacketInBlock " + lastPacketInBlock);
     }
     
+    eventEndReceivePacketStartForward();
+    
     // First write the packet to the mirror:
     if (mirrorOut != null && !mirrorError) {
       try {
@@ -421,6 +512,16 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
         mirrorOut.flush();
         long mirrorWritePacketDuration = System.currentTimeMillis() - mirrorWriteStartTime;
         datanode.myMetrics.mirrorWritePacketLatency.inc(mirrorWritePacketDuration);
+        if (mirrorWritePacketDuration > slowPacketThreshold) {
+          LOG.info("operationTooSlow : mirrorPacket for block " + block +
+              " of length " + payloadLen +
+              " seqno " + seqno +
+              " offsetInBlock " + offsetInBlock +
+              " lastPacketInBlock " + lastPacketInBlock +
+              " to mirror : " + mirrorAddr +
+              " took : " + mirrorWritePacketDuration);
+          datanode.myMetrics.slowMirrorWritePacketNumOps.inc(1);
+        }
       } catch (IOException e) {
         handleMirrorOutError(e);
       }
@@ -434,35 +535,52 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                             ") from " + inAddr + " at offset " + 
                             offsetInBlock + ": " + len); 
     }
+    
+    eventEndForwardStartEnqueue();
 
     Packet ackPacket = null;
     if (responder != null) {
       ackPacket = ((PacketResponder) responder.getRunnable()).enqueue(seqno,
-          lastPacketInBlock, offsetInBlock + len);
+          lastPacketInBlock, offsetInBlock + len, profileForCurrentPacket);
     }
+    
+    eventEndEnqueueStartSetPostion();
 
     if (len == 0) {
       LOG.debug("Receiving empty packet for block " + block);
     } else {
       setBlockPosition(offsetInBlock);  // adjust file position
+      int firstChunkOffset = (int) (offsetInBlock % bytesPerChecksum);
+
       long expectedBlockCrcOffset = offsetInBlock;
       offsetInBlock += len;
       this.replicaBeingWritten.setBytesReceived(offsetInBlock);
-
-      int numChunks = ((len + bytesPerChecksum - 1)/bytesPerChecksum);
       
-      int checksumLen = numChunks * checksumSize;
-
-      if ( buf.remaining() != (checksumLen + len)) {
-        throw new IOException("Data remaining in packet does not match " +
-                              "sum of checksumLen and dataLen");
+      int numChunks = ((firstChunkOffset + len + bytesPerChecksum - 1) / bytesPerChecksum);
+      
+      if (buf.remaining() != (numChunks * checksumSize + len)) {
+        throw new IOException("Data remaining in packet does not match "
+            + "sum of checksumLen and dataLen buf.remaining() "
+            + buf.remaining() + " numChunks " + numChunks + " len " + len
+            + " offsetInBlock " + offsetInBlock);
       }
       int checksumOff = buf.position();
-      int dataOff = checksumOff + checksumLen;
+      int dataOff;
+      if (packetVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_FIRST) {
+        int checksumLen = numChunks * checksumSize;
+        dataOff = checksumOff + checksumLen;
+      } else if (packetVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_INLINE) {
+        dataOff = checksumOff;
+      } else {
+        throw new IOException("Packet version " + packetVersion + " not supported.");
+      }
       byte pktBuf[] = buf.array();
       
       buf.position(buf.limit()); // move to the end of the data.
 
+      eventEndSetPositionStartVerifyChecksum();
+
+      
       /* skip verifying checksum iff this is not the last one in the 
        * pipeline and clientName is non-null. i.e. Checksum is verified
        * on all the datanodes when the data is being written by a 
@@ -471,62 +589,101 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
        * checksum.
        */
       if (mirrorOut == null || clientName.length() == 0) {
-        verifyChunks(pktBuf, dataOff, len, pktBuf, checksumOff);
+        verifyChunks(pktBuf, dataOff, len, pktBuf, checksumOff,
+           firstChunkOffset, packetVersion);
       }
       
-      // update Block CRC.
-      // It introduces extra costs in critical code path. But compared to the
-      // total checksum calculating costs (the previous operation),
-      // this costs are negligible. If we want to optimize, we can optimize it
-      // together with the previous operation to hide the latency from disk
-      // I/O latency.
-      int crcCalculateOffset = checksumOff;
-      for (int i = 0; i < numChunks; i++) {
-        int bytesInChunk;
-        if (i != numChunks -1) {
-          bytesInChunk = bytesPerChecksum;
-        } else {
-          bytesInChunk = len % bytesPerChecksum;
-          if (bytesInChunk == 0) {
-            bytesInChunk = bytesPerChecksum;
+      eventEndVerifyChecksumStartUpdateBlockCrc();
+            
+      if (datanode.updateBlockCrcWhenWrite) {
+        // update Block CRC.
+        // It introduces extra costs in critical code path. But compared to the
+        // total checksum calculating costs (the previous operation),
+        // this costs are negligible. If we want to optimize, we can optimize it
+        // together with the previous operation to hide the latency from disk
+        // I/O latency.
+        int chunkOffset = (int) (expectedBlockCrcOffset % bytesPerChecksum);
+        int crcCalculateOffset = checksumOff;
+        for (int i = 0; i < numChunks; i++) {
+          int bytesInChunk;
+          if (i != numChunks - 1) {
+            bytesInChunk = bytesPerChecksum - chunkOffset;
+          } else {
+            bytesInChunk = (len + chunkOffset) % bytesPerChecksum;
+            if (bytesInChunk == 0) {
+              bytesInChunk = bytesPerChecksum;
+            }
           }
+          if (packetVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_INLINE) {
+            // Needs to skip the data chunk for the checksum
+            crcCalculateOffset += bytesInChunk;
+          }
+          replicaBeingWritten.updateBlockCrc(expectedBlockCrcOffset,
+              bytesInChunk,
+              DataChecksum.getIntFromBytes(pktBuf, crcCalculateOffset));
+          crcCalculateOffset += checksum.getChecksumSize();
+          expectedBlockCrcOffset += bytesInChunk;
+          
+          chunkOffset = 0;
         }
-        replicaBeingWritten.updateBlockCrc(expectedBlockCrcOffset,
-            lastPacketInBlock && i == numChunks - 1, bytesInChunk,
-            DataChecksum.getIntFromBytes(pktBuf, crcCalculateOffset));
-        crcCalculateOffset += checksum.getChecksumSize();
-        expectedBlockCrcOffset += bytesInChunk;
       }
 
+      eventEndUpdateBlockCrcStartWritePacket();
+
       try {
-        if (!finalized) {
-          long writeStartTime = System.currentTimeMillis();
-          
-          blockWriter.writePacket(pktBuf, len, dataOff,
-              checksumOff, numChunks);
-          
-          datanode.myMetrics.bytesWritten.inc(len);
+        long writeStartTime = System.currentTimeMillis();
 
-          /// flush entire packet before sending ack
-          this.bufSizeSinceLastSync += len;  
-          flush(forceSync); 
-          if (forceSync) {
-            this.bufSizeSinceLastSync = 0;  
-          } else if (this.flushKb > 0 && this.bufSizeSinceLastSync >= this.flushKb * 1024) {
-            long syncStartOffset = offsetInBlock - this.bufSizeSinceLastSync;
-            if (syncStartOffset < 0) {
-              syncStartOffset = 0;
-            }
-            long bytesToSync = offsetInBlock - syncStartOffset;
-            fileRangeSync(bytesToSync);
-            this.bufSizeSinceLastSync = 0;
+        blockWriter.writePacket(pktBuf, len, dataOff, checksumOff, numChunks,
+            packetVersion);
+
+        datanode.myMetrics.bytesWritten.inc(len);
+        
+        eventEndWritePacketStartFlush();
+
+        // / flush entire packet before sending ack
+        this.bufSizeSinceLastSync += len;
+        flush(forceSync);
+
+        attemptFadvise(len);
+        if (forceSync) {
+          this.bufSizeSinceLastSync = 0;
+        } else if (this.flushKb > 0
+            && this.bufSizeSinceLastSync >= this.flushKb * 1024) {
+          long syncStartOffset = offsetInBlock - this.bufSizeSinceLastSync;
+          if (syncStartOffset < 0) {
+            syncStartOffset = 0;
           }
-          this.replicaBeingWritten.setBytesOnDisk(offsetInBlock);
-
-          // Record time taken to write packet
-          long writePacketDuration = System.currentTimeMillis() - writeStartTime;
-          datanode.myMetrics.writePacketLatency.inc(writePacketDuration);
+          long bytesToSync = offsetInBlock - syncStartOffset;
+          long startFileRangeSync = System.currentTimeMillis();
+          fileRangeSync(bytesToSync, syncFileRange);
+          long syncFileRangeDuration = System.currentTimeMillis() - startFileRangeSync;
+          datanode.myMetrics.syncFileRangeLatency.inc(syncFileRangeDuration);
+          if (syncFileRangeDuration > slowPacketThreshold) {
+            LOG.info("operationTooSlow : syncFileRange for block " + block +
+                " of length " + payloadLen +
+                " seqno " + seqno +
+                " offsetInBlock " + offsetInBlock +
+                " lastPacketInBlock " + lastPacketInBlock +
+                " took : " + syncFileRangeDuration);
+          }
+          this.bufSizeSinceLastSync = 0;
         }
+        this.replicaBeingWritten.setBytesOnDisk(offsetInBlock);
+
+        // Record time taken to write packet
+        long writePacketDuration = System.currentTimeMillis() - writeStartTime;
+        datanode.myMetrics.writePacketLatency.inc(writePacketDuration);
+        if (writePacketDuration > slowPacketThreshold) {
+          LOG.info("operationTooSlow : writePacket for block " + block +
+              " of length " + payloadLen +
+              " seqno " + seqno +
+              " offsetInBlock " + offsetInBlock +
+              " lastPacketInBlock " + lastPacketInBlock +
+              " took : " + writePacketDuration);
+          datanode.myMetrics.slowWritePacketNumOps.inc(1);
+        }
+
+        eventEndFlush();
       } catch (ClosedByInterruptException cix) {
         LOG.warn(
             "Thread interrupted when flushing bytes to disk. Might cause inconsistent sates",
@@ -552,6 +709,9 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
 
     long receiveAndWritePacketDuration = System.currentTimeMillis() - startTime;
     datanode.myMetrics.receiveAndWritePacketLatency.inc(receiveAndWritePacketDuration);
+    
+    eventEndCurrentPacket();
+
     return payloadLen;
   }
 
@@ -574,13 +734,13 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       throttler = throttlerArg;
 
       long startTime = System.currentTimeMillis();
+      long startNanoTime = 0;
 
     try {
       // write data chunk header
-      if (!finalized) {
-        blockWriter.writeHeader(checksum);
-      }
+      blockWriter.writeHeader(checksum);
       if (clientName.length() > 0) {
+        startNanoTime = ClientTraceLog.isInfoEnabled() ? System.nanoTime() : 0;
         responder = new Daemon(datanode.threadGroup, 
                                new PacketResponder(this, block, mirrIn, 
                                                    replyOut, numTargets,
@@ -607,17 +767,61 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
           handleMirrorOutError(e);
         }
       }
-
+      
       // wait for all outstanding packet responses. And then
       // indicate responder to gracefully shutdown.
       if (responder != null) {
+        // If this is the last packet in block, then close block
+        // file and finalize the block before responding success
+        int fadviseOnClose = 0;
+        if (fadvise != 0) {
+          fadviseOnClose = fadvise;
+        } else if (fadviseSecondaryReplica && isSecondary) {
+          fadviseOnClose = NativeIO.POSIX_FADV_DONTNEED;
+        }
+        close(fadviseOnClose);
+        block.setNumBytes(offsetInBlock);
+
+        PacketResponder rr = ((PacketResponder) responder.getRunnable());
+        synchronized(rr) {
+          isBlockClosed = true;
+          rr.notifyAll();
+        }
         ((PacketResponder)responder.getRunnable()).close();
+
+        // Finalize the block after all the packet ack received.
+        // We need to wait all the packets to be acked before declaring
+        // all the bytes is visible to clients.
+        datanode.data.finalizeBlock(namespaceId, block);
+        
+        datanode.myMetrics.blocksWritten.inc();
+        datanode.notifyNamenodeReceivedBlock(namespaceId, block, null);
+        
+        if (ClientTraceLog.isInfoEnabled() &&
+            clientName.length() > 0) {
+          long offset = 0;
+          final long endTime = ClientTraceLog.isInfoEnabled() ? System
+              .nanoTime() : 0;
+          ClientTraceLog.info(String.format(DN_CLIENTTRACE_FORMAT,
+                inAddr, myAddr, block.getNumBytes(),
+                "HDFS_WRITE", clientName, offset, 
+              datanode.getDNRegistrationForNS(namespaceId).getStorageID(),
+              block, endTime - startNanoTime));
+        } else {
+          LOG.info("Received block " + block + 
+                   " of size " + block.getNumBytes() + 
+                   " from " + inAddr);
+        }
       }
 
       // if this write is for a replication request (and not
       // from a client), then finalize block. For client-writes, 
       // the block is finalized in the PacketResponder.
       if (clientName.length() == 0) {
+        // For replication requests always consider it a remote replica.
+        if (fadviseSecondaryReplica) {
+          blockWriter.fadviseStream(NativeIO.POSIX_FADV_DONTNEED, 0, 0);
+        }
         // close the block/crc files
         close();
 
@@ -663,20 +867,6 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
    * Sets the file pointer in the local block file to the specified value.
    */
   private void setBlockPosition(long offsetInBlock) throws IOException {
-    if (finalized) {
-      if (!isRecovery) {
-        throw new IOException("Write to offset " + offsetInBlock +
-                              " of block " + block +
-                              " that is already finalized.");
-      }
-      if (offsetInBlock > datanode.data.getFinalizedBlockLength(namespaceId, block)) {
-        throw new IOException("Write to offset " + offsetInBlock +
-                              " of block " + block +
-                              " that is already finalized and is of size " +
-                              datanode.data.getFinalizedBlockLength(namespaceId, block));
-      }
-      return;
-    }
     blockWriter.setPosAndRecomputeChecksumIfNeeded(offsetInBlock, checksum);
   }
 
@@ -698,6 +888,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     private int numTargets;     // number of downstream datanodes including myself
     private BlockReceiver receiver; // The owner of this responder.
     private Thread receiverThread; // the thread that spawns this responder
+    boolean processingAck;
 
     public String toString() {
       return "PacketResponder " + numTargets + " for Block " + this.block;
@@ -712,6 +903,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       replyOut = out;
       this.numTargets = numTargets;
       this.receiverThread = receiverThread;
+      this.processingAck = false;
     }
 
     /**
@@ -719,13 +911,14 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
      * @param seqno
      * @param lastPacketInBlock
      */
-    synchronized Packet enqueue(long seqno, boolean lastPacketInBlock, long offsetInBlock) {
+    synchronized Packet enqueue(long seqno, boolean lastPacketInBlock,
+        long offsetInBlock, PacketReceiveProfile profile) {
       if (running) {
         if (LOG.isDebugEnabled()) {
           LOG.debug("PacketResponder " + numTargets + " adding seqno " + seqno
               + " with new offset in Block " + offsetInBlock + " to ack queue.");
         }
-        Packet newPacket = new Packet(seqno, lastPacketInBlock, offsetInBlock);
+        Packet newPacket = new Packet(seqno, lastPacketInBlock, offsetInBlock, profile);
         ackQueue.addLast(newPacket);
         notifyAll();
         return newPacket;
@@ -737,7 +930,8 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
      * wait for all pending packets to be acked. Then shutdown thread.
      */
     synchronized void close() {
-      while (running && ackQueue.size() != 0 && datanode.shouldRun) {
+      while (running && (ackQueue.size() != 0 || processingAck)
+          && datanode.shouldRun) {
         try {
           wait();
         } catch (InterruptedException e) {
@@ -757,7 +951,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     public void run() {
       boolean lastPacketInBlock = false;
       boolean isInterrupted = false;
-      final long startTime = ClientTraceLog.isInfoEnabled() ? System.nanoTime() : 0;
+      PacketReceiveProfile pktProfile = null;
       while (running && datanode.shouldRun && !lastPacketInBlock) {
         Packet pkt = null;
           try {
@@ -782,12 +976,17 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                 }
                 pkt = ackQueue.removeFirst();
                 expected = pkt.seqno;
+                processingAck = true;
                 notifyAll();
               }
+              if (pkt != null) {
+                pktProfile = pkt.eventAckDequeuedAndReturnProfile(pktProfile);
+              }
+
               // receive an ack if DN is not the last one in the pipeline
               if (numTargets > 0 && !localMirrorError) {
                 // read an ack from downstream datanode
-                ack.readFields(mirrorIn, numTargets);
+                ack.readFields(mirrorIn, numTargets, pktProfile != null);
                 if (LOG.isDebugEnabled()) {
                   LOG.debug("PacketResponder " + numTargets + 
                       " for block " + block + " got " + ack);
@@ -801,8 +1000,11 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                       " received:" + seqno);
                 }
               }
-
+              
               assert pkt != null;
+
+              pkt.eventAckReceived();
+
               try {
                 pkt.waitForPersistent();
               } catch (InterruptedException ine) {
@@ -811,6 +1013,7 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                     " : Thread is interrupted when waiting for data persistent.");
                 break;
               }
+              pkt.eventResponderKnewDataPersistent();
               
               lastPacketInBlock = pkt.lastPacketInBlock;
               if (pkt.seqno >= 0) {
@@ -829,6 +1032,11 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                 LOG.info("PacketResponder " + block + " " + numTargets +
                     " Exception " + StringUtils.stringifyException(ioe));
               }
+            } finally {
+              synchronized (this) {
+                processingAck = false;
+                notifyAll();
+              }              
             }
 
             if (Thread.interrupted() || isInterrupted) {
@@ -843,45 +1051,55 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
                        " : Thread is interrupted.");
               break;
             }
-            
-            // If this is the last packet in block, then close block
-            // file and finalize the block before responding success
-            if (lastPacketInBlock && !receiver.finalized) {
-              receiver.close();
-              final long endTime = ClientTraceLog.isInfoEnabled() ? System.nanoTime() : 0;
-              block.setNumBytes(receiver.offsetInBlock);
-              datanode.data.finalizeBlock(namespaceId, block);
-              datanode.myMetrics.blocksWritten.inc();
-              datanode.notifyNamenodeReceivedBlock(namespaceId, block, null);
-              if (ClientTraceLog.isInfoEnabled() &&
-                  receiver.clientName.length() > 0) {
-                long offset = 0;
-                ClientTraceLog.info(String.format(DN_CLIENTTRACE_FORMAT,
-                      receiver.inAddr, receiver.myAddr, block.getNumBytes(),
-                      "HDFS_WRITE", receiver.clientName, offset, 
-                      datanode.getDNRegistrationForNS(namespaceId).getStorageID(), block, endTime-startTime));
-              } else {
-                LOG.info("Received block " + block + 
-                         " of size " + block.getNumBytes() + 
-                         " from " + receiver.inAddr);
+            if (lastPacketInBlock) {
+              // Wait receiver thread to finish flush() before sending out the
+              // last ack.
+              try {
+                synchronized (this) {
+                  while (running && datanode.shouldRun && !isBlockClosed) {
+                    wait();
+                  }
+                }
+              } catch (InterruptedException ine) {
+                LOG.info("PacketResponder " + block + " " + numTargets
+                    + " : Thread is interrupted while waiting for the block "
+                    + "to be closed.");
+                isInterrupted = true;
               }
             }
 
             // construct my ack message
             short[] replies = null;
+            PacketBlockReceiverProfileData[] profiles = null;
             if (mirrorError) { // no ack is read
               replies = new short[2];
               replies[0] = DataTransferProtocol.OP_STATUS_SUCCESS;
               replies[1] = DataTransferProtocol.OP_STATUS_ERROR;
             } else {
+              boolean hasError = false;
               short ackLen = numTargets == 0 ? 0 : ack.getNumOfReplies();
               replies = new short[1+ackLen];
               replies[0] = DataTransferProtocol.OP_STATUS_SUCCESS;
               for (int i=0; i<ackLen; i++) {
                 replies[i+1] = ack.getReply(i);
+                if (replies[i+1] != DataTransferProtocol.OP_STATUS_SUCCESS) {
+                  hasError = true;
+                }
+              }
+              if (!hasError && pktProfile != null) {
+                profiles = new PacketBlockReceiverProfileData[ackLen + 1];
+                for (int i=0; i < ackLen; i++) {
+                  profiles[i + 1] = ack.getProfile(i);
+                  if (profiles[i + 1] == null) {
+                    throw new IOException("Excpect profile data but it's missing.");
+                  }
+                }
+                profiles[0] = pktProfile.getPacketBlockReceiverProfileData();
               }
             }
-            PipelineAck replyAck = new PipelineAck(expected, replies);
+            
+            
+            PipelineAck replyAck = new PipelineAck(expected, replies, profiles);
  
             // send my ack back to upstream datanode
             replyAck.write(replyOut);
@@ -902,6 +1120,9 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
             receiverThread.interrupt();
           }
         }
+        if (pkt != null) {
+          pkt.eventAckForwarded();
+        }
       }
       LOG.info("PacketResponder " + numTargets + 
                " for block " + block + " terminating");
@@ -916,12 +1137,15 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
     boolean lastPacketInBlock;
     long offsetInBlock;
     boolean persistent;
+    PacketReceiveProfile profile;
     static final long TIMEOUT_WAIT_PERSISTENT_MSEC = 30 * 1000; 
 
-    Packet(long seqno, boolean lastPacketInBlock, long offsetInBlock) {
+    Packet(long seqno, boolean lastPacketInBlock, long offsetInBlock,
+        PacketReceiveProfile profile) {
       this.seqno = seqno;
       this.lastPacketInBlock = lastPacketInBlock;
       this.offsetInBlock = offsetInBlock;
+      this.profile = profile;
       this.persistent = false;
     }
     
@@ -941,5 +1165,105 @@ class BlockReceiver implements java.io.Closeable, FSConstants {
       this.persistent = true;
       notifyAll();
     }
+    
+    PacketReceiveProfile eventAckDequeuedAndReturnProfile(
+        PacketReceiveProfile prevProfile) {      
+      if (profile != null) {
+        profile.ackDequeued();
+        if (prevProfile != null) {
+          // The duration of how long one ack is sent cannot be included
+          // in this ack itself. Instead, we include it in the next ack.
+          profile.prevPktDurationSendAck = prevProfile.durationSendAck;
+        }
+        return profile;
+      }
+      return null;
+    }
+
+    void eventAckReceived() {
+      if (profile != null) {
+        profile.ackReceived();
+      }
+    }
+
+    void eventResponderKnewDataPersistent() {
+      if (profile != null) {
+        profile.responderKnewDataPersistent();
+      }
+    }
+    
+    void eventAckForwarded() {
+      if (profile != null) {
+        profile.ackForwarded();
+      }
+    }
   }
+  
+  private void eventStartReceivePacket() {
+    if (profileEnabled) {
+      PacketReceiveProfile profileForPrevPkt = profileForCurrentPacket;
+      profileForCurrentPacket = new PacketReceiveProfile();
+      profileForCurrentPacket.startReceivePacket();
+      if (profileForPrevPkt != null) {
+        // Duration after flush to disk might end after the ack has been sent.
+        // we send it in next packet.
+        profileForCurrentPacket.prevPktDurationAfterFlush = profileForPrevPkt.durationAfterFlush;
+      }
+    }
+  }
+  
+  private void eventEndReceivePacketStartForward() {    
+    if (profileEnabled) {
+      profileForCurrentPacket.endReceivePacketStartForward();
+    }
+  }
+
+  void eventEndForwardStartEnqueue() {
+    if (profileEnabled) {
+      profileForCurrentPacket.endForwardStartEnqueue();
+    }
+  }
+  
+  void eventEndEnqueueStartSetPostion() {
+    if (profileEnabled) {
+      profileForCurrentPacket.endEnqueueStartSetPostion();
+    }
+  }
+
+  void eventEndSetPositionStartVerifyChecksum() {
+    if (profileEnabled) {
+      profileForCurrentPacket.endSetPositionStartVerifyChecksum();
+    }
+  }
+  
+  void eventEndVerifyChecksumStartUpdateBlockCrc() {
+    if (profileEnabled) {
+      profileForCurrentPacket.endVerifyChecksumStartUpdateBlockCrc();
+    }
+  }
+  
+  void eventEndUpdateBlockCrcStartWritePacket() {
+    if (profileEnabled) {
+      profileForCurrentPacket.endUpdateBlockCrcStartWritePacket();
+    }
+  }
+  
+  void eventEndWritePacketStartFlush() {
+    if (profileEnabled) {
+      profileForCurrentPacket.endWritePacketStartFlush();
+    }
+  }
+  
+  void eventEndFlush() {
+    if (profileEnabled) {
+      profileForCurrentPacket.endFlush();
+    }
+  }
+  
+  void eventEndCurrentPacket() {
+    if (profileEnabled) {
+      profileForCurrentPacket.endCurrentPacket();
+    }
+  }
+  
 }

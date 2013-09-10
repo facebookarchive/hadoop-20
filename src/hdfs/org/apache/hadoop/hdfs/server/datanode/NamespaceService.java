@@ -20,16 +20,13 @@ package org.apache.hadoop.hdfs.server.datanode;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.util.List;
 
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecord;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
-import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 
-public abstract class NamespaceService implements Runnable {
+public abstract class NamespaceService implements Runnable, SyncBlock {
   volatile long lastBeingAlive = 0;
   abstract UpgradeManagerDatanode getUpgradeManager();
   abstract DatanodeRegistration getNsRegistration();
@@ -45,10 +42,6 @@ public abstract class NamespaceService implements Runnable {
   abstract DatanodeProtocol getDatanodeProtocol();
   abstract void notifyNamenodeReceivedBlock(Block block, String delHint);
   abstract void notifyNamenodeDeletedBlock(Block block);
-  abstract LocatedBlock syncBlock(Block block, List<BlockRecord> syncList,
-      boolean closeFile, List<InterDatanodeProtocol> datanodeProxies,
-      long deadline)
-      throws IOException;
   abstract void scheduleBlockReport(long delay);
   abstract void scheduleBlockReceivedAndDeleted(long delay);
 }

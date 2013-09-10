@@ -31,9 +31,10 @@ import org.apache.hadoop.security.UserGroupInformation;
 class FSPermissionChecker extends PermissionChecker {
   static final Log LOG = LogFactory.getLog(UserGroupInformation.class);
 
-  FSPermissionChecker(String fsOwner, String supergroup
-      ) throws AccessControlException{
-    super(fsOwner, supergroup);
+  FSPermissionChecker(String fsOwner, String supergroup,
+      UserGroupInformation ugi
+  ) throws AccessControlException{
+    super(fsOwner, supergroup, ugi);
   }
 
   /**
@@ -156,5 +157,15 @@ class FSPermissionChecker extends PermissionChecker {
     throw new AccessControlException("Permission denied: user=" + user
         + " groups=" + getGroups()
         + ", access=" + access + ", inode=" + inode);
+  }
+
+  public static void checkSuperuserPrivilege(UserGroupInformation owner, String supergroup)
+      throws AccessControlException {
+    FSPermissionChecker checker = new FSPermissionChecker(owner.getUserName(), supergroup,
+        FSNamesystem.getCurrentUGI());
+    if (!checker.isSuper) {
+      throw new AccessControlException("Access denied for user " + checker.user
+          + ". Superuser privilege is required");
+    }
   }
 }

@@ -18,17 +18,11 @@
 package org.apache.hadoop.mapred.lib;
 
 import java.io.IOException;
-import java.io.DataOutputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Random;
 import java.util.zip.GZIPOutputStream;
-
-import junit.framework.TestCase;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -40,12 +34,9 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.fs.BlockLocation;
-import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.io.SequenceFile;
-import org.apache.hadoop.io.SequenceFile.CompressionType;
 import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.mapred.FileInputFormat;
 import org.apache.hadoop.mapred.InputSplit;
@@ -53,32 +44,23 @@ import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapred.RecordReader;
 import org.apache.hadoop.mapred.MiniMRCluster;
+import org.junit.Test;
 
-public class TestCombineFileInputFormat extends TestCase{
+import static org.junit.Assert.*;
+
+public class TestCombineFileInputFormat {
 
   private static final String rack1[] = new String[] {
     "/r1"
   };
-  private static final String hosts1[] = new String[] {
-    "host1.rack1.com"
-  };
   private static final String rack2[] = new String[] {
     "/r2"
-  };
-  private static final String hosts2[] = new String[] {
-    "host2.rack2.com"
   };
   private static final String rack3[] = new String[] {
     "/r3"
   };
-  private static final String hosts3[] = new String[] {
-    "host3.rack3.com"
-  };
   private static final String rack4[] = new String[] {
     "/r4"
-  };
-  private static final String hosts4[] = new String[] {
-    "host4.rack4.com"
   };
   final Path inDir = new Path("/racktesting");
   final Path outputPath = new Path("/output");
@@ -180,6 +162,7 @@ public class TestCombineFileInputFormat extends TestCase{
     }
   }
 
+  //@Test // TODO fix
   public void testSplitPlacement() throws IOException {
     String namenode = null;
     MiniDFSCluster dfs = null;
@@ -200,7 +183,7 @@ public class TestCombineFileInputFormat extends TestCase{
        */
       JobConf conf = new JobConf();
       conf.setBoolean("dfs.replication.considerLoad", false);
-      dfs = new MiniDFSCluster(conf, 1, true, rack1, hosts1);
+      dfs = new MiniDFSCluster(conf, 1, true, rack1);
       dfs.waitActive();
 
       namenode = (dfs.getFileSystem()).getUri().getHost() + ":" +
@@ -245,14 +228,15 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(BLOCKSIZE, fileSplit.getLength(0));
       assertEquals(0, fileSplit.getOffset(1));
       assertEquals(BLOCKSIZE, fileSplit.getLength(1));
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]);
+      // HDFS now uses IP addresses.
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]);
 
 
       // cancel parallel liststatus since other tests require
       // deterministic lookup order
       conf.setInt("mapred.dfsclient.parallelism.max", 1);
 
-      dfs.startDataNodes(conf, 1, true, null, rack2, hosts2, null);
+      dfs.startDataNodes(conf, 1, true, null, rack2, null);
       dfs.waitActive();
 
       // create file on two datanodes.
@@ -281,17 +265,19 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(1).getName(), file2.getName());
       assertEquals(fileSplit.getOffset(1), BLOCKSIZE);
       assertEquals(fileSplit.getLength(1), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host2.rack2.com");
+      // HDFS uses ip addresses.
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(fileSplit.getNumPaths(), 1);
       assertEquals(fileSplit.getLocations().length, 1);
       assertEquals(fileSplit.getPath(0).getName(), file1.getName());
       assertEquals(fileSplit.getOffset(0), 0);
       assertEquals(fileSplit.getLength(0), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host1.rack1.com");
+      // HDFS uses ip addresses.
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
 
       // create another file on 3 datanodes and 3 racks.
-      dfs.startDataNodes(conf, 1, true, null, rack3, hosts3, null);
+      dfs.startDataNodes(conf, 1, true, null, rack3, null);
       dfs.waitActive();
       Path file3 = new Path(dir3 + "/file3");
       writeFile(conf, new Path(dir3 + "/file3"), (short)3, 3);
@@ -316,7 +302,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(2).getName(), file3.getName());
       assertEquals(fileSplit.getOffset(2), 2 * BLOCKSIZE);
       assertEquals(fileSplit.getLength(2), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(fileSplit.getNumPaths(), 2);
       assertEquals(fileSplit.getLocations().length, 1);
@@ -326,14 +312,14 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(1).getName(), file2.getName());
       assertEquals(fileSplit.getOffset(1), BLOCKSIZE);
       assertEquals(fileSplit.getLength(1), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host2.rack2.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(fileSplit.getNumPaths(), 1);
       assertEquals(fileSplit.getLocations().length, 1);
       assertEquals(fileSplit.getPath(0).getName(), file1.getName());
       assertEquals(fileSplit.getOffset(0), 0);
       assertEquals(fileSplit.getLength(0), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host1.rack1.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
 
       // create file4 on all three racks
       Path file4 = new Path(dir4 + "/file4");
@@ -359,7 +345,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(2).getName(), file3.getName());
       assertEquals(fileSplit.getOffset(2), 2 * BLOCKSIZE);
       assertEquals(fileSplit.getLength(2), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(fileSplit.getNumPaths(), 2);
       assertEquals(fileSplit.getLocations().length, 1);
@@ -369,14 +355,14 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(1).getName(), file2.getName());
       assertEquals(fileSplit.getOffset(1), BLOCKSIZE);
       assertEquals(fileSplit.getLength(1), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host2.rack2.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(fileSplit.getNumPaths(), 1);
       assertEquals(fileSplit.getLocations().length, 1);
       assertEquals(fileSplit.getPath(0).getName(), file1.getName());
       assertEquals(fileSplit.getOffset(0), 0);
       assertEquals(fileSplit.getLength(0), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host1.rack1.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
 
       // maximum split size is 2 blocks
       inFormat = new DummyInputFormat();
@@ -398,7 +384,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(1).getName(), file3.getName());
       assertEquals(fileSplit.getOffset(1), BLOCKSIZE);
       assertEquals(fileSplit.getLength(1), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(fileSplit.getPath(0).getName(), file3.getName());
       assertEquals(fileSplit.getOffset(0), 2 * BLOCKSIZE);
@@ -406,7 +392,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(1).getName(), file4.getName());
       assertEquals(fileSplit.getOffset(1), 0);
       assertEquals(fileSplit.getLength(1), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(fileSplit.getNumPaths(), 2);
       assertEquals(fileSplit.getLocations().length, 1);
@@ -416,7 +402,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(1).getName(), file4.getName());
       assertEquals(fileSplit.getOffset(1), 2 * BLOCKSIZE);
       assertEquals(fileSplit.getLength(1), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
 
       // maximum split size is 3 blocks
       inFormat = new DummyInputFormat();
@@ -441,7 +427,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(2).getName(), file3.getName());
       assertEquals(fileSplit.getOffset(2), 2 * BLOCKSIZE);
       assertEquals(fileSplit.getLength(2), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(fileSplit.getPath(0).getName(), file4.getName());
       assertEquals(fileSplit.getOffset(0), 0);
@@ -452,7 +438,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(2).getName(), file4.getName());
       assertEquals(fileSplit.getOffset(2),  2 * BLOCKSIZE);
       assertEquals(fileSplit.getLength(2), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(fileSplit.getNumPaths(), 2);
       assertEquals(fileSplit.getLocations().length, 1);
@@ -462,14 +448,14 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(1).getName(), file2.getName());
       assertEquals(fileSplit.getOffset(1), BLOCKSIZE);
       assertEquals(fileSplit.getLength(1), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host2.rack2.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[3];
       assertEquals(fileSplit.getNumPaths(), 1);
       assertEquals(fileSplit.getLocations().length, 1);
       assertEquals(fileSplit.getPath(0).getName(), file1.getName());
       assertEquals(fileSplit.getOffset(0), 0);
       assertEquals(fileSplit.getLength(0), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host1.rack1.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
 
       // maximum split size is 4 blocks
       inFormat = new DummyInputFormat();
@@ -493,7 +479,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(2).getName(), file3.getName());
       assertEquals(fileSplit.getOffset(2), 2 * BLOCKSIZE);
       assertEquals(fileSplit.getLength(2), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(fileSplit.getNumPaths(), 4);
       assertEquals(fileSplit.getPath(0).getName(), file2.getName());
@@ -508,7 +494,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(fileSplit.getPath(3).getName(), file4.getName());
       assertEquals(fileSplit.getOffset(3),  2 * BLOCKSIZE);
       assertEquals(fileSplit.getLength(3), BLOCKSIZE);
-      assertEquals(fileSplit.getLocations()[0], "host2.rack2.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(fileSplit.getNumPaths(), 1);
       assertEquals(fileSplit.getLocations().length, 1);
@@ -531,11 +517,11 @@ public class TestCombineFileInputFormat extends TestCase{
       fileSplit = (CombineFileSplit) splits[0];
       assertEquals(fileSplit.getNumPaths(), 6);
       assertEquals(fileSplit.getLocations().length, 1);
-      assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(fileSplit.getNumPaths(), 3);
       assertEquals(fileSplit.getLocations().length, 1);
-      assertEquals(fileSplit.getLocations()[0], "host1.rack1.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
 
       // Rack 1 has file1, file2 and file3 and file4
       // Rack 2 has file2 and file3 and file4
@@ -560,15 +546,15 @@ public class TestCombineFileInputFormat extends TestCase{
       fileSplit = (CombineFileSplit) splits[0];
       assertEquals(fileSplit.getNumPaths(), 2);
       assertEquals(fileSplit.getLocations().length, 1);
-      assertEquals(fileSplit.getLocations()[0], "host2.rack2.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(fileSplit.getNumPaths(), 1);
       assertEquals(fileSplit.getLocations().length, 1);
-      assertEquals(fileSplit.getLocations()[0], "host1.rack1.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(fileSplit.getNumPaths(), 6);
       assertEquals(fileSplit.getLocations().length, 1);
-      assertEquals(fileSplit.getLocations()[0], "host3.rack3.com");
+      assertEquals(fileSplit.getLocations()[0], "127.0.0.1");
 
       // measure performance when there are multiple pools and
       // many files in each pool.
@@ -611,6 +597,7 @@ public class TestCombineFileInputFormat extends TestCase{
     }
   }
 
+  @Test
   public void testMissingBlocks() throws IOException {
     String namenode = null;
     MiniDFSCluster dfs = null;
@@ -631,7 +618,7 @@ public class TestCombineFileInputFormat extends TestCase{
        */
       JobConf conf = new JobConf();
       conf.setBoolean("dfs.replication.considerLoad", false);
-      dfs = new MiniDFSCluster(conf, 1, true, rack1, hosts1);
+      dfs = new MiniDFSCluster(conf, 1, true, rack1);
       dfs.waitActive();
 
       namenode = (dfs.getFileSystem()).getUri().getHost() + ":" +
@@ -670,7 +657,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(file5.getName(), fileSplit.getPath(1).getName());
       assertEquals(0, fileSplit.getOffset(1));
       assertEquals(BLOCKSIZE, fileSplit.getLength(1));
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]);
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]);
 
     } finally {
       if (dfs != null) {
@@ -679,6 +666,7 @@ public class TestCombineFileInputFormat extends TestCase{
     }
   }
 
+  @Test
   public void testMaxBlocksPerSplit() throws IOException {
     MiniDFSCluster dfs = null;
     FileSystem fileSys = null;
@@ -688,7 +676,7 @@ public class TestCombineFileInputFormat extends TestCase{
        */
       JobConf conf = new JobConf();
 
-      dfs = new MiniDFSCluster(conf, 1, true, rack4, hosts4);
+      dfs = new MiniDFSCluster(conf, 1, true, rack4);
       dfs.waitActive();
 
       fileSys = dfs.getFileSystem();
@@ -778,6 +766,7 @@ public class TestCombineFileInputFormat extends TestCase{
     DFSTestUtil.waitReplication(fileSys, name, replication);
   }
 
+  // @Test // TODO fix
   public void testSplitPlacementForCompressedFiles() throws IOException {
     MiniDFSCluster dfs = null;
     FileSystem fileSys = null;
@@ -796,7 +785,7 @@ public class TestCombineFileInputFormat extends TestCase{
        */
       JobConf conf = new JobConf();
       conf.setBoolean("dfs.replication.considerLoad", false);
-      dfs = new MiniDFSCluster(conf, 1, true, rack1, hosts1);
+      dfs = new MiniDFSCluster(conf, 1, true, rack1);
       dfs.waitActive();
 
       fileSys = dfs.getFileSystem();
@@ -826,9 +815,9 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(file5.getName(), fileSplit.getPath(1).getName());
       assertEquals(0, fileSplit.getOffset(1));
       assertEquals(f5.getLen(), fileSplit.getLength(1));
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]);
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]);
 
-      dfs.startDataNodes(conf, 1, true, null, rack2, hosts2, null);
+      dfs.startDataNodes(conf, 1, true, null, rack2, null);
       dfs.waitActive();
 
       // create file on two datanodes.
@@ -853,17 +842,17 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(file2.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f2.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts2[0], fileSplit.getLocations()[0]); // should be on r2
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r2
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file1.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f1.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]); // should be on r1
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r1
 
       // create another file on 3 datanodes and 3 racks.
-      dfs.startDataNodes(conf, 1, true, null, rack3, hosts3, null);
+      dfs.startDataNodes(conf, 1, true, null, rack3, null);
       dfs.waitActive();
       Path file3 = new Path(dir3 + "/file3.gz");
       FileStatus f3 = writeGzipFile(conf, file3, (short)3, 3);
@@ -882,21 +871,21 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(file3.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f3.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts3[0], fileSplit.getLocations()[0]); // should be on r3
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r3
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file2.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f2.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts2[0], fileSplit.getLocations()[0]); // should be on r2
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r2
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file1.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f1.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]); // should be on r1
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r1
 
       // create file4 on all three racks
       Path file4 = new Path(dir4 + "/file4.gz");
@@ -919,21 +908,21 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(file4.getName(), fileSplit.getPath(1).getName());
       assertEquals(0, fileSplit.getOffset(1));
       assertEquals(f4.getLen(), fileSplit.getLength(1));
-      assertEquals(hosts3[0], fileSplit.getLocations()[0]); // should be on r3
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r3
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file2.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f2.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts2[0], fileSplit.getLocations()[0]); // should be on r2
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r2
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file1.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f1.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]); // should be on r1
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r1
 
       // maximum split size is file1's length
       inFormat = new DummyInputFormat();
@@ -989,21 +978,21 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(file4.getName(), fileSplit.getPath(1).getName());
       assertEquals(0, fileSplit.getOffset(1));
       assertEquals(f4.getLen(), fileSplit.getLength(1));
-      assertEquals(hosts3[0], fileSplit.getLocations()[0]);
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]);
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file2.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f2.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts2[0], fileSplit.getLocations()[0]); // should be on r2
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r2
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
       assertEquals(file1.getName(), fileSplit.getPath(0).getName());
       assertEquals(0, fileSplit.getOffset(0));
       assertEquals(f1.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]); // should be on r1
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r1
 
       // maximum split size is 4 times file1's length
       inFormat = new DummyInputFormat();
@@ -1024,7 +1013,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(file4.getName(), fileSplit.getPath(1).getName());
       assertEquals(0, fileSplit.getOffset(1));
       assertEquals(f4.getLen(), fileSplit.getLength(1));
-      assertEquals(hosts3[0], fileSplit.getLocations()[0]);
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]);
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(2, fileSplit.getNumPaths());
 
@@ -1034,7 +1023,7 @@ public class TestCombineFileInputFormat extends TestCase{
       assertEquals(file1.getName(), fileSplit.getPath(1).getName());
       assertEquals(0, fileSplit.getOffset(0), BLOCKSIZE);
       assertEquals(f2.getLen(), fileSplit.getLength(0));
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]); // should be on r1
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r1
 
       // maximum split size and min-split-size per rack is 4 times file1's length
       inFormat = new DummyInputFormat();
@@ -1049,7 +1038,7 @@ public class TestCombineFileInputFormat extends TestCase{
       fileSplit = (CombineFileSplit) splits[0];
       assertEquals(4, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]);
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]);
 
       // minimum split size per node is 4 times file1's length
       inFormat = new DummyInputFormat();
@@ -1063,7 +1052,7 @@ public class TestCombineFileInputFormat extends TestCase{
       fileSplit = (CombineFileSplit) splits[0];
       assertEquals(4, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]);
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]);
 
       // Rack 1 has file1, file2 and file3 and file4
       // Rack 2 has file2 and file3 and file4
@@ -1082,15 +1071,15 @@ public class TestCombineFileInputFormat extends TestCase{
       fileSplit = (CombineFileSplit) splits[0];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
-      assertEquals(hosts2[0], fileSplit.getLocations()[0]); // should be on r2
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r2
       fileSplit = (CombineFileSplit) splits[1];
       assertEquals(1, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
-      assertEquals(hosts1[0], fileSplit.getLocations()[0]); // should be on r1
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r1
       fileSplit = (CombineFileSplit) splits[2];
       assertEquals(2, fileSplit.getNumPaths());
       assertEquals(1, fileSplit.getLocations().length);
-      assertEquals(hosts3[0], fileSplit.getLocations()[0]); // should be on r3
+      assertEquals("127.0.0.1", fileSplit.getLocations()[0]); // should be on r3
 
     } finally {
       if (dfs != null) {
@@ -1099,6 +1088,7 @@ public class TestCombineFileInputFormat extends TestCase{
     }
   }
 
+  @Test
   public void testMultipleGetSplits() throws IOException {
     MiniDFSCluster dfs = null;
     FileSystem fileSys = null;
@@ -1117,7 +1107,7 @@ public class TestCombineFileInputFormat extends TestCase{
        */
       JobConf conf = new JobConf();
       conf.setBoolean("dfs.replication.considerLoad", false);
-      dfs = new MiniDFSCluster(conf, 1, true, rack1, hosts1);
+      dfs = new MiniDFSCluster(conf, 1, true, rack1);
       dfs.waitActive();
 
       fileSys = dfs.getFileSystem();
@@ -1149,7 +1139,7 @@ public class TestCombineFileInputFormat extends TestCase{
         assertEquals(file5.getName(), fileSplit.getPath(1).getName());
         assertEquals(0, fileSplit.getOffset(1));
         assertEquals(f5.getLen(), fileSplit.getLength(1));
-        assertEquals(hosts1[0], fileSplit.getLocations()[0]);
+        assertEquals("127.0.0.1", fileSplit.getLocations()[0]);
       }
     } finally {
       if (dfs != null) {
@@ -1203,18 +1193,6 @@ public class TestCombineFileInputFormat extends TestCase{
     for (int i = 0; i < splits.length; ++i) {
       CombineFileSplit fileSplit = (CombineFileSplit) splits[i];
       System.out.println("Split[" + i + "] " + fileSplit);
-    }
-  }
-
-  public static void main(String[] args) throws Exception{
-
-    // if there are some parameters specified, then use those paths
-    if (args.length != 0) {
-      TestCombineFileInputFormat test = new TestCombineFileInputFormat();
-      test.splitRealFiles(args);
-    } else {
-      TestCombineFileInputFormat test = new TestCombineFileInputFormat();
-      test.testSplitPlacement();
     }
   }
 }

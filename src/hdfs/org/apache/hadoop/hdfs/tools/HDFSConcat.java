@@ -32,7 +32,7 @@ public class HDFSConcat {
    * @param args
    */
   public static void main(String... args) throws IOException {
-
+    org.apache.hadoop.hdfs.DnsMonitorSecurityManager.setTheManager();
     if(args.length < 3) {
       System.err.println("Usage HDFSConcat (restricted/unrestricted) target srcs..");
       System.exit(0);

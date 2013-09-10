@@ -41,6 +41,10 @@ class JvmManager {
   public static final Log LOG =
     LogFactory.getLog("org.apache.hadoop.mapred.JvmManager");
 
+  /** How long to wait prior to sigkill after a kill */
+  public static final String SLEEPTIME_BEFORE_SIGKILL_KEY =
+      "mapred.tasktracker.tasks.sleeptime.before.sigkill";
+
   JvmManagerForType mapJvmManager;
 
   JvmManagerForType reduceJvmManager;
@@ -141,7 +145,15 @@ class JvmManager {
     } else {
       reduceJvmManager.killJvm(jvmId);
     }
-  }  
+  }
+  
+  public void doStackTrace(TaskRunner tr) {
+    if (tr.getTask().isMapTask()) {
+      mapJvmManager.doStackTrace(tr);
+    } else {
+      reduceJvmManager.doStackTrace(tr);
+    }
+  }
 
   private static class JvmManagerForType {
     //Mapping from the JVM IDs to running Tasks
@@ -250,6 +262,16 @@ class JvmManager {
       list.addAll(jvmIdToRunner.values());
       for (JvmRunner jvm : list) {
         jvm.kill();
+      }
+    }
+    
+    synchronized public void doStackTrace(TaskRunner tr) {
+      JVMId jvmId = runningTaskToJvm.get(tr);
+      if (jvmId != null) {
+        JvmRunner jvmRunner = jvmIdToRunner.get(jvmId);
+        if (jvmRunner != null) {
+          jvmRunner.doStackTrace();
+        }
       }
     }
     
@@ -455,7 +477,7 @@ class JvmManager {
           if (initalContext != null && initalContext.env != null) {
             initalContext.pid = jvmIdToPid.get(jvmId);
             initalContext.sleeptimeBeforeSigkill = tracker.getJobConf()
-              .getLong("mapred.tasktracker.tasks.sleeptime-before-sigkill",
+              .getLong(SLEEPTIME_BEFORE_SIGKILL_KEY,
                   ProcessTree.DEFAULT_SLEEPTIME_BEFORE_SIGKILL);
             controller.destroyTaskJVM(initalContext);
           } else {
@@ -465,14 +487,26 @@ class JvmManager {
           removeJvm(jvmId);
         }
       }
+      
+      public void doStackTrace() {
+        if (!killed) {
+          TaskController controller = tracker.getTaskController();
+          if (initalContext != null && initalContext.env != null) {
+            initalContext.pid = jvmIdToPid.get(jvmId);
+            controller.doStackTrace(initalContext);
+          }
+        }
+      }
 
       // Post-JVM-exit logs processing. Truncate the logs.
       private void truncateJVMLogs() {
         Task firstTask = initalContext.task;
-        tracker.getTaskLogsMonitor().addProcessForLogTruncation(
+        if (tracker.getTaskLogsMonitor() != null) {
+          tracker.getTaskLogsMonitor().addProcessForLogTruncation(
             firstTask.getTaskID(), tasksGiven);
+        }
       }
-
+      
       public void taskRan() {
         busy = false;
         numTasksRan++;

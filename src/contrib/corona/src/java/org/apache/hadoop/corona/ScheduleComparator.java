@@ -65,6 +65,43 @@ public enum ScheduleComparator implements Comparator<Schedulable> {
     }
   },
 
+  /**
+   * Fair until min allocation and for same priorities.
+   * Over the mins, use strict priority.
+   */
+  PRIORITY {
+    @Override
+    public int compare(Schedulable s1, Schedulable s2) {
+      boolean s1Needy = s1.getGranted() < s1.getMinimum();
+      boolean s2Needy = s2.getGranted() < s2.getMinimum();
+      if (s1Needy && !s2Needy) {
+        return -1;
+      }
+      if (!s1Needy && s2Needy) {
+        return 1;
+      }
+      double s1Ratio;
+      double s2Ratio;
+      if (s1Needy && s2Needy) {
+        s1Ratio = (double) (s1.getGranted()) / s1.getMinimum();
+        s2Ratio = (double) (s2.getGranted()) / s2.getMinimum();
+      } else {
+        int pri = comparePriorities(s1, s2);
+        if (pri != 0) {
+          return pri;
+        }
+        // else fall back to fair allocation.
+        s1Ratio = s1.getGranted() / s1.getWeight();
+        s2Ratio = s2.getGranted() / s2.getWeight();
+      }
+      if (s1Ratio == s2Ratio) {
+        return FIFO.compare(s1, s2);
+      }
+      // will sort in ascending order
+      return s1Ratio < s2Ratio ? -1 : 1;
+    }
+  },
+
   /** FIFO scheduler comparator */
   FIFO {
     @Override
@@ -105,6 +142,14 @@ public enum ScheduleComparator implements Comparator<Schedulable> {
     @Override
     public int compare(Schedulable s1, Schedulable s2) {
       return -1 * FAIR.compare(s1, s2);
+    }
+  },
+
+  /** Priority scheduler comparator with preemption */
+  PRIORITY_PREEMPT {
+    @Override
+    public int compare(Schedulable s1, Schedulable s2) {
+      return -1 * PRIORITY.compare(s1, s2);
     }
   },
 

@@ -63,11 +63,12 @@ public class TestSimulatedFSDataset extends TestCase {
     int bytesAdded = 0;
     for (int i = startingBlockId; i < startingBlockId+NUMBLOCKS; ++i) {
       Block b = new Block(i, 0, 0); // we pass expected len as zero, - fsdataset should use the sizeof actual data written
-      OutputStream dataOut = ((SimulatedFSDataset.SimulatedBlockInlineChecksumFileWriter) fsdataset
-          .writeToBlock(0, b, false, false, -1, -1)).getDataOutputStream();
+      BlockDataFile.Writer dataOut = ((SimulatedFSDataset.SimulatedBlockInlineChecksumFileWriter) fsdataset
+          .writeToBlock(0, b, b, false, false, -1, -1)).getBlockDataFile()
+          .getWriter(0);
       assertEquals(0, fsdataset.getFinalizedBlockLength(0,b));
       for (int j=1; j <= blockIdToLen(i); ++j) {
-        dataOut.write(j);
+        dataOut.write(new byte[] {(byte)j});
         assertEquals(j, fsdataset.getFinalizedBlockLength(0,b)); // correct length even as we write
         bytesAdded++;
       }

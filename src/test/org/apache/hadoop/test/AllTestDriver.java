@@ -30,7 +30,9 @@ import org.apache.hadoop.mapred.TestTextInputFormat;
 import org.apache.hadoop.hdfs.BenchmarkThroughput;
 import org.apache.hadoop.hdfs.NNBench;
 import org.apache.hadoop.hdfs.LocalReadWritePerf;
+import org.apache.hadoop.fs.BenchmarkHar;
 import org.apache.hadoop.fs.DistributedFSCheck;
+import org.apache.hadoop.fs.TestAppendStress;
 import org.apache.hadoop.fs.TestDFSIO;
 import org.apache.hadoop.fs.DFSCIOTest;
 import org.apache.hadoop.fs.TestFileSystem;
@@ -65,6 +67,7 @@ public class AllTestDriver {
       pgd.addClass("testsequencefileinputformat", TestSequenceFileInputFormat.class, "A test for sequence file input format.");
       pgd.addClass("testtextinputformat", TestTextInputFormat.class, "A test for text input format.");
       pgd.addClass("TestDFSIO", TestDFSIO.class, "Distributed i/o benchmark.");
+      pgd.addClass("TestAppendStress", TestAppendStress.class, "Distributed append stress test.");
       pgd.addClass("DFSCIOTest", DFSCIOTest.class, "Distributed i/o benchmark of libhdfs.");
       pgd.addClass("DistributedFSCheck", DistributedFSCheck.class, "Distributed checkup of the file system consistency.");
       pgd.addClass("testmapredsort", SortValidator.class, 
@@ -80,6 +83,7 @@ public class AllTestDriver {
           "A program that tests the reliability of the MR framework by " +
           "injecting faults/failures");
       pgd.addClass("LocalReadWritePerf", LocalReadWritePerf.class, "HDFS local read/write benchmark");
+      pgd.addClass("BenchmarkHar", BenchmarkHar.class, "benchmark for different ways of generating har files");
       pgd.driver(argv);
     } catch(Throwable e) {
       e.printStackTrace();

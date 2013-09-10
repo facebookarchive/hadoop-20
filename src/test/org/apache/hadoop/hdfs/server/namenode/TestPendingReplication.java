@@ -21,6 +21,7 @@ import junit.framework.TestCase;
 import java.lang.System;
 
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
 /**
  * This class tests the internals of PendingReplicationBlocks.java
@@ -36,7 +37,7 @@ public class TestPendingReplication extends TestCase {
     //
     for (int i = 0; i < 10; i++) {
       Block block = new Block(i, i, 0);
-      pendingReplications.add(block, i);
+      pendingReplications.add(new BlockInfo(block, 1), i);
     }
     assertEquals("Size of pendingReplications ",
                  10, pendingReplications.size());
@@ -54,7 +55,7 @@ public class TestPendingReplication extends TestCase {
       pendingReplications.remove(blk);           // removes all replicas
     }
     assertTrue(pendingReplications.size() == 9);
-    pendingReplications.add(blk, 8);
+    pendingReplications.add(new BlockInfo(blk, 1), 8);
     assertTrue(pendingReplications.size() == 10);
 
     //
@@ -82,7 +83,8 @@ public class TestPendingReplication extends TestCase {
 
     for (int i = 10; i < 15; i++) {
       Block block = new Block(i, i, 0);
-      pendingReplications.add(block, i);
+      BlockInfo blockInfo = new BlockInfo(block, 1);
+      pendingReplications.add(blockInfo, i);
     }
     assertTrue(pendingReplications.size() == 15);
 

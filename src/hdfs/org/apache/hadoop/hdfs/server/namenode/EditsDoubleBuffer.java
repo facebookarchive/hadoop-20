@@ -49,8 +49,13 @@ public class EditsDoubleBuffer {
     bufCurrent.writeOp(op);
   }
 
-  void writeRaw(byte[] bytes, int offset, int length) throws IOException {
+  public void writeRaw(byte[] bytes, int offset, int length) throws IOException {
     bufCurrent.write(bytes, offset, length);
+  }
+  
+  public void writeRawOp(byte[] bytes, int offset, int length, long txid)
+      throws IOException {
+    bufCurrent.writeRawOp(bytes, offset, length, txid);
   }
   
   public void close() throws IOException {
@@ -84,7 +89,7 @@ public class EditsDoubleBuffer {
   }
   
   public boolean shouldForceSync() {
-    return bufReady.size() >= initBufferSize;
+    return bufCurrent.size() >= initBufferSize;
   }
 
   public DataOutputBuffer getCurrentBuf() {
@@ -97,6 +102,13 @@ public class EditsDoubleBuffer {
 
   public int countBufferedBytes() {
     return bufReady.size() + bufCurrent.size();
+  }
+  
+  /**
+   * @return the number of bytes that are ready to be flushed
+   */
+  public int countReadyBytes() {
+    return bufReady.size();
   }
 
   /**
@@ -133,6 +145,17 @@ public class EditsDoubleBuffer {
         assert op.txid > firstTxId;
       }
       writer.writeOp(op);
+      numTxns++;
+    }
+    
+    public void writeRawOp(byte[] bytes, int offset, int length, long txid)
+        throws IOException {
+      if (firstTxId == HdfsConstants.INVALID_TXID) {
+        firstTxId = txid;
+      } else {
+        assert txid > firstTxId;
+      }
+      write(bytes, offset, length);
       numTxns++;
     }
     

@@ -21,22 +21,37 @@ package org.apache.hadoop.ipc;
 import java.io.IOException;
 import java.lang.reflect.Constructor;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.xml.sax.Attributes;
 import org.znerd.xmlenc.XMLOutputter;
 
+@ThriftStruct
 public class RemoteException extends IOException {
   /** For java.io.Serializable */
   private static final long serialVersionUID = 1L;
 
   private String className;
-  
-  public RemoteException(String className, String msg) {
+
+  public RemoteException(Exception e) {
+    this(e.getClass().getName(), e.getMessage());
+  }
+
+  @ThriftConstructor
+  public RemoteException(@ThriftField(1) String className, @ThriftField(2) String msg) {
     super(msg);
     this.className = className;
   }
-  
+
+  @ThriftField(1)
   public String getClassName() {
     return className;
+  }
+
+  @ThriftField(2)
+  public String getMsg() {
+    return getMessage();
   }
 
   /**

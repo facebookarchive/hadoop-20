@@ -31,17 +31,21 @@ import java.io.RandomAccessFile;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 import java.util.Arrays;
-import java.util.zip.CRC32;
 import java.util.zip.Checksum;
 
 import org.apache.hadoop.fs.FSInputChecker;
-import org.apache.hadoop.fs.FSOutputSummer;
+import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.server.datanode.BlockDataFile.RandomAccessor;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.nativeio.NativeIO;
+import org.apache.hadoop.util.CrcConcat;
 import org.apache.hadoop.util.DataChecksum;
-import org.apache.hadoop.util.PureJavaCrc32;
+import org.apache.hadoop.util.InjectionHandler;
+import org.apache.hadoop.util.NativeCrc32;
+
 
 /** 
  * Write data into block file and checksum into a separate checksum files.   
@@ -79,24 +83,24 @@ import org.apache.hadoop.util.PureJavaCrc32;
  *  
  */
 public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
-  File blockFile, metafile;
+  final private BlockDataFile blockDataFile;
+  protected BlockDataFile.Writer blockDataWriter = null;
+  
+  File metafile;
 
-  protected OutputStream dataOut = null; // to block file at local disk
   protected DataOutputStream checksumOut = null; // to crc file at local disk
   protected OutputStream cout = null; // output stream for checksum file
-  protected Checksum partialCrc = null;
 
-  public BlockWithChecksumFileWriter(File blockFile, File metafile) {
-    this.blockFile = blockFile;
+  public BlockWithChecksumFileWriter(BlockDataFile blockDataFile, File metafile) {
+    this.blockDataFile = blockDataFile;
     this.metafile = metafile;
   }
 
   public void initializeStreams(int bytesPerChecksum, int checksumSize,
       Block block, String inAddr, int namespaceId, DataNode datanode)
       throws FileNotFoundException, IOException {
-    if (this.dataOut == null) {
-      this.dataOut = new FileOutputStream(
-          new RandomAccessFile(blockFile, "rw").getFD());
+    if (this.blockDataWriter == null) {
+      blockDataWriter = blockDataFile.getWriter(-1);
     }
     if (this.cout == null) {
       this.cout = new FileOutputStream(
@@ -110,32 +114,66 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
   }
 
   @Override
+  public void fadviseStream(int advise, long offset, long len)
+      throws IOException {
+      fadviseStream(advise, offset, len, false);
+  }
+
+  @Override
+  public void fadviseStream(int advise, long offset, long len, boolean sync)
+      throws IOException {
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("posix_fadvise with advise : " + advise + " for : "
+          + blockDataFile.getFile());
+    }
+    blockDataWriter.posixFadviseIfPossible(offset, len, advise, sync);
+  }
+
+  @Override
   public void writeHeader(DataChecksum checksum) throws IOException {
     BlockMetadataHeader.writeHeader(checksumOut, checksum);
   }
 
   @Override
-  public void writePacket(byte pktBuf[], int len, int dataOff, int checksumOff,
-      int numChunks) throws IOException {
+  public void writePacket(byte pktBuf[], int len, int dataOff,
+      int pktBufStartOff, int numChunks, int packetVersion) throws IOException {
+    if (packetVersion != DataTransferProtocol.PACKET_VERSION_CHECKSUM_FIRST) {
+      throw new IOException(
+          "non-inline checksum doesn't support packet version " + packetVersion);
+    }
+    if (len == 0) {
+      return;
+    }
+    
     // finally write to the disk :
-    dataOut.write(pktBuf, dataOff, len);
+    blockDataWriter.write(pktBuf, dataOff, len);
 
-    // If this is a partial chunk, then verify that this is the only
-    // chunk in the packet. Calculate new crc for this chunk.
-    if (partialCrc != null) {
-      if (len > bytesPerChecksum) {
-        throw new IOException("Got wrong length during writeBlock(" + block
-            + ") from " + inAddr + " "
-            + "A packet can have only one partial chunk." + " len = " + len
-            + " bytesPerChecksum " + bytesPerChecksum);
-      }
-      partialCrc.update(pktBuf, dataOff, len);
-      byte[] buf = FSOutputSummer.convertToByteStream(partialCrc, checksumSize);
-      checksumOut.write(buf);
-      LOG.debug("Writing out partial crc for data len " + len);
-      partialCrc = null;
+    boolean lastChunkStartsFromChunkStart = false;
+    if (firstChunkOffset > 0) {
+      // packet doesn't start as beginning of the chunk, need to concatenate
+      // checksums of two pieces.
+      int crcPart2 = DataChecksum.getIntFromBytes(pktBuf, pktBufStartOff);
+      partialCrcInt = CrcConcat.concatCrc(partialCrcInt, crcPart2,
+          Math.min(len, bytesPerChecksum - firstChunkOffset));
+      byte[] tempBuf = new byte[4];
+      DataChecksum.writeIntToBuf(partialCrcInt, tempBuf, 0);
+      checksumOut.write(tempBuf);
+      if (numChunks > 1) {
+        // write the other chunk's checksums.
+        checksumOut.write(pktBuf, pktBufStartOff + checksumSize, (numChunks - 1)
+            * checksumSize);
+        lastChunkStartsFromChunkStart = true;
+     }
     } else {
-      checksumOut.write(pktBuf, checksumOff, numChunks * checksumSize);
+      checksumOut.write(pktBuf, pktBufStartOff, numChunks * checksumSize);
+      lastChunkStartsFromChunkStart = true;
+    }
+    firstChunkOffset = (firstChunkOffset + len) % bytesPerChecksum;
+    if (firstChunkOffset > 0 && lastChunkStartsFromChunkStart) {
+      // The last chunk is partial and starts from the chunk boundary,
+      // need to remember its checksum for the next chunk.
+      partialCrcInt = DataChecksum.getIntFromBytes(pktBuf, pktBufStartOff
+          + (numChunks - 1) * checksumSize);
     }
   }
 
@@ -144,20 +182,29 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
    * data to.
    */
   public long getChannelPosition() throws IOException {
-    FileOutputStream file = (FileOutputStream) dataOut;
-    return file.getChannel().position();
+    return blockDataWriter.getChannelPosition();
+  }
+  
+  private long getChecksumOffset(long offsetInBlock) {
+    return BlockMetadataHeader.getHeaderSize() + offsetInBlock
+        / bytesPerChecksum * checksumSize;
   }
 
   @Override
   public void setPosAndRecomputeChecksumIfNeeded(long offsetInBlock, DataChecksum checksum) throws IOException {
+    firstChunkOffset = (int) (offsetInBlock % bytesPerChecksum);
+
     if (getChannelPosition() == offsetInBlock) {
+      if (firstChunkOffset > 0) {
+        // Partial block, need to seek checksum stream back.
+        setChecksumOffset(getChecksumOffset(offsetInBlock));
+      }
       return; // nothing to do
     }
-    long offsetInChecksum = BlockMetadataHeader.getHeaderSize() + offsetInBlock
-        / bytesPerChecksum * checksumSize;
+    long offsetInChecksum = getChecksumOffset(offsetInBlock);
 
-    if (dataOut != null) {
-      dataOut.flush();
+    if (blockDataWriter != null) {
+      blockDataWriter.flush();
     }
     if (checksumOut != null) {
       checksumOut.flush();
@@ -187,26 +234,36 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
    */
   public void setChannelPosition(long dataOffset, long ckOffset)
       throws IOException {
-    FileOutputStream file = (FileOutputStream) dataOut;
-    if (file.getChannel().size() < dataOffset) {
+    long channelSize = blockDataWriter.getChannelSize();
+    if (channelSize < dataOffset) {
       String fileName;
       if (datanode.data instanceof FSDataset) {
         FSDataset fsDataset = (FSDataset) datanode.data;
         fileName = fsDataset.getDatanodeBlockInfo(namespaceId, block)
-            .getTmpFile(namespaceId, block).toString();
+            .getBlockDataFile().getTmpFile(namespaceId, block).toString();
       } else {
         fileName = "unknown";
       }
       String msg = "Trying to change block file offset of block " + block
           + " file " + fileName + " to " + dataOffset
-          + " but actual size of file is " + file.getChannel().size();
+          + " but actual size of file is " + blockDataWriter.getChannelSize();
       throw new IOException(msg);
     }
-    if (dataOffset > file.getChannel().size()) {
+    if (dataOffset > channelSize) {
       throw new IOException("Set position over the end of the data file.");
     }
-    file.getChannel().position(dataOffset);
-    file = (FileOutputStream) cout;
+    if (dataOffset % bytesPerChecksum != 0 && channelSize != dataOffset) {
+      DFSClient.LOG.warn("Non-inline Checksum Block " + block
+          + " channel size " + channelSize + " but data starts from "
+          + dataOffset);
+    }
+    blockDataWriter.position(dataOffset);
+
+    setChecksumOffset(ckOffset);
+  }
+  
+  private void setChecksumOffset(long ckOffset) throws IOException {
+    FileOutputStream file = (FileOutputStream) cout;
     if (ckOffset > file.getChannel().size()) {
       throw new IOException("Set position over the end of the checksum file.");
     }
@@ -246,9 +303,10 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
       }
       File blockFile = info.getDataFileToRead();
       if (blockFile == null) {
-        blockFile = info.getTmpFile(namespaceId, block);
+        blockFile = info.getBlockDataFile().getTmpFile(namespaceId, block);
       }
       RandomAccessFile blockInFile = new RandomAccessFile(blockFile, "r");
+      
       if (blkoff > 0) {
         blockInFile.seek(blkoff);
       }
@@ -274,7 +332,7 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
     }
 
     // compute crc of partial chunk from data read in the block file.
-    partialCrc = new PureJavaCrc32();
+    Checksum partialCrc = new NativeCrc32();
     partialCrc.update(buf, 0, sizePartialChunk);
     LOG.info("Read in partial CRC chunk from disk for block " + block);
 
@@ -289,6 +347,8 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
     }
     // LOG.debug("Partial CRC matches 0x" +
     // Long.toHexString(partialCrc.getValue()));
+    
+    partialCrcInt = (int) partialCrc.getValue();
   }
 
   /**
@@ -306,18 +366,17 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
         ((FileOutputStream) cout).getChannel().force(true);
       }
     }
-    if (dataOut != null) {
-      dataOut.flush();
-      if (forceSync && (dataOut instanceof FileOutputStream)) {
-        ((FileOutputStream) dataOut).getChannel().force(true);
+    if (blockDataWriter != null) {
+      blockDataWriter.flush();
+      if (forceSync) {
+        blockDataWriter.force(true);
       }
     }
   }
 
   @Override
-  public void fileRangeSync(long lastBytesToSync) throws IOException {
+  public void fileRangeSync(long lastBytesToSync, int flags) throws IOException {
     if (cout instanceof FileOutputStream && lastBytesToSync > 0) {
-      FileDescriptor fd = ((FileOutputStream) cout).getFD();
       FileChannel fc = ((FileOutputStream) cout).getChannel();
       long pos = fc.position();
       long startOffset = pos - lastBytesToSync;
@@ -328,8 +387,8 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
         LOG.debug("file_range_sync " + block + " channel position " + pos
             + " offset " + startOffset);
       }
-      NativeIO.syncFileRangeIfPossible(fd, startOffset, pos - startOffset,
-          NativeIO.SYNC_FILE_RANGE_WRITE);
+      blockDataWriter.syncFileRangeIfPossible(startOffset, pos
+          - startOffset, flags);
     }
   }
   
@@ -338,12 +397,12 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
     if (newlen == 0) {
       // Special case for truncating to 0 length, since there's no previous
       // chunk.
-      RandomAccessFile blockRAF = new RandomAccessFile(blockFile, "rw");
+      RandomAccessor ra = blockDataFile.getRandomAccessor();
       try {
         // truncate blockFile
-        blockRAF.setLength(newlen);
+        ra.setLength(newlen);
       } finally {
-        blockRAF.close();
+        ra.close();
       }
       // update metaFile
       RandomAccessFile metaRAF = new RandomAccessFile(metafile, "rw");
@@ -364,16 +423,16 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
     int lastchunksize = (int) (newlen - lastchunkoffset);
     byte[] b = new byte[Math.max(lastchunksize, checksumsize)];
 
-    RandomAccessFile blockRAF = new RandomAccessFile(blockFile, "rw");
+    RandomAccessor ra = blockDataFile.getRandomAccessor();
     try {
       // truncate blockFile
-      blockRAF.setLength(newlen);
+      ra.setLength(newlen);
 
       // read last chunk
-      blockRAF.seek(lastchunkoffset);
-      blockRAF.readFully(b, 0, lastchunksize);
+      ra.seek(lastchunkoffset);
+      ra.readFully(b, 0, lastchunksize);
     } finally {
-      blockRAF.close();
+      ra.close();
     }
 
     // compute checksum
@@ -393,6 +452,10 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
 
   @Override
   public void close() throws IOException {
+    close(0);
+  }
+
+  public void close(int fadvise) throws IOException {
     IOException ioe = null;
 
     // close checksum file
@@ -413,15 +476,18 @@ public class BlockWithChecksumFileWriter extends DatanodeBlockWriter {
     }
     // close block file
     try {
-      if (dataOut != null) {
+      if (blockDataWriter != null) {
         try {
-          dataOut.flush();
-          if (datanode.syncOnClose && (dataOut instanceof FileOutputStream)) {
-            ((FileOutputStream) dataOut).getChannel().force(true);
+          blockDataWriter.flush();
+          if (datanode.syncOnClose) {
+            blockDataWriter.force(true);
+          }
+          if (fadvise != 0) {
+            fadviseStream(fadvise, 0, 0, true);
           }
         } finally {
-          dataOut.close();
-          dataOut = null;
+          blockDataWriter.close();
+          blockDataWriter = null;
         }
       }
     } catch (IOException e) {

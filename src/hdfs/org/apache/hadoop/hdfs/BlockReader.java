@@ -26,19 +26,20 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.ByteBuffer;
 
+import org.apache.hadoop.fs.FSClientReadProfilingData;
+import org.apache.hadoop.fs.FSDataNodeReadProfilingData;
 import org.apache.hadoop.fs.FSInputChecker;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSClient.DataNodeSlowException;
+import org.apache.hadoop.io.ReadOptions;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.ReadBlockHeader;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
-import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.DataChecksum;
-import org.apache.hadoop.util.InjectionHandler;
-import org.apache.hadoop.util.PureJavaCrc32;
-import org.apache.hadoop.hdfs.DFSClient.DataNodeSlowException;
+import org.apache.hadoop.util.NativeCrc32;
 
 /** This is a wrapper around connection to datadone
  * and understands checksum, offset etc.
@@ -71,6 +72,7 @@ public class BlockReader extends FSInputChecker {
   private long lastSeqNo = -1;
   private boolean transferBlockSize;
 
+  private boolean pktIncludeVersion = true;
   protected long startOffset;
   protected long firstChunkOffset;
   protected int bytesPerChecksum;
@@ -87,8 +89,10 @@ public class BlockReader extends FSInputChecker {
   int packetLen = 0;
   // Amount of unread data in the current received packet.
   int dataLeft = 0;
+  int currentPacketVersion;
   
   boolean isLastPacket = false;
+  protected long bytesToCheckReadSpeed;
   protected long minSpeedBps;
   protected long bytesRead;
   protected long timeRead;
@@ -101,13 +105,13 @@ public class BlockReader extends FSInputChecker {
   private long artificialSlowdown = 0;
   
   // It's a temporary flag used for tests
-  public boolean ENABLE_THROW_FOR_SLOW = false;
-
-
+  public boolean enableThrowForSlow = true;
+  
+  private long dataTransferVersion;
+  
   void setArtificialSlowdown(long period) {
     artificialSlowdown = period;
-  }
-
+  }  
 
   /* FSInputChecker interface */
 
@@ -256,16 +260,38 @@ public class BlockReader extends FSInputChecker {
     blkLenInfoUpdated = true;
     isBlockFinalized = in.readBoolean();
     updatedBlockLength = in.readLong();
+    if (dataTransferVersion >= DataTransferProtocol.READ_PROFILING_VERSION) {
+      readDataNodeProfilingData();
+    }
+    
     if (LOG.isDebugEnabled()) {
       LOG.debug("ifBlockComplete? " + isBlockFinalized + " block size: "
           + updatedBlockLength);
     }      
+  }
+  
+  private void readDataNodeProfilingData() throws IOException {
+    if (cliData != null) {
+      FSDataNodeReadProfilingData dnData = new FSDataNodeReadProfilingData();
+      dnData.readFields(in);
+      cliData.addDataNodeReadProfilingData(dnData);
+    }
   }
 
   @Override
   protected synchronized int readChunk(long pos, byte[] buf, int offset,
                                        int len, byte[] checksumBuf)
                                        throws IOException {
+    // This function actually return the next chunk.
+    // The input stream is organized in packets. Each of packets contain
+    // one or more chunks. This function needs to read packet header too
+    // when initializing or the previous packet has been finished.
+    // 
+    // The packet format is documented in DFSOuputStream.Packet.getBuffer().
+    // This is the packet format that datanode also follows when sending
+    // data.
+    //
+    
     // Read one chunk.
     if (eos) {
       if ( startOffset < 0 ) {
@@ -299,7 +325,7 @@ public class BlockReader extends FSInputChecker {
       //
       if (minSpeedBps > 0) {
         bytesRead += packetLen;
-        if (bytesRead > DFSClient.NUM_BYTES_CHECK_READ_SPEED) {
+        if (bytesRead > bytesToCheckReadSpeed) {
           if (timeRead > 0 && bytesRead * 1000 / timeRead < minSpeedBps) {
             if (!slownessLoged) {
               FileSystem.LogForCollect
@@ -318,7 +344,7 @@ public class BlockReader extends FSInputChecker {
                 slownessLoged = true;
               }
             } else {
-              if (!ENABLE_THROW_FOR_SLOW) {
+              if (!enableThrowForSlow) {
                 if (!slownessLoged) {
                   LOG.info("Won't swtich to another datanode for not disabled.");
                   slownessLoged = true;
@@ -336,6 +362,11 @@ public class BlockReader extends FSInputChecker {
       
       //Read packet headers.
       packetLen = in.readInt();
+      if (packetLen > 0 && pktIncludeVersion) {
+        currentPacketVersion = in.readInt();
+      } else {
+        currentPacketVersion = DataTransferProtocol.PACKET_VERSION_CHECKSUM_FIRST;
+      }
 
       if (packetLen == 0) {
         // the end of the stream
@@ -356,7 +387,7 @@ public class BlockReader extends FSInputChecker {
       }
 
       int dataLen = in.readInt();
-
+      
       // Sanity check the lengths
       if ( dataLen < 0 ||
            ( (dataLen % bytesPerChecksum) != 0 && !lastPacketInBlock ) ||
@@ -371,19 +402,28 @@ public class BlockReader extends FSInputChecker {
       lastSeqNo = seqno;
       isLastPacket = lastPacketInBlock;
       dataLeft = dataLen;
-      adjustChecksumBytes(dataLen);
-      if (dataLen > 0) {
-        IOUtils.readFully(in, checksumBytes.array(), 0,
-                          checksumBytes.limit());
+      if (currentPacketVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_FIRST) {
+        adjustChecksumBytes(dataLen);
+        if (dataLen > 0) {
+          IOUtils
+              .readFully(in, checksumBytes.array(), 0, checksumBytes.limit());
+        }
       }
     }
 
     int chunkLen = Math.min(dataLeft, bytesPerChecksum);
 
     if ( chunkLen > 0 ) {
-      // len should be >= chunkLen
-      IOUtils.readFully(in, buf, offset, chunkLen);
-      checksumBytes.get(checksumBuf, 0, checksumSize);
+      if (currentPacketVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_FIRST) {
+        // len should be >= chunkLen
+        IOUtils.readFully(in, buf, offset, chunkLen);
+        checksumBytes.get(checksumBuf, 0, checksumSize);
+      } else if (currentPacketVersion == DataTransferProtocol.PACKET_VERSION_CHECKSUM_INLINE) {
+        IOUtils.readFully(in, buf, offset, chunkLen);
+        IOUtils.readFully(in, checksumBuf, 0, checksumSize);        
+      } else {
+        throw new IOException("Unsupported packet version " + currentPacketVersion);
+      }
 
       // This is used by unit test to trigger race conditions.
       if (artificialSlowdown != 0) {
@@ -404,6 +444,10 @@ public class BlockReader extends FSInputChecker {
       int expectZero = in.readInt();
       assert expectZero == 0;
       readBlockSizeInfo();
+    }
+    
+    if (cliData != null) {
+      cliData.recordReadChunkTime();
     }
     if ( chunkLen == 0 ) {
       return -1;
@@ -427,8 +471,10 @@ public class BlockReader extends FSInputChecker {
   private BlockReader( String file, long blockId, DataInputStream in,
                        DataChecksum checksum, boolean verifyChecksum,
                        long startOffset, long firstChunkOffset,
-                       Socket dnSock, long minSpeedBps,
-                       long dataTransferVersion ) {
+                       Socket dnSock, long bytesToCheckReadSpeed,
+                       long minSpeedBps,
+                       long dataTransferVersion,
+                       FSClientReadProfilingData cliData) {
     super(new Path("/blk_" + blockId + ":of:" + file)/*too non path-like?*/,
           1, verifyChecksum,
           checksum.getChecksumSize() > 0? checksum : null,
@@ -439,19 +485,24 @@ public class BlockReader extends FSInputChecker {
     this.in = in;
     this.checksum = checksum;
     this.startOffset = Math.max( startOffset, 0 );
+    this.dataTransferVersion = dataTransferVersion;
     this.transferBlockSize =
         (dataTransferVersion >= DataTransferProtocol.SEND_DATA_LEN_VERSION);      
     this.firstChunkOffset = firstChunkOffset;
+    this.pktIncludeVersion =
+        (dataTransferVersion >= DataTransferProtocol.PACKET_INCLUDE_VERSION_VERSION);
     lastChunkOffset = firstChunkOffset;
     lastChunkLen = -1;
 
     bytesPerChecksum = this.checksum.getBytesPerChecksum();
     checksumSize = this.checksum.getChecksumSize();
-
+    
     this.bytesRead = 0;
     this.timeRead = 0;
     this.minSpeedBps = minSpeedBps;
+    this.bytesToCheckReadSpeed = bytesToCheckReadSpeed;
     this.slownessLoged = false;
+    this.cliData = cliData;
   }
 
   /**
@@ -492,7 +543,8 @@ public class BlockReader extends FSInputChecker {
                           sock, file, blockId, genStamp,
                           startOffset,
                           len, bufferSize, verifyChecksum, "",
-                          -1, false);
+                          Long.MAX_VALUE, -1, false, null,
+                          new ReadOptions());
   }
   
   public static BlockReader newBlockReader( int dataTransferVersion,
@@ -502,8 +554,10 @@ public class BlockReader extends FSInputChecker {
                                      long genStamp,
                                      long startOffset, long len,
                                      int bufferSize, boolean verifyChecksum,
-                                     String clientName, long minSpeedBps,
-                                     boolean reuseConnection)
+                                     String clientName, long bytesToCheckReadSpeed,
+                                     long minSpeedBps, boolean reuseConnection,
+                                     FSClientReadProfilingData cliData,
+                                     ReadOptions options)
                                      throws IOException {
     // in and out will be closed when sock is closed (by the caller)
     DataOutputStream out = new DataOutputStream(
@@ -512,7 +566,8 @@ public class BlockReader extends FSInputChecker {
     //write the header.
     ReadBlockHeader readBlockHeader = new ReadBlockHeader(
         dataTransferVersion, namespaceId, blockId, genStamp, startOffset, len,
-        clientName, reuseConnection);
+        clientName, reuseConnection, cliData != null);
+    readBlockHeader.setReadOptions(options);
     readBlockHeader.writeVersionAndOpCode(out);
     readBlockHeader.write(out);
     out.flush();
@@ -533,7 +588,7 @@ public class BlockReader extends FSInputChecker {
                             " for block " + blockId);
     }
 
-    DataChecksum checksum = DataChecksum.newDataChecksum( in , new PureJavaCrc32());
+    DataChecksum checksum = DataChecksum.newDataChecksum( in , new NativeCrc32());
     //Warning when we get CHECKSUM_NULL?
 
     // Read the first chunk offset.
@@ -547,7 +602,8 @@ public class BlockReader extends FSInputChecker {
     }
 
     return new BlockReader(file, blockId, in, checksum, verifyChecksum,
-        startOffset, firstChunkOffset, sock, minSpeedBps, dataTransferVersion);
+        startOffset, firstChunkOffset, sock, bytesToCheckReadSpeed,
+        minSpeedBps, dataTransferVersion, cliData);
   }
 
   @Override

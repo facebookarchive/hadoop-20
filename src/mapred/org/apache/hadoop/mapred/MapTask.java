@@ -58,6 +58,7 @@ import org.apache.hadoop.io.serializer.Serializer;
 import org.apache.hadoop.mapred.IFile.Writer;
 import org.apache.hadoop.mapred.Merger.Segment;
 import org.apache.hadoop.mapred.SortedRanges.SkipRangeIterator;
+import org.apache.hadoop.mapred.Task.Counter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.util.IndexedSortable;
 import org.apache.hadoop.util.IndexedSorter;
@@ -705,6 +706,10 @@ class MapTask extends Task {
     private long mapMemSortWallClockVal;
     private long mapMergeCPUVal;
     private long mapMergeWallClockVal;
+    
+    private long mapSpillJVMCPUVal;
+    private long mapMemSortJVMCPUVal;
+    private long mapMergeJVMCPUVal;
 
     private TaskReporter reporter;
 
@@ -718,6 +723,25 @@ class MapTask extends Task {
       mapMemSortWallClockVal = 0;
       mapMergeCPUVal = 0;
       mapMergeWallClockVal = 0;
+      
+      mapSpillJVMCPUVal = 0;
+      mapMemSortJVMCPUVal = 0;
+      mapMergeJVMCPUVal = 0;
+    }
+    
+    public void incJVMCPUPerSpill(long spillStart, long spillEnd) {
+      mapSpillJVMCPUVal = 
+          mapSpillJVMCPUVal + (spillEnd - spillStart);
+    }
+    
+    public void incJVMCPUPerSort(long sortStart, long sortEnd) {
+      mapMemSortJVMCPUVal =
+          mapMemSortJVMCPUVal + (sortEnd - sortStart);
+    }
+    
+    public void incJVMCPUMerge(long mergeStart, long mergeEnd) {
+      mapMergeJVMCPUVal =
+          mapMergeJVMCPUVal + (mergeEnd - mergeStart);
     }
     
     public void incCountersPerSpill(ProcResourceValues spillStartProcVals,
@@ -754,6 +778,10 @@ class MapTask extends Task {
       setCounterValue(Counter.MAP_MEM_SORT_WALLCLOCK, mapMemSortWallClockVal);
       setCounterValue(Counter.MAP_MERGE_CPU, mapMergeCPUVal);
       setCounterValue(Counter.MAP_MERGE_WALLCLOCK, mapMergeWallClockVal);
+      
+      setCounterValue(Counter.MAP_SPILL_CPU_JVM, mapSpillJVMCPUVal);
+      setCounterValue(Counter.MAP_MEM_SORT_CPU_JVM, mapMemSortJVMCPUVal);
+      setCounterValue(Counter.MAP_MERGE_CPU_JVM, mapMergeJVMCPUVal);
     }
     
     private void setCounterValue(Counter counter, long value) {
@@ -1255,11 +1283,14 @@ class MapTask extends Task {
       kvbuffer = null;
       long mergeStartMilli = System.currentTimeMillis();
       ProcResourceValues mergeStartProcVals = getCurrentProcResourceValues();
+      long mergeStart = jmxThreadInfoTracker.getCurrentThreadCPUTime();
       mergeParts();
       long mergeEndMilli = System.currentTimeMillis();
       ProcResourceValues mergeEndProcVals = getCurrentProcResourceValues();
+      long mergeEnd = jmxThreadInfoTracker.getCurrentThreadCPUTime();
       spillSortCounters.incMergeCounters(mergeStartProcVals, mergeEndProcVals,
           mergeEndMilli - mergeStartMilli);
+      spillSortCounters.incJVMCPUMerge(mergeStart, mergeEnd);
       
     }
 
@@ -1340,15 +1371,18 @@ class MapTask extends Task {
         //record the cumulative resources used before running sort
         long sortStartMilli = System.currentTimeMillis();
         ProcResourceValues sortStartProcVals = getCurrentProcResourceValues();
+        long sortStart = jmxThreadInfoTracker.getCurrentThreadCPUTime();
         //do the sort
         sorter.sort(MapOutputBuffer.this, kvstart, endPosition, reporter);
         // get the cumulative resources used after the sort, and use the diff as
         // resources/wallclock consumed by the sort.
         long sortEndMilli = System.currentTimeMillis();
         ProcResourceValues sortEndProcVals = getCurrentProcResourceValues();
+        long sortEnd = jmxThreadInfoTracker.getCurrentThreadCPUTime();
 
         spillSortCounters.incCountersPerSort(sortStartProcVals,
             sortEndProcVals, sortEndMilli - sortStartMilli);
+        spillSortCounters.incJVMCPUPerSort(sortStart, sortEnd);
 
         int spindex = kvstart;
         IndexRecord rec = new IndexRecord();
@@ -1421,8 +1455,10 @@ class MapTask extends Task {
         
         long spillEndMilli = System.currentTimeMillis();
         ProcResourceValues spillEndProcVals = getCurrentProcResourceValues();
+        long spillEnd = jmxThreadInfoTracker.getCurrentThreadCPUTime();
         spillSortCounters.incCountersPerSpill(sortEndProcVals,
             spillEndProcVals, spillEndMilli - sortEndMilli, spillBytes);
+        spillSortCounters.incJVMCPUPerSpill(sortEnd, spillEnd);
         
         LOG.info("Finished spill " + numSpills);
         ++numSpills;
@@ -1444,6 +1480,7 @@ class MapTask extends Task {
         
         long spillStartMilli = System.currentTimeMillis();
         ProcResourceValues spillStartProcVals = getCurrentProcResourceValues();
+        long spillStart = jmxThreadInfoTracker.getCurrentThreadCPUTime();
         long spillBytes = 0;
         
         // create spill file
@@ -1497,9 +1534,11 @@ class MapTask extends Task {
         }
         
         long spillEndMilli = System.currentTimeMillis();
-        ProcResourceValues spillEndProcVals = getCurrentProcResourceValues();        
+        ProcResourceValues spillEndProcVals = getCurrentProcResourceValues();
+        long spillEnd = jmxThreadInfoTracker.getCurrentThreadCPUTime();
         spillSortCounters.incCountersPerSpill(spillStartProcVals,
             spillEndProcVals, spillEndMilli - spillStartMilli, spillBytes);
+        spillSortCounters.incJVMCPUPerSpill(spillStart, spillEnd);
         ++numSpills;
       } finally {
         if (out != null) out.close();

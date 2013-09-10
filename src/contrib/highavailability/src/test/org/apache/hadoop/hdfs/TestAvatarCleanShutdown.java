@@ -41,6 +41,7 @@ import org.apache.hadoop.conf.Configuration;
 import java.util.Set;
 import java.util.HashSet;
 
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.MiniAvatarCluster;
@@ -76,18 +77,19 @@ public class TestAvatarCleanShutdown {
     File f = new File(hosts);
     f.delete();
     f.createNewFile();
-    conf.set("dfs.hosts", hosts);
+    conf.set(FSConstants.DFS_HOSTS, hosts);
     conf.setInt("dfs.datanode.failed.volumes.tolerated", 0);
     if (!federation) {
-      cluster = new MiniAvatarCluster(conf, 1, true, null, null);
+      cluster = new MiniAvatarCluster.Builder(conf).build();
     } else {
-      cluster = new MiniAvatarCluster(conf, 1, true, null, null, 2, true);
+      cluster = new MiniAvatarCluster.Builder(conf)
+      		.numNameNodes(2).federation(true).build();
     }
     federation = false;
   }
   
   private void writeWrongIncludeFile(Configuration conf) throws Exception {
-    String includeFN = conf.get("dfs.hosts", "");
+    String includeFN = conf.get(FSConstants.DFS_HOSTS, "");
     assertTrue(includeFN.equals(hosts));
     File f = new File(includeFN);
     if (f.exists()) {
@@ -168,19 +170,7 @@ public class TestAvatarCleanShutdown {
     federation = true;
     testNormalShutdown();
   }
-  
-  @Test
-  public void testRuntimeDisallowedDatanodeShutdownFederation() throws Exception {
-    federation = true;
-    testRuntimeDisallowedDatanodeShutdown();
-  }
 
-  @Test
-  public void testStartupDisallowedDatanodeShutdownFederation() throws Exception {
-    federation = true;
-    testStartupDisallowedDatanodeShutdown();
-  }
-  
   @Test
   public void testVolumeFailureShutdownFederation() throws Exception { 
     federation = true;

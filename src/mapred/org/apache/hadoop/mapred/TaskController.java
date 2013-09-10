@@ -40,7 +40,33 @@ import org.apache.hadoop.util.Shell.ShellCommandExecutor;
  * performing the actual actions. 
  */
 abstract class TaskController implements Configurable {
-  
+  /**
+   * Wait for the process to be killed for sure if true, otherwise return
+   * immediately after the kill is initiated (allows faster scheduling at the
+   * risk of overlapping JVMs).
+   */
+  public static final String WAIT_FOR_CONFIRMED_KILL_KEY =
+      "mapred.task.controller.waitForConfirmedKill";
+  /**
+   * Default is to not wait for a confirmed kill.
+   */
+  public static final boolean WAIT_FOR_CONFIRMED_DEFAULT = false;
+  /**
+   * Number of retries to kill.  This is only used if
+   * WAIT_FOR_CONFIRMED_KILL_KEY = true.
+   */
+  public static final String CONFIRMED_KILL_RETRIES_KEY =
+      "mapred.task.controller.confirmedKillRetries";
+  /**
+   * Default number of retries (3)
+   */
+  public static final int CONFIRMED_KILL_RETRIES_DEFAULT = 3;
+
+  /** Wait for a confirmed kill of the task? */
+  private boolean waitForConfirmedKill = false;
+  /** Number of retries when doing a confirmed kill */
+  private int confirmedKillRetries;
+
   private Configuration conf;
   
   public static final Log LOG = LogFactory.getLog(TaskController.class);
@@ -54,11 +80,19 @@ abstract class TaskController implements Configurable {
   }
   
   /**
-   * Setup task controller component.
-   * 
+   * Setup task controller component.  Will be called prior to use.
    */
-  abstract void setup();
-  
+  void setup() {
+    // Cannot set wait for confirmed kill mode if cannot check if task is alive
+    if (supportsIsTaskAlive()) {
+      waitForConfirmedKill = getConf().getBoolean(WAIT_FOR_CONFIRMED_KILL_KEY,
+          WAIT_FOR_CONFIRMED_DEFAULT);
+      confirmedKillRetries = getConf().getInt(CONFIRMED_KILL_RETRIES_KEY,
+          CONFIRMED_KILL_RETRIES_DEFAULT);
+    }
+    LOG.info("setup: waitForConfirmedKill=" + waitForConfirmedKill +
+        ", confirmedKillRetries=" + confirmedKillRetries);
+  }
   
   /**
    * Launch a task JVM
@@ -81,33 +115,62 @@ abstract class TaskController implements Configurable {
    * sub-process forcefully.</li>
    * </ol>
    **/
-  private class DestoryJVMTaskRunnable implements Runnable {
+  private class DestroyJVMTaskRunnable implements Runnable {
     TaskControllerContext context;
     /**
      * @param context the task for which kill signal has to be sent.
      */
-    public DestoryJVMTaskRunnable(TaskControllerContext context) {
+    public DestroyJVMTaskRunnable(TaskControllerContext context) {
       this.context = context;
     }
     @Override
     public void run() {
       terminateTask(context);
-      try {
-        Thread.sleep(context.sleeptimeBeforeSigkill);
-      } catch (InterruptedException e) {
-        LOG.warn("Sleep interrupted : " + 
-            StringUtils.stringifyException(e));
+      int attempts = 0;
+      boolean isTaskConfirmedAlive = false;
+      boolean forcefullKillUsed = false;
+      do {
+        try {
+          Thread.sleep(context.sleeptimeBeforeSigkill);
+        } catch (InterruptedException e) {
+          LOG.warn("Sleep interrupted : " +
+              StringUtils.stringifyException(e));
+        }
+        if (waitForConfirmedKill) {
+          isTaskConfirmedAlive = isTaskAlive(context);
+          if (!isTaskConfirmedAlive) {
+            break;
+          }
+        }
+        killTask(context);
+        forcefullKillUsed = true;
+        ++attempts;
+      } while (waitForConfirmedKill && (attempts < confirmedKillRetries));
+      if (waitForConfirmedKill) {
+        LOG.info("run: pid = " + context.pid + ", confirmedAlive = " +
+            isTaskConfirmedAlive + ", attempts = " + attempts +
+            ", forcefullKillUsed = " + forcefullKillUsed);
       }
-      killTask(context);
     }
   }
   
   /**
-   * Use DestoryJVMTaskRunnable to kill task JVM asynchronously.
+   * Use DestroyJVMTaskRunnable to kill task JVM asynchronously.  Wait for the
+   * confirmed kill if configured so.
+   *
+   * @param context Task context
    */
   final void destroyTaskJVM(TaskControllerContext context) {
-    Thread taskJVMDestoryer = new Thread(new DestoryJVMTaskRunnable(context));
-    taskJVMDestoryer.start();
+    Thread taskJVMDestroyer = new Thread(new DestroyJVMTaskRunnable(context));
+    taskJVMDestroyer.start();
+    if (waitForConfirmedKill) {
+      try {
+        taskJVMDestroyer.join();
+      } catch (InterruptedException e) {
+        throw new IllegalStateException("destroyTaskJVM: Failed to join " +
+            taskJVMDestroyer.getName());
+      }
+    }
   }
   
   /**
@@ -127,7 +190,7 @@ abstract class TaskController implements Configurable {
   
   
   /**
-   * Contains task information required for the task controller.  
+   * Contains task information required for the task controller.
    */
   static class TaskControllerContext {
     // task being executed
@@ -140,6 +203,13 @@ abstract class TaskController implements Configurable {
     String pid;
     // waiting time before sending SIGKILL to task JVM after sending SIGTERM
     long sleeptimeBeforeSigkill;
+
+    @Override
+    public String toString() {
+      return "task=" + task + ",env=" + env + ",shExec=" + shExec +
+          ",pid=" + pid + ",sleeptimeBeforeSigkill=" +
+          sleeptimeBeforeSigkill;
+    }
   }
 
   /**
@@ -224,6 +294,33 @@ abstract class TaskController implements Configurable {
    */
   
   abstract void killTask(TaskControllerContext context);
+
+  /**
+   * Only some TaskController implementations may support checking if the
+   * task is alive.  If we cannot check if the task is alive, then the
+   * confirmed kill mode cannot be enabled.
+   *
+   * @return True if this implementation supports checking if
+   *         the task is alive, false otherwise
+   */
+  abstract boolean supportsIsTaskAlive();
+
+  /**
+   * Checks if the task JVM is alive.  May not be supported by all
+   * implementations (see supportsIsTaskAlive).
+   *
+   * @param context Task context
+   * @return True if the task is alive, false otherwise
+   */
+  abstract boolean isTaskAlive(TaskControllerContext context);
+
+  /**
+   * Get the current stack trace of this task.
+   * 
+   * 
+   * @param context Task context
+   */
+  abstract void doStackTrace(TaskControllerContext context);
   
   /**
    * Enable the task for cleanup by changing permissions of the path

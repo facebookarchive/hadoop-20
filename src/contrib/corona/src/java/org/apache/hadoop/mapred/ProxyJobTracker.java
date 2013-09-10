@@ -28,8 +28,10 @@ import java.net.SocketException;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URLEncoder;
+import java.net.UnknownHostException;
 import java.util.Enumeration;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -45,11 +47,15 @@ import org.apache.commons.httpclient.methods.PostMethod;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.corona.ClusterManagerService;
 import org.apache.hadoop.corona.CoronaConf;
+import org.apache.hadoop.corona.InetAddress;
 import org.apache.hadoop.corona.SessionHistoryManager;
+import org.apache.hadoop.corona.SessionInfo;
 import org.apache.hadoop.corona.TFactoryBasedThreadPoolServer;
 import org.apache.hadoop.corona.Utilities;
 import org.apache.hadoop.corona.CoronaProxyJobTrackerService;
+import org.apache.hadoop.corona.RunningSession;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.http.HttpServer;
@@ -63,7 +69,13 @@ import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.StringUtils;
+import org.apache.thrift.protocol.TBinaryProtocol;
+import org.apache.thrift.protocol.TProtocol;
+import org.apache.thrift.TException;
 import org.apache.thrift.server.TServer;
+import org.apache.thrift.transport.TFramedTransport;
+import org.apache.thrift.transport.TSocket;
+import org.apache.thrift.transport.TTransport;
 
 /**
  * This is used to proxy HTTP requests to individual Corona Job Tracker web
@@ -330,6 +342,38 @@ public class ProxyJobTracker implements
       return methodString;
     }
 
+    private String getRunningJobUrl(HttpServletRequest request) {
+      String jobIDParam = request.getParameter("jobid");
+      if (jobIDParam == null) {
+        return null;
+      }
+      SessionInfo sessionInfo;
+      try {
+        String sessionHandle = JobID.forName(jobIDParam).getJtIdentifier();
+        sessionInfo = getRunningSessionInfo(sessionHandle);
+      } catch (Exception e) {
+        LOG.info("Failed to get running session info for jobid: " + jobIDParam 
+                  + ", exception: " + e.getMessage());
+        return null;
+      }
+      return sessionInfo.getUrl();
+    }
+    
+    private boolean isJobTrackerAlive(String host, String port) {
+      if (host == null || port == null) {
+        return false;
+      }
+      
+      try {
+        Socket s = new Socket(host, Integer.parseInt(port));
+        s.close();
+        return true;
+      } catch (Exception e) {
+        LOG.info("The job tracker " + host + ":" + port + " is not alive", e);
+        return false;
+      } 
+    }
+
     private boolean getHistory(HttpServletRequest request,
       HttpServletResponse response, boolean isRetry)
       throws ServletException, IOException {
@@ -337,16 +381,23 @@ public class ProxyJobTracker implements
       String host = request.getParameter("host");
       String port = request.getParameter("port");
       String path = request.getParameter("path");
+      HttpMethod method = null;
       try {
-
-        methodString = getMethodString(request, isRetry); 
+        if (!isJobTrackerAlive(host, port)) {
+          methodString = getMethodString(request, isRetry);
+        }
         //it's not in the job history
         //directly go to the job tracker to retrieve the job information
         //otherwise, directly load the jobhistory page
         if (methodString == null && !isRetry) {
-          if (host == null || port == null || path == null) {
-            response.sendError(HttpServletResponse.SC_BAD_REQUEST,
-              "Missing mandatory host and/or port parameters");
+          if (host == null || port == null) {
+            String runningJobUrl = getRunningJobUrl(request);
+            if (runningJobUrl != null) {
+              response.sendRedirect(runningJobUrl);
+            } else {
+              response.sendError(HttpServletResponse.SC_BAD_REQUEST,
+                "Missing mandatory host and/or port parameters");
+            }
             return false;
           }
           methodString = getRunningMethodString(request);
@@ -358,7 +409,7 @@ public class ProxyJobTracker implements
           return false;
         }
         HttpClient httpclient = new HttpClient();
-        HttpMethod method = new GetMethod(methodString);
+        method = new GetMethod(methodString);
 
         int sc = httpclient.executeMethod(method);
         response.setStatus(sc);
@@ -390,6 +441,11 @@ public class ProxyJobTracker implements
           throw e;
         }
         return false;
+      } finally {
+        // release the HTTP connection
+        if (method != null) {
+          method.releaseConnection();
+        }
       }
       return true;
     }
@@ -397,6 +453,7 @@ public class ProxyJobTracker implements
     @Override
     public void doGet(HttpServletRequest request, HttpServletResponse response)
       throws ServletException, IOException {
+      LOG.info(request.getRemoteHost() + " is reading the job history.");
       if (!getHistory(request, response, false)) {
         getHistory(request, response, true);
       }
@@ -665,6 +722,23 @@ public class ProxyJobTracker implements
     return clusterManagerSafeMode;
   }
 
+  private static SessionInfo getRunningSessionInfo(String sessionHandle)
+    throws Exception {
+    // Connect to cluster manager thrift service
+    String target = CoronaConf.getClusterManagerAddress(conf);
+    LOG.info("Connecting to Cluster Manager at " + target);
+    InetSocketAddress address = NetUtils.createSocketAddr(target);
+    TTransport transport = new TFramedTransport(
+      new TSocket(address.getHostName(), address.getPort()));
+    TProtocol protocol = new TBinaryProtocol(transport);
+    ClusterManagerService.Client client = new ClusterManagerService.Client(protocol);
+    transport.open();
+    LOG.info("Requesting running session info for handle: " + sessionHandle);
+    SessionInfo info = client.getSessionInfo(sessionHandle);
+    transport.close();
+    return info;
+  }
+
   public void shutdown() throws Exception {
     infoServer.stop();
     rpcServer.stop();
@@ -715,7 +789,8 @@ public class ProxyJobTracker implements
       "/coronajobdetailshistory.jsp?jobid=" + jobId +
       "&logFile=" + URLEncoder.encode(jobHistoryFileLocation.toString());
   }
-
+  
+  @Override
   public String getSystemDir() {
     return CoronaJobTracker.getSystemDir(fs, conf);
   }
@@ -734,5 +809,10 @@ public class ProxyJobTracker implements
         LOG.warn("Ignoring InterruptedException");
       }
     }
+  }
+
+  @Override
+  public void cleanJobHistoryCache(String jobId) throws TException {
+    JSPUtil.cleanJobInfo(jobId);
   }
 }

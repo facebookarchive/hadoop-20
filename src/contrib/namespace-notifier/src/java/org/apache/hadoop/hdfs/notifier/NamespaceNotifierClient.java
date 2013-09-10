@@ -622,7 +622,7 @@ class ConnectionManager implements Runnable {
   private long connectionToken;
   
   // The id of the server we are currently connected to
-  volatile long serverId;
+  volatile String serverId;
   
   // The id currently assigned to us by the server we are connected to.
   volatile long id;
@@ -638,7 +638,7 @@ class ConnectionManager implements Runnable {
   
   public ConnectionManager(List<String> hosts, List<Integer> ports,
       NamespaceNotifierClient notifierClient) {
-    serverId = -1;
+    serverId = null;
     id = -1;
     tracker = new ServerTracker();
     this.notifierClient = notifierClient;
@@ -706,7 +706,7 @@ class ConnectionManager implements Runnable {
   }
   
   
-  long getServerId() {
+  String getServerId() {
     return serverId;
   }
   
@@ -843,7 +843,7 @@ class ConnectionManager implements Runnable {
           continue;
         }
         
-        if (serverId == -1) {
+        if (serverId == null || serverId.isEmpty()) {
           LOG.info(listeningPort + ": The server answered with a bad token." +
               " trying next server ...");
           continue;
@@ -874,7 +874,7 @@ class ConnectionManager implements Runnable {
   void failConnection(boolean hiddenToClient) {
     LOG.info(listeningPort + ": Failing connection. Hidden to client=" +
         hiddenToClient);
-    serverId = -1;
+    serverId = null;
     id = -1;
     server = null;
     if (hiddenToClient) {

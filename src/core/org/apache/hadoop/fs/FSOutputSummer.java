@@ -22,6 +22,8 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.util.zip.Checksum;
 
+import org.apache.hadoop.util.DataChecksum;
+
 /**
  * This is a generic output stream for generating checksums for
  * data before it is written to the underlying stream
@@ -36,12 +38,20 @@ abstract public class FSOutputSummer extends OutputStream {
   private byte checksum[];
   // The number of valid bytes in the buffer.
   private int count;
+  // bytes already sent in current chunk.
+  protected int bytesSentInChunk;
   
-  protected FSOutputSummer(Checksum sum, int maxChunkSize, int checksumSize) {
+  protected final FsWriteProfile profileData;
+
+  
+  protected FSOutputSummer(Checksum sum, int maxChunkSize, int checksumSize,
+      FsWriteProfile profileData) {
     this.sum = sum;
     this.buf = new byte[maxChunkSize];
     this.checksum = new byte[checksumSize];
     this.count = 0;
+    this.profileData = profileData;
+    this.bytesSentInChunk = 0;
   }
   
   /* write the data chunk in <code>b</code> staring at <code>offset</code> with
@@ -49,13 +59,21 @@ abstract public class FSOutputSummer extends OutputStream {
    */
   protected abstract void writeChunk(byte[] b, int offset, int len, byte[] checksum)
   throws IOException;
+  
+  protected abstract boolean shouldKeepPartialChunkData() throws IOException;
 
   /** Write one byte */
   public synchronized void write(int b) throws IOException {
-    sum.update(b);
-    buf[count++] = (byte)b;
-    if(count == buf.length) {
-      flushBuffer();
+    eventStartWrite();
+
+    try {
+      sum.update(b);
+      buf[count++] = (byte) b;
+      if (bytesSentInChunk + count == buf.length) {
+        flushBuffer(true, shouldKeepPartialChunkData());
+      }
+    } finally {
+      eventEndWrite();
     }
   }
 
@@ -98,46 +116,54 @@ abstract public class FSOutputSummer extends OutputStream {
    * stream at most once if necessary.
    */
   private int write1(byte b[], int off, int len) throws IOException {
-    if(count==0 && len>=buf.length) {
-      // local buffer is empty and user data has one chunk
-      // checksum and output data
-      final int length = buf.length;
-      sum.update(b, off, length);
-      writeChecksumChunk(b, off, length, false);
-      return length;
-    }
-    
-    // copy user data to local buffer
-    int bytesToCopy = buf.length-count;
-    bytesToCopy = (len<bytesToCopy) ? len : bytesToCopy;
-    sum.update(b, off, bytesToCopy);
-    System.arraycopy(b, off, buf, count, bytesToCopy);
-    count += bytesToCopy;
-    if (count == buf.length) {
-      // local buffer is full
-      flushBuffer();
-    } 
-    return bytesToCopy;
-  }
+    eventStartWrite();
 
-  /* Forces any buffered output bytes to be checksumed and written out to
-   * the underlying output stream. 
-   */
-  protected synchronized void flushBuffer() throws IOException {
-    flushBuffer(false);
+    try {
+      if(count==0 && bytesSentInChunk + len>=buf.length) {
+        // local buffer is empty and user data can fill the current chunk
+        // checksum and output data
+        final int length = buf.length - bytesSentInChunk;
+        sum.update(b, off, length);
+        writeChecksumChunk(b, off, length, false);
+        // start a new chunk
+        bytesSentInChunk = 0;
+        return length;
+      }
+    
+      // copy user data to local buffer
+      int bytesToCopy = buf.length - bytesSentInChunk - count;
+      bytesToCopy = (len<bytesToCopy) ? len : bytesToCopy;
+      sum.update(b, off, bytesToCopy);
+      System.arraycopy(b, off, buf, count, bytesToCopy);
+      count += bytesToCopy;
+      if (count + bytesSentInChunk == buf.length) {
+        // local buffer is full
+        flushBuffer(true, shouldKeepPartialChunkData());
+      } 
+      return bytesToCopy;
+    } finally {
+      eventEndWrite();
+    }
   }
 
   /* Forces any buffered output bytes to be checksumed and written out to
    * the underlying output stream.  If keep is true, then the state of 
    * this object remains intact.
    */
-  protected synchronized void flushBuffer(boolean keep) throws IOException {
+  protected synchronized void flushBuffer(boolean chunkComplete,
+      boolean keepPartialData) throws IOException {
     if (count != 0) {
       int chunkLen = count;
       count = 0;
-      writeChecksumChunk(buf, 0, chunkLen, keep);
-      if (keep) {
-        count = chunkLen;
+      writeChecksumChunk(buf, 0, chunkLen, keepPartialData && !chunkComplete);
+      if (!chunkComplete) {
+        if (!keepPartialData) {
+          bytesSentInChunk += chunkLen;
+        } else {
+          count = chunkLen;
+        }
+      } else {
+        bytesSentInChunk = 0;
       }
     }
   }
@@ -164,19 +190,27 @@ abstract public class FSOutputSummer extends OutputStream {
   }
 
   static byte[] int2byte(int integer, byte[] bytes) {
-    bytes[0] = (byte)((integer >>> 24) & 0xFF);
-    bytes[1] = (byte)((integer >>> 16) & 0xFF);
-    bytes[2] = (byte)((integer >>>  8) & 0xFF);
-    bytes[3] = (byte)((integer >>>  0) & 0xFF);
+    DataChecksum.writeIntToBuf(integer, bytes, 0);
     return bytes;
   }
 
   /**
    * Resets existing buffer with a new one of the specified size.
    */
-  protected synchronized void resetChecksumChunk(int size) {
+  protected synchronized void resetChecksumChunk() {
     sum.reset();
-    this.buf = new byte[size];
     this.count = 0;
+  }
+  
+  protected void eventStartWrite() {
+    if (profileData != null) {
+      profileData.startWrite();
+    }
+  }
+  
+  protected void eventEndWrite() {
+    if (profileData != null) {
+      profileData.endWrite();
+    }
   }
 }

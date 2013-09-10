@@ -29,6 +29,7 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
 /**
  * Directory INode class.
@@ -40,19 +41,19 @@ class INodeDirectory extends INode {
 
   private List<INode> children;
 
-  INodeDirectory(String name, PermissionStatus permissions) {
-    super(name, permissions);
+  INodeDirectory(long id, String name, PermissionStatus permissions) {
+    super(id, name, permissions);
     this.children = null;
   }
 
-  public INodeDirectory(PermissionStatus permissions, long mTime) {
-    super(permissions, mTime, 0);
+  public INodeDirectory(long id, PermissionStatus permissions, long mTime) {
+    super(id, permissions, mTime, 0);
     this.children = null;
   }
 
   /** constructor */
-  INodeDirectory(byte[] localName, PermissionStatus permissions, long mTime) {
-    this(permissions, mTime);
+  INodeDirectory(long id, byte[] localName, PermissionStatus permissions, long mTime) {
+    this(id, permissions, mTime);
     this.name = localName;
   }
   
@@ -68,6 +69,7 @@ class INodeDirectory extends INode {
   /**
    * Check whether it's a directory
    */
+  @Override
   public boolean isDirectory() {
     return true;
   }
@@ -85,8 +87,10 @@ class INodeDirectory extends INode {
       return null;
     }
   }
-
-  /** Replace a child that has the same name as newChild by newChild.
+  
+  /** 
+   * Replace a child that has the same name as newChild by newChild. This is only working on one
+   * child case
    * 
    * @param newChild Child node to be added
    */
@@ -94,14 +98,32 @@ class INodeDirectory extends INode {
     if ( children == null ) {
       throw new IllegalArgumentException("The directory is empty");
     }
+    
     int low = Collections.binarySearch(children, newChild.name);
     if (low>=0) { // an old child exists so replace by the newChild
+      INode oldChild = children.get(low);
+      
+      // Need to make sure we are replacing the oldChild with newChild that is the same as oldChild
+      // which means they reference to the same children or they are null or empty array
       children.set(low, newChild);
+      
+      // newChild should point to current instance (parent of oldChild)
+      newChild.parent = this;
+      
+      // if both are directory, all the children from oldChild should point to newChild
+      if (newChild.isDirectory() && oldChild.isDirectory()) {
+        if (((INodeDirectory)oldChild).getChildren() != null) {
+          for (INode oldGrandChild : ((INodeDirectory)oldChild).getChildren()) {
+            oldGrandChild.parent = (INodeDirectory)newChild;
+          }
+        }
+      }
+      
     } else {
       throw new IllegalArgumentException("No child exists to be replaced");
     }
   }
-  
+
   INode getChild(String name) {
     return getChildINode(DFSUtil.string2Bytes(name));
   }
@@ -387,6 +409,7 @@ class INodeDirectory extends INode {
   }
 
   /** {@inheritDoc} */
+  @Override
   DirCounts spaceConsumedInTree(DirCounts counts) {
     Set<Long> visitedCtx = new HashSet<Long>(); 
     return spaceConsumedInTree(counts, visitedCtx);
@@ -424,6 +447,7 @@ class INodeDirectory extends INode {
   }
 
   /** {@inheritDoc} */  
+  @Override
   long[] computeContentSummary(long[] summary) {  
     Set<Long> visitedCtx = new HashSet<Long>(); 
     return this.computeContentSummary(summary, visitedCtx); 
@@ -470,16 +494,20 @@ class INodeDirectory extends INode {
   List<INode> getChildren() {
     return children==null ? new ArrayList<INode>() : children;
   }
+  
   List<INode> getChildrenRaw() {
     return children;
   }
 
-  private static boolean isBlocksLimitReached(List<Block> v, int blocksLimit) {
+  private static boolean isBlocksLimitReached(List<BlockInfo> v, int blocksLimit) {
     return blocksLimit != FSDirectory.BLOCK_DELETION_NO_LIMIT
         && blocksLimit <= v.size();
   }
   
-  int collectSubtreeBlocksAndClear(List<Block> v, int blocksLimit) {
+  @Override
+  int collectSubtreeBlocksAndClear(List<BlockInfo> v, 
+                                   int blocksLimit, 
+                                   List<INode> removedINodes) {
     if (isBlocksLimitReached(v, blocksLimit)) {
       return 0;
     }
@@ -487,12 +515,13 @@ class INodeDirectory extends INode {
     if (children == null) {
       parent = null;
       name = null;
+      removedINodes.add(this);
       return ++total;
     }
     int i;
     for (i=0; i<children.size(); i++) {
       INode child = children.get(i);
-      total += child.collectSubtreeBlocksAndClear(v, blocksLimit);
+      total += child.collectSubtreeBlocksAndClear(v, blocksLimit, removedINodes);
       if (isBlocksLimitReached(v, blocksLimit)) {
         // reached blocks limit
         if (child.parent != null) {
@@ -510,6 +539,7 @@ class INodeDirectory extends INode {
     parent = null;
     name = null;
     children = null;
+    removedINodes.add(this);
     return ++total;
   }
   

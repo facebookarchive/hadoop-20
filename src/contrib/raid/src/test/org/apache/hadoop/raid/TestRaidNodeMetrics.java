@@ -110,7 +110,7 @@ public class TestRaidNodeMetrics extends TestCase {
     conf.set("raid.blockfix.classname", 
         "org.apache.hadoop.raid.DistBlockIntegrityMonitor");
 
-    conf.set("raid.server.address", "localhost:0");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
     conf.set("mapred.raid.http.address", "localhost:0");
 
     conf.setInt("dfs.corruptfilesreturned.max", 500);
@@ -307,7 +307,7 @@ public class TestRaidNodeMetrics extends TestCase {
         LOG.info("Test testBlockFix waiting for files to be fixed.");
         Thread.sleep(1000);
       }
-      assertEquals("file not fixed", 1, rnode.blockIntegrityMonitor.getNumFilesFixed());
+      assertTrue("file not fixed", 1 <= rnode.blockIntegrityMonitor.getNumFilesFixed());
       LOG.info("Checking Raid Node Metrics") ;
       RaidNodeMetrics inst = RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
       LOG.info("Number of bytes transferred across rack for repair in the current interval is : "+inst.numFileFixReadBytesRemoteRack.getCurrentIntervalValue());

@@ -91,7 +91,8 @@ am__DEPENDENCIES_1 = $(foreach path,$(NEWSUBDIRS),$(wildcard \
 	$(path)/*.lo))
 libhadoop_la_DEPENDENCIES = $(am__DEPENDENCIES_1)
 am_libhadoop_la_OBJECTS = file_descriptor.lo errno_enum.lo NativeIO.lo \
-	NativeCrc32.lo bulk_crc32.lo
+	NativeCrc32.lo bulk_crc32.lo galois.lo jerasure.lo reed_sol.lo \
+	NativeJerasure.lo
 libhadoop_la_OBJECTS = $(am_libhadoop_la_OBJECTS)
 DEFAULT_INCLUDES = -I. -I$(srcdir) -I$(top_builddir)
 depcomp = $(SHELL) $(top_srcdir)/config/depcomp
@@ -227,10 +228,14 @@ libhadoop_la_SOURCES = $(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descr
                        $(srcdir)/../src/org/apache/hadoop/io/nativeio/errno_enum.c \
                        $(srcdir)/../src/org/apache/hadoop/io/nativeio/NativeIO.c \
                        $(srcdir)/../src/org/apache/hadoop/util/NativeCrc32.c \
-                       $(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c
+                       $(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c \
+                       $(srcdir)/../src/org/apache/hadoop/util/galois.c \
+                       $(srcdir)/../src/org/apache/hadoop/util/jerasure.c \
+                       $(srcdir)/../src/org/apache/hadoop/util/reed_sol.c \
+                       $(srcdir)/../src/org/apache/hadoop/util/NativeJerasure.c
 
 libhadoop_la_LDFLAGS = -version-info 1:0:0
-libhadoop_la_LIBADD = $(HADOOP_OBJS) -ldl -ljvm
+libhadoop_la_LIBADD = $(HADOOP_OBJS) -ldl -ljvm -lrt
 all: all-am
 
 .SUFFIXES:
@@ -302,9 +307,13 @@ distclean-compile:
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/NativeCrc32.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/NativeIO.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/NativeJerasure.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/bulk_crc32.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/errno_enum.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/file_descriptor.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/galois.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/jerasure.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/reed_sol.Plo@am__quote@
 
 .c.o:
 @am__fastdepCC_TRUE@	if $(COMPILE) -MT $@ -MD -MP -MF "$(DEPDIR)/$*.Tpo" -c -o $@ $<; \
@@ -361,6 +370,34 @@ bulk_crc32.lo: $(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c' object='bulk_crc32.lo' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o bulk_crc32.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c
+
+galois.lo: $(srcdir)/../src/org/apache/hadoop/util/galois.c
+@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT galois.lo -MD -MP -MF "$(DEPDIR)/galois.Tpo" -c -o galois.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/galois.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/galois.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/galois.Tpo" "$(DEPDIR)/galois.Plo"; else rm -f "$(DEPDIR)/galois.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/../src/org/apache/hadoop/util/galois.c' object='galois.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o galois.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/galois.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/galois.c
+
+jerasure.lo: $(srcdir)/../src/org/apache/hadoop/util/jerasure.c
+@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT jerasure.lo -MD -MP -MF "$(DEPDIR)/jerasure.Tpo" -c -o jerasure.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/jerasure.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/jerasure.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/jerasure.Tpo" "$(DEPDIR)/jerasure.Plo"; else rm -f "$(DEPDIR)/jerasure.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/../src/org/apache/hadoop/util/jerasure.c' object='jerasure.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o jerasure.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/jerasure.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/jerasure.c
+
+reed_sol.lo: $(srcdir)/../src/org/apache/hadoop/util/reed_sol.c
+@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT reed_sol.lo -MD -MP -MF "$(DEPDIR)/reed_sol.Tpo" -c -o reed_sol.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/reed_sol.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/reed_sol.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/reed_sol.Tpo" "$(DEPDIR)/reed_sol.Plo"; else rm -f "$(DEPDIR)/reed_sol.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/../src/org/apache/hadoop/util/reed_sol.c' object='reed_sol.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o reed_sol.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/reed_sol.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/reed_sol.c
+
+NativeJerasure.lo: $(srcdir)/../src/org/apache/hadoop/util/NativeJerasure.c
+@am__fastdepCC_TRUE@	if $(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT NativeJerasure.lo -MD -MP -MF "$(DEPDIR)/NativeJerasure.Tpo" -c -o NativeJerasure.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/NativeJerasure.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/NativeJerasure.c; \
+@am__fastdepCC_TRUE@	then mv -f "$(DEPDIR)/NativeJerasure.Tpo" "$(DEPDIR)/NativeJerasure.Plo"; else rm -f "$(DEPDIR)/NativeJerasure.Tpo"; exit 1; fi
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	source='$(srcdir)/../src/org/apache/hadoop/util/NativeJerasure.c' object='NativeJerasure.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(LIBTOOL) --tag=CC --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o NativeJerasure.lo `test -f '$(srcdir)/../src/org/apache/hadoop/util/NativeJerasure.c' || echo '$(srcdir)/'`$(srcdir)/../src/org/apache/hadoop/util/NativeJerasure.c
 
 mostlyclean-libtool:
 	-rm -f *.lo

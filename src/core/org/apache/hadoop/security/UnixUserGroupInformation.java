@@ -22,6 +22,7 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.StringTokenizer;
 import java.util.TreeSet;
@@ -29,12 +30,16 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import javax.security.auth.login.LoginException;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.WritableUtils;
 
 /** An implementation of UserGroupInformation in the Unix system */
+@ThriftStruct
 public class UnixUserGroupInformation extends UserGroupInformation {
   public static final String DEFAULT_USERNAME = "DrWho";
   public static final String DEFAULT_GROUP = "Tardis";
@@ -88,7 +93,13 @@ public class UnixUserGroupInformation extends UserGroupInformation {
     System.arraycopy(ugi, 1, groupNames, 0, groupNames.length);
     setUserGroupNames(ugi[0], groupNames);
   }
-  
+
+  @ThriftConstructor
+  public UnixUserGroupInformation(@ThriftField(1) String userName,
+                                  @ThriftField(2) List<String> groups) {
+    this(userName, groups.toArray(new String[groups.size()]));
+  }
+
   /* Set this object's user name and group names
    * 
    * @param userName a user's name
@@ -118,8 +129,14 @@ public class UnixUserGroupInformation extends UserGroupInformation {
 
   /** Return the user's name
    */
+  @ThriftField(1)
   public String getUserName() {
     return userName;
+  }
+
+  @ThriftField(2)
+  public List<String> getGroups() {
+    return Arrays.asList(groupNames);
   }
 
   /* The following two methods implements Writable interface */

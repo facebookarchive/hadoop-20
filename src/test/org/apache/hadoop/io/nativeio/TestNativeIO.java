@@ -214,6 +214,32 @@ public class TestNativeIO {
     assertPermissions(toChmod, 0644);
   }
 
+  /**
+   * Test basic fsync operations.
+   */
+  @Test
+  public void testFsync() throws Exception {
+    // Test fsync on invalid dir.
+    File testDir = new File(TEST_DIR, "testfsyncdir");
+    testDir.deleteOnExit();
+    try {
+      NativeIO.fsync(testDir.getAbsolutePath());
+      fail("Did not throw exception");
+    } catch (IOException ie) {
+      LOG.info("Got expected exception", ie);
+    }
+
+    // Test fsync on valid dir.
+    assertTrue(testDir.mkdirs());
+    NativeIO.fsync(testDir.getAbsolutePath());
+
+    // Test fsync on file.
+    File testF = new File(TEST_DIR, "testfsyncfile");
+    testF.deleteOnExit();
+    testF.createNewFile();
+    NativeIO.fsync(testF.getAbsolutePath());
+  }
+
   @Test
   public void testPosixFadvise() throws Exception {
     FileInputStream fis = new FileInputStream("/dev/zero");
@@ -484,6 +510,72 @@ public class TestNativeIO {
        (t2.tv_sec == t1.tv_sec && t2.tv_nsec < t1.tv_nsec))
       fail("2nd call to clockGetTimeIfPossible returned "+
            "smaller value than 1s call");
+  }
+
+  @Test
+  public void testFileRangeSync() throws IOException {
+    File testFile = new File(TEST_DIR, "fileRangeSync");
+    testFile.deleteOnExit();
+    FileOutputStream out = new FileOutputStream(testFile);
+    try {
+      byte[] buffer = new byte[8096];
+      random.nextBytes(buffer);
+      out.write(buffer);
+      NativeIO.syncFileRangeIfPossible(out.getFD(), 0, 8096,
+          NativeIO.SYNC_FILE_RANGE_WRITE);
+    } finally {
+      out.close();
+    }
+  }
+
+  @Test
+  public void testIoprioSet() throws IOException {
+    // TODO : figure out how to test IOPRIO_CLASS_RT and IOPRIO_CLASS_IDLE,
+    // currently they need CAP_SYS_ADMIN capablilities for the current process.
+    for (int i = 0; i < 8; i++) {
+      NativeIO.ioprio_set(NativeIO.IOPRIO_CLASS_BE, i);
+    }
+  }
+
+  @Test
+  public void testIoprioSet1() throws IOException {
+    for (int i = 0; i < 8; i++) {
+      NativeIO.ioprio_set((NativeIO.IOPRIO_CLASS_BE << 13) | i);
+    }
+  }
+
+  @Test
+  public void testIoprioSetGet() throws IOException {
+    NativeIO.ioprio_set(NativeIO.IOPRIO_CLASS_BE, 5);
+    assertEquals((NativeIO.IOPRIO_CLASS_BE << 13) | 5,
+        NativeIO.ioprio_get());
+  }
+
+  @Test(expected=IOException.class)
+  public void testIoprioSet1Err1() throws IOException {
+    NativeIO.ioprio_set((NativeIO.IOPRIO_CLASS_BE << 13) | (-1));
+  }
+
+  @Test(expected=IOException.class)
+  public void testIoprioSetErr1() throws IOException {
+    NativeIO.ioprio_set(NativeIO.IOPRIO_CLASS_BE, -1);
+  }
+
+  @Test(expected=IOException.class)
+  public void testIoprioSetErr2() throws IOException {
+    // Only 0-7 is allowed.
+    NativeIO.ioprio_set(NativeIO.IOPRIO_CLASS_BE, 8);
+  }
+
+  @Test(expected=IOException.class)
+  public void testIoprioSetErr3() throws IOException {
+    NativeIO.ioprio_set(-1, 1);
+  }
+
+  @Test(expected=IOException.class)
+  public void testIoprioSetErr4() throws IOException {
+    // only 0-3 class of service supported.
+    NativeIO.ioprio_set(4, 1);
   }
 
   private void assertPermissions(File f, int expected) throws IOException {

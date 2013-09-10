@@ -25,6 +25,9 @@ import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
+import org.apache.hadoop.hdfs.server.namenode.INodeRaidStorage.RaidBlockInfo;
+import org.apache.hadoop.hdfs.server.namenode.INodeStorage.StorageType;
+import org.apache.hadoop.raid.RaidCodec;
 
 public class INodeFile extends INode {
   static final FsPermission UMASK = FsPermission.createImmutable((short)0111);
@@ -37,44 +40,51 @@ public class INodeFile extends INode {
   static final long HEADERMASK = 0xffffL << BLOCKBITS;
 
   protected long header;
+  
+  protected INodeStorage storage = null;
 
-  protected BlockInfo blocks[] = null;
-
-  INodeFile(PermissionStatus permissions,
+  INodeFile(long id, PermissionStatus permissions,  
             int nrBlocks, short replication, long modificationTime,
             long atime, long preferredBlockSize) {
-    this(permissions, new BlockInfo[nrBlocks], replication,
-        modificationTime, atime, preferredBlockSize);
+    this(id, permissions, new BlockInfo[nrBlocks], replication,
+        modificationTime, atime, preferredBlockSize, null);
   }
 
   protected INodeFile() {
-    blocks = null;
+    storage = null;
     header = 0;
   }
 
-  protected INodeFile(PermissionStatus permissions, BlockInfo[] blklist,
+  protected INodeFile(long id, PermissionStatus permissions, BlockInfo[] blklist,
                       short replication, long modificationTime,
-                      long atime, long preferredBlockSize) {
-    super(permissions, modificationTime, atime);
+                      long atime, long preferredBlockSize, RaidCodec codec) {
+    super(id, permissions, modificationTime, atime);
     this.setReplication(replication);
     this.setPreferredBlockSize(preferredBlockSize);
-    blocks = blklist;
+    try {
+      this.storage = (codec == null)? new INodeRegularStorage(blklist):
+                     new INodeRaidStorage(blklist, codec);
+    } catch (IOException ioe) {
+      LOG.error("Fail to initialize storage", ioe);
+    }
   }
   
   protected INodeFile(INodeFile inodeFile) {  
     super(inodeFile); 
     this.setReplication(inodeFile.getReplication());  
-    this.setPreferredBlockSize(inodeFile.getPreferredBlockSize());  
-    blocks = inodeFile.getBlocks(); 
+    this.setPreferredBlockSize(inodeFile.getPreferredBlockSize());
+    this.storage = inodeFile.storage;
   }
 
   protected void updateFile(PermissionStatus permissions, BlockInfo[] blklist,
       short replication, long modificationTime, long atime,
-      long preferredBlockSize) {
+      long preferredBlockSize) throws IOException {
+    INode.enforceRegularStorageINode(this, 
+        "Namenode doesn't support updateFile for empty file or raided file"); 
     super.updateINode(permissions, modificationTime, atime);
     this.setReplication(replication);
     this.setPreferredBlockSize(preferredBlockSize);
-    blocks = blklist;
+    this.storage.blocks = blklist;
   }
 
   /**
@@ -97,6 +107,21 @@ public class INodeFile extends INode {
   public short getReplication() {
     return (short) ((header & HEADERMASK) >> BLOCKBITS);
   }
+  
+  // return block replication. Parity block and Source block 
+  // may have different replication
+  public short getBlockReplication(BlockInfo block) {
+    if (storage.isSourceBlock(block)) {
+      return getReplication();
+    } else {
+      if (storage.getStorageType() == StorageType.RAID_STORAGE) {
+        return ((INodeRaidStorage)storage).getCodec().parityReplication;
+      } else {
+        throw new IllegalStateException("parity block " + block +
+            " belongs to a non-raid file");
+      }
+    }
+  }
 
   public void setReplication(short replication) {
     if(replication <= 0)
@@ -118,106 +143,67 @@ public class INodeFile extends INode {
        throw new IllegalArgumentException("Unexpected value for the block size");
     header = (header & HEADERMASK) | (preferredBlkSize & ~HEADERMASK);
   }
+  
+  public StorageType getStorageType() {
+    return this.storage == null? null: this.storage.getStorageType();
+  }
 
   /**
    * Get file blocks
    * @return file blocks
    */
   public BlockInfo[] getBlocks() {
-    return this.blocks;
+    return this.storage == null? null: this.storage.getBlocks();
   }
-
-  /**
-   * append array of blocks to this.blocks
-   */
-  void appendBlocks(INodeFile [] inodes, int totalAddedBlocks) {
-    int size = this.blocks.length;
-
-    BlockInfo[] newlist = new BlockInfo[size + totalAddedBlocks];
-    System.arraycopy(this.blocks, 0, newlist, 0, size);
-
-    for(INodeFile in: inodes) {
-      System.arraycopy(in.blocks, 0, newlist, size, in.blocks.length);
-      size += in.blocks.length;
-    }
-
-    this.blocks = newlist;
-
-    for(BlockInfo bi: this.blocks) {
-      bi.setINode(this);
-    }
+  
+  public INodeStorage getStorage() {
+    return this.storage;
   }
 
   /**
    * Return the last block in this file, or null
    * if there are no blocks.
    */
-  Block getLastBlock() {
-    if (this.blocks == null ||
-        this.blocks.length == 0)
-      return null;
-    return this.blocks[this.blocks.length - 1];
-  }
-
-  /**
-   * add a block to the block list
-   */
-  void addBlock(BlockInfo newblock) {
-    if (this.blocks == null) {
-      this.blocks = new BlockInfo[1];
-      this.blocks[0] = newblock;
-    } else {
-      int size = this.blocks.length;
-      BlockInfo[] newlist = new BlockInfo[size + 1];
-      System.arraycopy(this.blocks, 0, newlist, 0, size);
-      newlist[size] = newblock;
-      this.blocks = newlist;
-    }
+  public Block getLastBlock() {
+    return this.storage == null? null: this.storage.getLastBlock();
   }
 
   /**
    * Set file block
    */
   void setBlock(int idx, BlockInfo blk) {
-    this.blocks[idx] = blk;
+    this.storage.blocks[idx] = blk;
   }
 
-  int collectSubtreeBlocksAndClear(List<Block> v, int blocksLimit) {
+  int collectSubtreeBlocksAndClear(List<BlockInfo> v, int blocksLimit,
+      List<INode> removedINodes) {
     parent = null;
     name = null;
+    BlockInfo[] blocks = getBlocks();
     if(blocks != null && v != null) {
-      for (Block blk : blocks) {
+      for (BlockInfo blk : blocks) {
         v.add(blk);
       }
     }
-    blocks = null;
+    this.storage = null;
+    removedINodes.add(this);
     return 1;
   }
 
   /** {@inheritDoc} */
   long[] computeContentSummary(long[] summary) {
-    long bytes = 0;
-    for(Block blk : blocks) {
-      bytes += blk.getNumBytes();
-    }
-    summary[0] += bytes;
+    summary[0] += getFileSize();
     summary[1]++;
     summary[3] += diskspaceConsumed();
     return summary;
   }
   
-  long getFileSize() throws IOException {
-    if (blocks == null) {
-      throw new IOException("blocks is null for inode " + this.toString());
-    } 
-    long fileSize = 0L;
-    for (Block blk: blocks) {
-      fileSize += blk.getNumBytes();
-    }
-    return fileSize; 
+  long getFileSize() {
+    return this.storage == null? 0L: this.storage.getFileSize();
   }
   
   int getBlockIndex(Block blk, String file) throws IOException {
+    BlockInfo[] blocks = getBlocks();
     if (blocks == null) {
       throw new IOException("blocks is null for file " + file);
     }
@@ -234,8 +220,6 @@ public class INodeFile extends INode {
     throw new IOException("Cannot locate " + blk + " in file " + file);
   }
 
-
-
   @Override
   DirCounts spaceConsumedInTree(DirCounts counts) {
     counts.nsCount += 1;
@@ -244,37 +228,11 @@ public class INodeFile extends INode {
   }
 
   long diskspaceConsumed() {
-    return diskspaceConsumed(blocks);
+    return this.storage == null? 0:  this.storage.diskspaceConsumed(this);
   }
-
-  long diskspaceConsumed(Block[] blkArr) {
-    long size = 0;
-    if(blkArr == null) {
-      return 0;
-    }
-    for (Block blk : blkArr) {
-      if (blk != null) {
-        size += blk.getNumBytes();
-      }
-    }
-    /* If the last block is being written to, use prefferedBlockSize
-     * rather than the actual block size.
-     */
-    if (blkArr.length > 0 && blkArr[blkArr.length-1] != null &&
-        isUnderConstruction()) {
-      size += getPreferredBlockSize() - blocks[blocks.length-1].getNumBytes();
-    }
-    return size * getReplication();
-  }
-
-  /**
-   * Return the penultimate allocated block for this file.
-   */
-  Block getPenultimateBlock() {
-    if (blocks == null || blocks.length <= 1) {
-      return null;
-    }
-    return blocks[blocks.length - 2];
+  
+  long diskspaceConsumed(Block[] blocks) {
+    return this.storage == null? 0: this.storage.diskspaceConsumed(blocks, this);
   }
 
   /**
@@ -283,8 +241,14 @@ public class INodeFile extends INode {
    * @return true if the given block the last block of the file
    */
   boolean isLastBlock(BlockInfo block) {
-    if (blocks == null || blocks.length == 0)
-      return false;
-    return blocks[blocks.length-1] == block;
+    return this.storage == null? false: this.storage.getLastBlock() == block;
+  }
+  
+  RaidBlockInfo getFirstBlockInStripe(Block block, int index) throws IOException{
+    return this.storage == null ? null : this.storage.getFirstBlockInStripe(block, index);
+  }
+
+  public boolean isHardlinkFile() {
+    return false;
   }
 }

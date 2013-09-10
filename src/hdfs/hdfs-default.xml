@@ -352,6 +352,13 @@ creations/deletions), or "all".</description>
 </property> 
 
 <property>
+  <name>dfs.hosts.ignoremissing</name>
+  <value></value>
+  <description>Ignore missing include/exclude files.
+  </description>
+</property> 
+
+<property>
   <name>dfs.max.objects</name>
   <value>0</value>
   <description>The maximum number of files, directories and blocks
@@ -566,4 +573,43 @@ creations/deletions), or "all".</description>
   <description>Whether {listPaths|data|fileChecksum} servlets should be loaded at name node startup
   </description>
 </property>
+
+<property>
+  <name>dfs.client.shutdownhook.enable</name>
+  <value>true</value>
+  <description>If true, the HDFS FileSystem will register a shutdown hook
+    to close all file systems if a shutdown occurs.  This is the default.
+    Set this to false if your application is registering its own shutdown
+    hook; in this case, HDFS will not register one, so the application
+    shutdown should include calling FileSystem.closeAll().
+  </description>
+</property>
+
+<property>
+  <name>hdfs.raid.codec.json</name>
+    <value>[
+{
+"id" : "rs",
+"num_data_blocks" : 10,
+"num_parity_blocks" : 4,
+"stripe_chunk_size" : -1,
+"parity_repl" : 1,
+"min_source_repl" : 1,
+"erasure_code" : "org.apache.hadoop.raid.ReedSolomonCode",
+"description" : "ReedSolomonCode code"
+},
+{
+"id" : "xor",
+"num_data_blocks" : 10,
+"num_parity_blocks" : 1,
+"stripe_chunk_size" : -1,
+"parity_repl" : 2,
+"min_source_repl" : 2,
+"erasure_code" : "org.apache.hadoop.raid.XORCode",
+"description" : "XORCode code"
+}
+]</value>
+  <description>JSon string that contains all Raid codecs</description>
+</property>
+
 </configuration>

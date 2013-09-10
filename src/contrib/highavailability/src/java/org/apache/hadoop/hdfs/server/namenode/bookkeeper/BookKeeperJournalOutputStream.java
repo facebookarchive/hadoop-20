@@ -20,6 +20,8 @@ package org.apache.hadoop.hdfs.server.namenode.bookkeeper;
 
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.LedgerHandle;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.server.namenode.EditsDoubleBuffer;
 
 import java.io.IOException;
@@ -39,6 +41,8 @@ import java.io.OutputStream;
  * @see org.apache.bookkeeper.streaming.LedgerOutputStream
  */
 public class BookKeeperJournalOutputStream extends OutputStream {
+
+  private static final Log LOG = LogFactory.getLog(BookKeeperJournalOutputStream.class);
 
   private final LedgerHandle ledger; // The underlying ledger
 
@@ -66,6 +70,12 @@ public class BookKeeperJournalOutputStream extends OutputStream {
       throws IOException {
     try {
       ledger.addEntry(buf, off, len);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Last add pushed to ledger " + ledger.getId() + " is " +
+            ledger.getLastAddPushed());
+        LOG.debug("Last add confirmed to ledger " + ledger.getId() + " is " +
+            ledger.getLastAddConfirmed());
+      }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IOException("Interrupted writing to BookKeeper", e);

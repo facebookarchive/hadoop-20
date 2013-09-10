@@ -94,7 +94,7 @@ public class AvatarZooKeeperClient {
   
   public synchronized void clearPrimary(String address) throws IOException {
     String node = getRegistrationNode(address);
-    zkCreateRecursively(node, null, true);
+    zkCreateRecursively(node, null, true, null);
   }
 
   /**
@@ -112,7 +112,8 @@ public class AvatarZooKeeperClient {
   public synchronized void registerPrimarySsId(String address, Long ssid)
       throws IOException {
     String node = getSsIdNode(address);
-    zkCreateRecursively(node, SerializableUtils.toBytes(ssid), true);
+    zkCreateRecursively(node, SerializableUtils.toBytes(ssid), true,
+        ssid.toString());
   }
 
   /**
@@ -131,24 +132,25 @@ public class AvatarZooKeeperClient {
       ZookeeperTxId lastTxid)
       throws IOException {
     String node = getLastTxIdNode(address);
-    zkCreateRecursively(node, lastTxid.toBytes(), true);
+    zkCreateRecursively(node, lastTxid.toBytes(), true, lastTxid.toString());
   }
 
   public synchronized void registerPrimary(String address, String realAddress, 
       boolean overwrite) 
     throws UnsupportedEncodingException, IOException {
     String node = getRegistrationNode(address);
-    zkCreateRecursively(node, realAddress.getBytes("UTF-8"), overwrite);
+    zkCreateRecursively(node, realAddress.getBytes("UTF-8"), overwrite,
+        realAddress);
   }
   
   private void zkCreateRecursively(String zNode, byte[] data,
-      boolean overwrite) throws IOException {
+      boolean overwrite, String strData) throws IOException {
     try {
     initZK();
     } catch (InterruptedException ie) {
       throw new IOException(ie);
     }
-    System.out.println("create " + zNode);
+    System.out.println("updating (" + zNode + ")-> (" + strData + ")");
     String[] parts = zNode.split("/");
     String path = "";
     byte[] payLoad = new byte[0];
@@ -240,6 +242,8 @@ public class AvatarZooKeeperClient {
         watcher.wait(this.connectTimeout);
       }
       if (zk.getState() != ZooKeeper.States.CONNECTED) {
+        // Close any open connections to avoid fd leak.
+        zk.close();
         throw new IOException("Timed out trying to connect to ZooKeeper");
       }
     }

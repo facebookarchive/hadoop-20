@@ -527,10 +527,7 @@ public class FastCopy {
         }
       }
       
-      if (canHardLink()) {
-        return copyUsingHardLink();
-      }
-      
+      // TODO : add an option to perform NN level hardlink.
       return copy();
     }
 

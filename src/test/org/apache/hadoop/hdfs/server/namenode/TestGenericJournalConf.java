@@ -17,21 +17,22 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.Transition;
+import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
+import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.junit.Test;
-import org.mortbay.log.Log;
 
 import static org.mockito.Mockito.mock;
 import static org.junit.Assert.*;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageState;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.io.Writable;
-import org.apache.hadoop.util.StringUtils;
 
 import java.net.URI;
+import java.util.Collection;
 import java.io.IOException;
 
 public class TestGenericJournalConf {
@@ -139,8 +140,9 @@ public class TestGenericJournalConf {
     
     static boolean formatCalled = false;
     static boolean shouldPromptCalled = false;
-    
-    public DummyJournalManager(Configuration conf, URI u) {}
+
+    public DummyJournalManager(Configuration conf, URI u, NamespaceInfo nsInfo,
+        NameNodeMetrics metrics) { }
     
     @Override
     public EditLogOutputStream startLogSegment(long txId) throws IOException {
@@ -154,24 +156,6 @@ public class TestGenericJournalConf {
     }
 
     @Override
-    public EditLogInputStream getInputStream(long fromTxnId)
-        throws IOException {
-      return null;
-    }
-    
-    @Override
-    public EditLogInputStream getInputStream(long fromTxnId,
-        boolean validateInProgressSegments) throws IOException {
-      return null;
-    }
-
-    @Override
-    public long getNumberOfTransactions(long fromTxnId)
-        throws IOException {
-      return 0;
-    }
-
-    @Override
     public void purgeLogsOlderThan(long minTxIdToKeep)
         throws IOException {}
 
@@ -180,21 +164,25 @@ public class TestGenericJournalConf {
 
     @Override
     public void close() throws IOException {}
-
+    
     @Override
-    public boolean isSegmentInProgress(long startTxId) throws IOException {
+    public boolean hasSomeJournalData() throws IOException {
+      shouldPromptCalled = true;
       return false;
     }
     
     @Override
-    public boolean hasSomeData() throws IOException {
+    public boolean hasSomeImageData() throws IOException {
       shouldPromptCalled = true;
       return false;
     }
 
     @Override
-    public void format(StorageInfo nsInfo) throws IOException {
-      formatCalled = true;
+    public void transitionJournal(StorageInfo nsInfo, Transition transition,
+        StartupOption startOpt) throws IOException {
+      if (Transition.FORMAT == transition) {
+        formatCalled = true;
+      }
     }
 
     @Override
@@ -202,11 +190,36 @@ public class TestGenericJournalConf {
         throws IOException {
       return null;
     }
+
+    @Override
+    public void selectInputStreams(Collection<EditLogInputStream> streams,
+        long fromTxId, boolean inProgressOk, boolean validateInProgressSegments)
+        throws IOException {
+    }
+
+    @Override
+    public String toHTMLString() {
+      return this.toString();
+    }
+
+    @Override
+    public void setCommittedTxId(long txid, boolean force) throws IOException {
+    }
+
+    @Override
+    public boolean hasImageStorage() {
+      return false;
+    }
+
+    @Override
+    public RemoteStorageState analyzeJournalStorage() {
+      return new RemoteStorageState(StorageState.NON_EXISTENT, new StorageInfo());
+    }
   }
 
   public static class BadConstructorJournalManager extends DummyJournalManager {
     public BadConstructorJournalManager() {
-      super(null, null);
+      super(null, null, null, null);
     }
   }
 }

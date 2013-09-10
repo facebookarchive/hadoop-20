@@ -17,42 +17,53 @@
  */
 package org.apache.hadoop.hdfs;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicLong;
 
-import junit.framework.TestCase;
-
+import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.security.AccessControlException;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.security.UserGroupInformation;
-
-import org.apache.commons.logging.impl.Log4JLogger;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.log4j.Level;
+import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This class tests the building blocks that are needed to
  * support HDFS appends.
  */
-public class TestFileAppend2 extends TestCase {
-
+public class TestFileAppend2 {
+  static private Logger LOG = LoggerFactory.getLogger(TestFileAppend2.class);
   {
     ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+    DataNode.LOG.getLogger().setLevel(Level.ALL);
     ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.ALL);
   }
 
@@ -118,6 +129,7 @@ public class TestFileAppend2 extends TestCase {
    * Reopens the same file for appending, write all blocks and then close.
    * Verify that all data exists in file.
    */ 
+  @Test
   public void testSimpleAppend() throws IOException {
     Configuration conf = new Configuration();
     if (simulatedStorage) {
@@ -365,6 +377,7 @@ public class TestFileAppend2 extends TestCase {
   /**
    * Test that appends to files at random offsets.
    */
+  @Test
   public void testComplexAppend() throws IOException {
     initBuffer(fileSize);
     Configuration conf = new Configuration();
@@ -423,4 +436,144 @@ public class TestFileAppend2 extends TestCase {
     //
     assertTrue("testComplexAppend Worker encountered exceptions.", globalStatus);
   }
+  
+  @Test
+  public void testPipelineFailures() throws IOException {
+    Configuration conf = new Configuration();
+    conf.setInt("dfs.datanode.handler.count", 50);
+    conf.setBoolean("dfs.support.append", true);
+    initBuffer(fileSize);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 3, true, null);
+    FileSystem fs = cluster.getFileSystem();
+    DistributedFileSystem dfs = DFSUtil.convertToDFS(fs);
+    
+    PipelineFailureGenerator handler = new PipelineFailureGenerator(3);
+    InjectionHandler.set(handler);
+    
+    try { // test appending to a file.
+      // create a new file.
+      Path file1 = new Path("/simpleAppend.dat");
+      FSDataOutputStream stm = createFile(fs, file1, 3);
+      System.out.println("Created file simpleAppend.dat");
+
+      // write to file
+      int mid = 186;   // io.bytes.per.checksum bytes
+      System.out.println("Writing " + mid + " bytes to file " + file1);
+      stm.write(fileContents, 0, mid);
+      stm.close();
+      System.out.println("Wrote and Closed first part of file.");
+
+      // write to file
+      int mid2 = 607;   // io.bytes.per.checksum bytes
+      System.out.println("Writing " + mid + " bytes to file " + file1);
+      stm = fs.append(file1);
+      stm.write(fileContents, mid, mid2-mid);
+      stm.close();
+      System.out.println("Wrote and Closed second part of file.");
+      
+      assertEquals(1, handler.failedTimes);
+      handler.clearCount();
+      
+      LocatedBlocks blocks = dfs.getClient().getLocatedBlocks(file1.toString(), 
+          0, Long.MAX_VALUE);
+      int numReplicas = blocks.getLocatedBlocks().get(0).getLocations().length;
+      handler.originalLength = numReplicas;
+      
+      // write the remainder of the file
+      stm = fs.append(file1);
+
+      // ensure getPos is set to reflect existing size of the file
+      assertTrue(stm.getPos() > 0);
+
+      System.out.println("Writing " + (fileSize - mid2) + " bytes to file " + file1);
+      stm.write(fileContents, mid2, fileSize - mid2);
+      System.out.println("Written second part of file");
+      stm.close();
+      System.out.println("Wrote and Closed second part of file.");
+
+      assertEquals(1, handler.failedTimes);
+      handler.clearCount();
+      // verify that entire file is good
+      checkFullFile(fs, file1);
+      
+      
+      // create another file with 1 replica.
+      Path file2 = new Path("/simpleAppend2.dat");
+      stm = createFile(fs, file2, 1);
+      handler.originalLength = 1;
+      // write to file
+      mid = 186;   // io.bytes.per.checksum bytes
+      System.out.println("Writing " + mid + " bytes to file " + file2);
+      stm.write(fileContents, 0, mid);
+      stm.close();
+      System.out.println("Wrote and Closed first part of file ." + file2);
+      
+      // append to file
+      try {
+        mid2 = 607;   // io.bytes.per.checksum bytes
+        System.out.println("Writing " + mid + " bytes to file " + file2);
+        stm = fs.append(file2);
+        stm.write(fileContents, mid, mid2-mid);
+        stm.close();
+        System.out.println("Wrote and Closed second part of file.");
+        
+        fail("Expected failure, becasue all datanodes are bad");
+      } catch (IOException ex) {
+        LOG.warn("Expected error.", ex);
+      }
+      assertEquals(1, handler.failedTimes);
+      
+    } finally {
+      cluster.shutdown();
+      InjectionHandler.clear();
+    }
+  } 
+  
+  /**
+   * will fail the pipeline at random position.
+   */
+  class PipelineFailureGenerator extends InjectionHandler {
+    int originalLength;
+    final Random random = new Random();
+    int calledTimes = 0;
+    int failedTimes = 0;
+    
+    final Object lock = new Object();
+    
+    public PipelineFailureGenerator(int originalLength) {
+      this.originalLength = originalLength;
+    }
+    
+    public void clearCount() {
+      calledTimes = 0;
+      failedTimes = 0;
+    }
+
+    @Override
+    protected void _processEventIO(InjectionEventI event, Object... args) 
+                throws IOException{
+      if (!event.equals(InjectionEvent.DATANODE_APPEND_BLOCK)) {
+        return;
+      }
+      
+      synchronized (lock) {
+        calledTimes ++;
+        
+        if (failedTimes > 0) {
+          return;
+        }
+        
+        if (calledTimes == originalLength) {
+          failedTimes ++;
+          throw new IOException("Injection failed, calledTimes: " + calledTimes);
+        }
+        
+        if (random.nextInt(originalLength) == 0) {
+          failedTimes ++;
+          throw new IOException("Injection failed, calledTimes: " + calledTimes);
+        }
+      }
+    }
+  }
+  
 }

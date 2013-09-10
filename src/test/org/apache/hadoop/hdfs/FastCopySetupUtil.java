@@ -22,7 +22,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.net.InetAddress;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -49,6 +51,9 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.HardLink;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.tools.FastCopy.FastCopyFileStatus;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.AfterClass;
 
@@ -97,10 +102,8 @@ public class FastCopySetupUtil {
     setConf(FSConstants.DFS_SOFT_LEASE_KEY, softLeasePeriod);
 
     System.setProperty("test.build.data", "build/test/data1");
-    cluster = new MiniDFSCluster(conf, 6, true, new String[] { "/r1", "/r2",
-        "/r1", "/r2", "/r1", "/r2" }, new String[] { "h1", "h2", "h3", "h1",
-        "h2", "h3" });
-
+    cluster = new MiniDFSCluster(conf, 6, new String[] { "/r1", "/r2",
+        "/r1", "/r2", "/r1", "/r2" }, null, true, true);
     for (DataNode dn : cluster.getDataNodes()) {
       dnMap.put(dn.getSelfAddr().getPort(), dn);
     }
@@ -111,10 +114,8 @@ public class FastCopySetupUtil {
     fs = (DistributedFileSystem) cluster.getFileSystem();
 
     System.setProperty("test.build.data", "build/test/data2");
-    remoteCluster = new MiniDFSCluster(remoteConf, 6, true, new String[] {
-        "/r1", "/r2", "/r1", "/r2", "/r1", "/r2" }, new String[] { "h1", "h2",
-        "h3", "h1", "h2", "h3" });
-
+    remoteCluster = new MiniDFSCluster(remoteConf, 6, new String[] { "/r1", "/r2", "/r1", "/r2",
+        "/r1", "/r2" }, null, true, true);
     for (DataNode dn : remoteCluster.getDataNodes()) {
       dnMap.put(dn.getSelfAddr().getPort(), dn);
     }
@@ -151,8 +152,7 @@ public class FastCopySetupUtil {
         try {
           // Make sure we have no pendingReplicationBlocks
           pass = (0 == cluster.getNameNode().namesystem
-              .getPendingReplicationBlocks());
-          pass = (0 == remoteCluster.getNameNode().namesystem
+              .getPendingReplicationBlocks()) && (0 == remoteCluster.getNameNode().namesystem
               .getPendingReplicationBlocks());
           create_verify_file();
           try {
@@ -288,6 +288,7 @@ public class FastCopySetupUtil {
     assertTrue(pass);
   }
 
+
   private void verifyFileStatus(String file, NameNode namenode,
       FastCopy fastCopy) throws Exception {
     LOG.info("Verifying for file : " + file);
@@ -302,6 +303,7 @@ public class FastCopySetupUtil {
 
   public void testInterFileSystemFastCopy(boolean hardlink) throws Exception {
     // Create a source file.
+    setInjectionHandler();
     String src = "/testInterFileSystemFastCopySrc" + hardlink;
     generateRandomFile(fs, src, FILESIZE);
     String destination = "/testInterFileSystemFastCopyDst" + hardlink;
@@ -322,6 +324,27 @@ public class FastCopySetupUtil {
       fastCopy.shutdown();
     }
     assertTrue(pass);
+  }
+
+  private static void setInjectionHandler() {
+    InjectionHandler.set(new InjectionHandler() {
+      protected boolean _trueCondition(InjectionEventI event, Object... args) {
+        if (event == InjectionEvent.FSNAMESYSTEM_SKIP_LOCAL_DN_LOOKUP) {
+          if (args == null) {
+            return true;
+          }
+          if (args.length == 1) {
+            if (args[0] == null || !(args[0] instanceof String)) {
+              return true;
+            }
+            String datanodeIpAddress = (String) args[0];
+            return !("127.0.0.1".equals(datanodeIpAddress));
+          }
+          return true;
+        }
+        return true;
+      }
+    });
   }
 
   public void testInterFileSystemFastCopyMultiple(boolean hardlink)
@@ -512,17 +535,17 @@ public class FastCopySetupUtil {
       LocatedBlock dstBlock = dstIt.next();
       List<DatanodeInfo> srcLocations = Arrays.asList(srcBlock.getLocations());
       List<DatanodeInfo> dstLocations = Arrays.asList(dstBlock.getLocations());
-
+      
       System.out.println("Locations for src block : " + srcBlock.getBlock()
           + " file : " + src);
       for (DatanodeInfo info : srcLocations) {
-        System.out.println("Datanode : " + info.toString());
+        System.out.println("Datanode : " + info.toString() + " rack: " + info.getNetworkLocation());
       }
 
       System.out.println("Locations for dst block : " + dstBlock.getBlock()
           + " file : " + destination);
       for (DatanodeInfo info : dstLocations) {
-        System.out.println("Datanode : " + info.toString());
+        System.out.println("Datanode : " + info.toString() + " rack: " + info.getNetworkLocation());
       }
 
       assertEquals(srcLocations.size(), dstLocations.size());
@@ -533,26 +556,23 @@ public class FastCopySetupUtil {
         assertTrue(srcLocations.containsAll(dstLocations));
         assertTrue(dstLocations.containsAll(srcLocations));
       } else {
-        // Verify blocks are rack local.
+        // Since all datanodes are on the same host in a unit test, the inter
+        // filesystem copy can have blocks end up on any datanode.
         Iterator<DatanodeInfo> sit = srcLocations.iterator();
         while (sit.hasNext()) {
           DatanodeInfo srcInfo = sit.next();
 
           // Verify location.
           Iterator<DatanodeInfo> dit = dstLocations.iterator();
-          boolean flag = false;
-          while (dit.hasNext() && !flag) {
+          while (dit.hasNext()) {
             DatanodeInfo dstInfo = dit.next();
-            if (dstInfo.getHostName().equals(srcInfo.getHostName())) {
+            if (dstInfo.getHost().equals(srcInfo.getHost())) {
               verifyHardLinks(srcInfo, dstInfo,
                   srcLocatedBlocks.getNamespaceID(), srcBlock.getBlock(),
                   dstLocatedBlocks.getNamespaceID(), dstBlock.getBlock(),
                   hardlink);
             }
-            flag = srcInfo.getNetworkLocation().equals(
-                dstInfo.getNetworkLocation());
           }
-          assertTrue(flag);
         }
       }
     }

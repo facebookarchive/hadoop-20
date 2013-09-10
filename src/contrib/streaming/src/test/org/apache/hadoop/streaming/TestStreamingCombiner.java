@@ -28,6 +28,9 @@ public class TestStreamingCombiner extends TestStreaming {
   
   public TestStreamingCombiner() throws IOException {
     super();
+    // currently combiner involves a lot of classes that requires
+    // Text as key and values
+    setTestBytesWritable(false);
   }
   
   protected String[] genArgs() {

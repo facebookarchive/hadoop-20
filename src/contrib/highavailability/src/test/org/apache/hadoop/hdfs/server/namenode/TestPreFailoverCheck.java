@@ -38,6 +38,8 @@ import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Matchers.any;
+import static org.mockito.Matchers.anyInt;
+import static org.mockito.Matchers.anyLong;
 
 public class TestPreFailoverCheck {
 
@@ -74,7 +76,7 @@ public class TestPreFailoverCheck {
   @Test
   public void testUpgrade() throws Exception {
     conf = new Configuration();
-    cluster = new MiniAvatarCluster(conf, 1, true, null, null);
+    cluster = new MiniAvatarCluster.Builder(conf).enableQJM(false).build();
     fs = cluster.getFileSystem();
     
     // invalidate shared directory
@@ -125,6 +127,10 @@ public class TestPreFailoverCheck {
 
     doThrow(new IOException("fail on write()")).when(spyElos).write(
         (FSEditLogOp) any());
+    doThrow(new IOException("fail on write()")).when(spyElos).writeRaw(
+        (byte[]) any(), anyInt(), anyInt());
+    doThrow(new IOException("fail on write()")).when(spyElos).writeRawOp(
+        (byte[]) any(), anyInt(), anyInt(), anyLong());
     doNothing().when(spyElos).abort();
     jas.setCurrentStreamForTests(spyElos);
 

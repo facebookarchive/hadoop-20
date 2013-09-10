@@ -586,6 +586,8 @@ public class Session {
     private int fulfilledRequestCount = 0;
     /** How many times did we cancel a grant */
     private int revokedRequestCount = 0;
+    
+    private List<Long> resourceUsages;
 
     /** A private Constructor */
     private Context() {
@@ -1117,7 +1119,9 @@ public class Session {
         maxid = grant.id;
       }
     }
-    expectedInfo.grantId = maxid;
+    synchronized (expectedInfo) {
+      expectedInfo.grantId = maxid;
+    }
   }
 
   /** Check if the heartbeatInfo between JT and CM are in sync. 
@@ -1259,5 +1263,19 @@ public class Session {
         return g2.id - g1.id;
       }
     });
+  }
+  
+  public void storeResourceUsages(Map<ResourceType, List<Long>> resourceUsages) {
+    synchronized(this.typeToContext) {
+      for (ResourceType type: resourceUsages.keySet()) {
+        this.getContext(type).resourceUsages = resourceUsages.get(type);
+      }
+    }
+  }
+  
+  public List<Long> getResourceUsageForType(ResourceType type) {
+    synchronized(this.typeToContext) {
+      return this.getContext(type).resourceUsages;
+    }
   }
 }

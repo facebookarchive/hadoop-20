@@ -50,6 +50,7 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
 
 import javax.management.ObjectName;
@@ -83,6 +84,7 @@ import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.mapred.CleanupQueue.PathDeletionContext;
+import org.apache.hadoop.mapred.TaskController.TaskControllerContext;
 import org.apache.hadoop.mapred.TaskController.TaskControllerPathDeletionContext;
 import org.apache.hadoop.mapred.TaskLog.LogFileDetail;
 import org.apache.hadoop.mapred.TaskLog.LogName;
@@ -120,6 +122,7 @@ import org.jboss.netty.handler.codec.http.HttpChunkAggregator;
 import org.jboss.netty.handler.codec.http.HttpRequestDecoder;
 import org.jboss.netty.handler.codec.http.HttpResponseEncoder;
 import org.jboss.netty.handler.stream.ChunkedWriteHandler;
+import org.apache.hadoop.util.DataDirFileReader;
 
 /*******************************************************
  * TaskTracker is a process that starts and tracks MR Tasks
@@ -149,7 +152,11 @@ public class TaskTracker extends ReconfigurableBase
       "mapreduce.cluster.reduce.userlog.retain-size";
   static final String CHECK_TASKTRACKER_BUILD_VERSION =
       "mapreduce.tasktracker.build.version.check";
-
+  static final String LOG_FINISHED_TASK_COUNTERS =
+      "mapreduce.tasktracker.log.finished.task.counters";
+  static final String FINISHED_TASK_COUNTERS_LOG_FORMAT = 
+      "mapreduce.tasktracker.log.finished.task.counters.format";
+  
   static final long LOCALIZE_TASK_TIMEOUT = 10 * 60 * 1000L;
   static final long WAIT_FOR_DONE = 3 * 1000;
   // Port for jetty http server, not netty http server
@@ -271,6 +278,8 @@ public class TaskTracker extends ReconfigurableBase
   private static final String OUTPUT = "output";
   protected JobConf originalConf;
   protected JobConf fConf;
+  private long lastLocalDirsReloadTimeStamp = 0;
+  private String[] localDirsList = null;
   /** Max map slots used for scheduling */
   private int maxMapSlots;
   /** Max reduce slots used for scheduling */
@@ -328,6 +337,7 @@ public class TaskTracker extends ReconfigurableBase
   private long reduceSlotSizeMemoryOnTT = JobConf.DISABLED_MEMORY_LIMIT;
   private long totalMemoryAllottedForTasks = JobConf.DISABLED_MEMORY_LIMIT;
 
+  // conf for Corona Memory CGroup. The default is false
   public static final 
     String MAPRED_TASKTRACKER_CGROUP_MEM_ENABLE_PROPERTY = 
     "mapred.tasktracker.cgroup.mem";
@@ -337,12 +347,15 @@ public class TaskTracker extends ReconfigurableBase
   
   private TaskTrackerMemoryControlGroup ttMemCgroup;
   
+  private CGroupMemoryWatcher cgroupMemoryWatcher;
+
+  // conf for CPU CGroup. The default is flase.
   public static final 
     String MAPRED_TASKTRACKER_CGROUP_CPU_ENABLE_PROPERTY = 
     "mapred.tasktracker.cgroup.cpu";
   public static final 
     boolean DEFAULT_MAPRED_TASKTRACKER_CGROUP_CPU_ENABLE_PROPERTY = false;
-private boolean taskCPUControlGroupEnabled = false;
+  private boolean taskCPUControlGroupEnabled = false;
 
   private TaskTrackerCPUControlGroup ttCPUCgroup;
 
@@ -382,6 +395,14 @@ private boolean taskCPUControlGroupEnabled = false;
    */
   protected List<TaskAttemptID> commitResponses =
             Collections.synchronizedList(new ArrayList<TaskAttemptID>());
+  
+  private static final String DISK_OUT_OF_SPACE_KEY1 = "space";
+  private static final String DISK_OUT_OF_SPACE_KEY2 = "quota";
+  
+  private AtomicLong taskTrackerRSSMem = new AtomicLong();
+  
+  private Map<Integer, Integer> killedTaskRssBuckets = new HashMap<Integer, Integer>();
+  private static final int KILLED_TASKS_RSS_BUCKETS_NUM = 18;
 
   protected ShuffleServerMetrics shuffleServerMetrics;
   /** This class contains the methods that should be used for metrics-reporting
@@ -666,6 +687,15 @@ private boolean taskCPUControlGroupEnabled = false;
     }
     return null;
   }
+  
+  long getTaskCPUMSecs(TaskAttemptID tid) {
+    TaskInProgress tip = tasks.get(tid);
+    if (tip != null) {
+      return tip.getStatus().getCounters().getCounter(Task.Counter.CPU_MILLISECONDS);
+    }
+    
+    return 0L;
+  }
 
   public long getProtocolVersion(String protocol,
                                  long clientVersion) throws IOException {
@@ -743,9 +773,9 @@ private boolean taskCPUControlGroupEnabled = false;
 
     // Check local disk, start async disk service, and clean up all
     // local directories.
-    checkLocalDirs(this.fConf.getLocalDirs());
+    checkLocalDirs(getLocalDirsFromConf(this.fConf));
     asyncDiskService = new MRAsyncDiskService(FileSystem.getLocal(fConf),
-        fConf.getLocalDirs(), fConf);
+        getLocalDirsFromConf(fConf), fConf);
     asyncDiskService.cleanupAllVolumes();
     DistributedCache.purgeCache(fConf, asyncDiskService);
     versionBeanName = VersionInfo.registerJMX("TaskTracker");
@@ -813,13 +843,12 @@ private boolean taskCPUControlGroupEnabled = false;
     this.justInited = true;
     this.running = true;
 
-    initializeMemoryManagement();
-
     taskMemoryControlGroupEnabled = fConf.getBoolean(
         MAPRED_TASKTRACKER_CGROUP_MEM_ENABLE_PROPERTY,
         DEFAULT_MAPRED_TASKTRACKER_CGROUP_MEM_ENABLE_PROPERTY);
-    if(taskMemoryControlGroupEnabled)
-      ttMemCgroup = new TaskTrackerMemoryControlGroup(fConf, Runtime.getRuntime().maxMemory());
+    if(taskMemoryControlGroupEnabled) {
+      ttMemCgroup = new TaskTrackerMemoryControlGroup(fConf);
+    }
     
     taskCPUControlGroupEnabled = fConf.getBoolean(
             MAPRED_TASKTRACKER_CGROUP_CPU_ENABLE_PROPERTY,
@@ -827,6 +856,10 @@ private boolean taskCPUControlGroupEnabled = false;
     if(taskCPUControlGroupEnabled)
       ttCPUCgroup = new TaskTrackerCPUControlGroup(fConf, actualMaxMapSlots + actualMaxReduceSlots);
     
+    initializeMemoryManagement();
+    cgroupMemoryWatcher = new CGroupMemoryWatcher(this);
+    cgroupMemoryWatcher.start();
+
     setTaskLogsMonitor(new TaskLogsMonitor(getMapUserLogRetainSize(),
         getReduceUserLogRetainSize()));
     getTaskLogsMonitor().start();
@@ -1184,7 +1217,16 @@ private boolean taskCPUControlGroupEnabled = false;
                 + jobDir.toString());
         }
         systemFS.copyToLocalFile(jobFile, localJobFile);
-        JobConf localJobConf = new JobConf(localJobFile);
+        boolean cleanup = false;
+        JobConf localJobConf = null;
+        Path bigParamPath = null;
+        if (fConf.getBoolean("mapred.input.dir.cleanup", true)) {
+          bigParamPath = new Path(jobDir, "bigParam");
+          int threshold = fConf.getInt("mapred.input.dir.cleanup.threshold", 1000);
+          localJobConf = new JobConf(localJobFile, bigParamPath, localFs, threshold);
+        } else {
+          localJobConf = new JobConf(localJobFile);
+        } 
 
         // create the 'work' directory
         // job-specific shared directory for use as scratch space
@@ -1252,6 +1294,13 @@ private boolean taskCPUControlGroupEnabled = false;
           taskController.initializeJob(jobId);
           rjob.localized = true;
         }
+      } else {
+        // Even if job is localized we must update umbilical addresses
+        // Only when the remote job tracker address get changed we will update the XML file. 
+        // Refer to the logic of reconfigureLocalJobConf which override this function in 
+        // CoronaTaskTracker.
+        JobConf localJobConf = new JobConf(localJobFile);
+        reconfigureLocalJobConf(localJobConf, localJobFile, tip, false);
       }
     }
     return new JobConf(rjob.jobConf);
@@ -1337,6 +1386,9 @@ private boolean taskCPUControlGroupEnabled = false;
     if (this.taskMemoryManager != null) {
       this.taskMemoryManager.shutdown();
     }
+
+    // Stop cgroup memory watcher
+    this.cgroupMemoryWatcher.shutdown();
 
     // All tasks are killed. So, they are removed from TaskLog monitoring also.
     // Interrupt the monitor.
@@ -1803,7 +1855,7 @@ private boolean taskCPUControlGroupEnabled = false;
       localMinSpaceStart = minSpaceStart;
     }
     if (askForNewTask) {
-      checkLocalDirs(fConf.getLocalDirs());
+      checkLocalDirs(getLocalDirsFromConf(fConf));
       askForNewTask = enoughFreeSpace(localMinSpaceStart);
       gatherResourceStatus(status);
     }
@@ -1845,6 +1897,24 @@ private boolean taskCPUControlGroupEnabled = false;
             LOG.warn("Caught: " + StringUtils.stringifyException(me));
           }
           removeRunningTask(taskStatus.getTaskID());
+          
+          //
+          // When the task attempt has entered the finished state
+          // we log the counters to task log for future use
+          // load the counters into Scuba, Scriber and Hive
+          //
+          if (fConf.getBoolean(LOG_FINISHED_TASK_COUNTERS, true)) {
+            // for log format, 0 means json, else means name and value pair
+            String logHeader = "TaskCountersLogged " + taskStatus.getTaskID() + " " +
+              taskStatus.getFinishTime()/1000 + " ";
+            if (fConf.getInt(FINISHED_TASK_COUNTERS_LOG_FORMAT, 0) == 0) {
+              LOG.warn(
+                  logHeader + taskStatus.getCounters().makeJsonString());
+            } else {
+              LOG.warn(
+                  logHeader + taskStatus.getCounters().makeCompactString());
+            }
+          }
         }
       }
 
@@ -2075,6 +2145,12 @@ private boolean taskCPUControlGroupEnabled = false;
           if (t.isMapTask()) {
             indexCache.removeMap(tip.getTask().getTaskID().toString());
           }
+          
+          // Remove it from the runningTasks
+          if (this.runningTasks.containsKey(t.getTaskID())) {
+            LOG.info("Remove " + t.getTaskID() + " from runningTask by purgeJob");
+            this.runningTasks.remove(t.getTaskID());
+          }
         }
         // Delete the job directory for this
         // task if the job is done/failed
@@ -2214,7 +2290,7 @@ private boolean taskCPUControlGroupEnabled = false;
    */
   long getDiskSpace(boolean free) throws IOException {
     long biggestSeenSoFar = 0;
-    String[] localDirs = fConf.getLocalDirs();
+    String[] localDirs = getLocalDirsFromConf(fConf);
     for (int i = 0; i < localDirs.length; i++) {
       DF df = null;
       if (localDirsDf.containsKey(localDirs[i])) {
@@ -2663,19 +2739,21 @@ private boolean taskCPUControlGroupEnabled = false;
 
   void addToMemoryManager(TaskAttemptID attemptId, boolean isMap,
                           JobConf conf) {
-    if (isTaskMemoryManagerEnabled()) {
-      taskMemoryManager.addTask(attemptId,
-          isMap ? conf
-              .getMemoryForMapTask() * 1024 * 1024L : conf
-              .getMemoryForReduceTask() * 1024 * 1024L);
+     addToMemoryManager(attemptId, isMap, conf, true);
+  }
+
+  void addToMemoryManager(TaskAttemptID attemptId, boolean isMap,
+                          JobConf conf, boolean cgroupWatcherFlag) {
+    if (cgroupWatcherFlag) {
+      cgroupMemoryWatcher.addTask(attemptId,
+        isMap ? conf
+          .getMemoryForMapTask() * 1024 * 1024L : conf
+          .getMemoryForReduceTask() * 1024 * 1024L);
     }
   }
 
   void removeFromMemoryManager(TaskAttemptID attemptId) {
-    // Remove the entry from taskMemoryManagerThread's data structures.
-    if (isTaskMemoryManagerEnabled()) {
-      taskMemoryManager.removeTask(attemptId);
-    }
+    cgroupMemoryWatcher.removeTask(attemptId);
   }
 
   /**
@@ -3626,6 +3704,16 @@ private boolean taskCPUControlGroupEnabled = false;
       purgeTask(tip, true);
     }
   }
+  
+  private boolean isDiskOutOfSpaceError(String message)
+  {
+    if (message.indexOf(this.DISK_OUT_OF_SPACE_KEY1) != -1 ||
+        message.indexOf(this.DISK_OUT_OF_SPACE_KEY2) != -1) {
+      return true;
+    }
+    
+    return false;
+  }
 
   /**
    * A child task had a local filesystem error. Kill the task.
@@ -3637,6 +3725,9 @@ private boolean taskCPUControlGroupEnabled = false;
     if (tip != null) {
       tip.reportDiagnosticInfo("FSError: " + message);
       purgeTask(tip, true);
+    }
+    if (isDiskOutOfSpaceError(message)) {
+      this.myInstrumentation.diskOutOfSpaceTask(taskId);
     }
   }
 
@@ -3778,6 +3869,19 @@ private boolean taskCPUControlGroupEnabled = false;
       status.clearStatus();
     }
     return result;
+  }
+  /**
+   * Get CGroupMemStat
+   * @return a copy of CGroupMemStat
+   */
+  CGroupMemoryWatcher.CGroupMemStat getCGroupMemStat() {
+    return this.cgroupMemoryWatcher.getCGroupMemStat();
+  }
+  /**
+   * Check if a task is killed by CGroup
+   */
+  boolean isKilledByCGroup(TaskAttemptID tid) {
+    return this.cgroupMemoryWatcher.isKilledByCGroup(tid);
   }
   /**
    * Get the list of tasks that will be reported back to the
@@ -4094,7 +4198,7 @@ private boolean taskCPUControlGroupEnabled = false;
 
   // get the full paths of the directory in all the local disks.
   Path[] getLocalFiles(JobConf conf, String subdir) throws IOException{
-    String[] localDirs = conf.getLocalDirs();
+    String[] localDirs = getLocalDirsFromConf(conf);
     Path[] paths = new Path[localDirs.length];
     FileSystem localFs = FileSystem.getLocal(conf);
     for (int i = 0; i < localDirs.length; i++) {
@@ -4106,7 +4210,7 @@ private boolean taskCPUControlGroupEnabled = false;
 
   // get the paths in all the local disks.
   Path[] getLocalDirs() throws IOException{
-    String[] localDirs = fConf.getLocalDirs();
+    String[] localDirs = getLocalDirsFromConf(fConf);
     Path[] paths = new Path[localDirs.length];
     FileSystem localFs = FileSystem.getLocal(fConf);
     for (int i = 0; i < localDirs.length; i++) {
@@ -4531,4 +4635,135 @@ private boolean taskCPUControlGroupEnabled = false;
 
     return limit * 1024 * 1024L;
   }
+  
+  public TaskTrackerMemoryControlGroup getTaskTrackerMemoryControlGroup() {
+    return ttMemCgroup;
+  }
+
+  public int getCGroupOOM() {
+    int result = 0;
+    if (cgroupMemoryWatcher != null ) {
+      result = cgroupMemoryWatcher.getOOMNo();
+      cgroupMemoryWatcher.resetOOMNo();
+    }
+    return result;
+  }
+
+  String[] getLocalDirsFromConf(JobConf conf) throws IOException {
+    long reloadPeriod = conf.getLong("mapred.localdir.reloadtime", 300000L);
+    long currentTimeStamp = System.currentTimeMillis(); 
+    if (localDirsList != null && 
+      (currentTimeStamp - lastLocalDirsReloadTimeStamp) < reloadPeriod) {
+      return localDirsList;
+    }
+
+    lastLocalDirsReloadTimeStamp = currentTimeStamp;
+    String[] tmpLocalDirsList = null;
+    String configFilePath = conf.get("mapred.localdir.confpath");
+    if (configFilePath != null) {
+      try {
+        DataDirFileReader reader = new DataDirFileReader(configFilePath);
+        String tempLocalDirs = reader.getNewDirectories();
+        tmpLocalDirsList = reader.getArrayOfCurrentDataDirectories();
+        if (tempLocalDirs == null) {
+          LOG.warn("File is empty, using mapred.local.dir directories");
+        }
+      } catch (IOException e) {
+        LOG.warn("Could not read file, using directories from mapred.local.dir");
+      }
+    }
+    if (tmpLocalDirsList == null) {
+      tmpLocalDirsList = conf.getLocalDirs();
+    }
+    localDirsList = tmpLocalDirsList;
+    for (String localDir: localDirsList) {
+      LOG.info("localDir: " + localDir);
+    }
+    return localDirsList;
+  }
+  
+  public int getAndResetNumFailedToAddTaskToCGroup() {
+    if (ttMemCgroup != null) {
+      return ttMemCgroup.getAndResetNumFailedToAddTask();
+    }
+    
+    return 0;
+  }
+  
+  public int getAndResetAliveTaskNumInCGroup() {
+    return cgroupMemoryWatcher.getAndResetAliveTaskNum();
+  }
+  
+  public long getTaskTrackerRSSMem() {
+    if (cgroupMemoryWatcher.checkWatchable() == false && taskMemoryManager == null) {
+      setTaskTrackerRSSMem(resourceCalculatorPlugin.getProcResourceValues().getPhysicalMemorySize());
+    }
+    return this.taskTrackerRSSMem.get();
+  }
+  
+  public void setTaskTrackerRSSMem(long val) {
+    this.taskTrackerRSSMem.set(val);
+  }
+  
+  public long getAndResetAliveTasksCPUMSecs() {
+    return cgroupMemoryWatcher.getAndResetAliveTasksCPUMSecs();
+  }
+  
+  public int getKilledTaskRssBucketsNum () {
+    return KILLED_TASKS_RSS_BUCKETS_NUM;
+  }
+    
+  public void addKilledTaskToRssBuckets(long rss) {
+    int index;
+    long gb = 1024*1024*1024;
+    long qGb = 256*1024*1024;
+    
+    if (rss < gb) {
+      index = 0;
+    } else if (rss >= 5*gb) {
+      index = getKilledTaskRssBucketsNum () - 1;
+    } else {
+      index = (int)((rss/gb - 1)*4 + 1 + (rss%gb)/qGb);
+    }
+    
+    synchronized(this.killedTaskRssBuckets) {
+      Integer counter = this.killedTaskRssBuckets.get(index);
+      counter = (counter == null)? 1: (counter + 1);
+      
+      this.killedTaskRssBuckets.put(index, counter);
+    }
+    
+  }
+  
+  public int getAndRestNumOfKilledTasksByRssBucket(int index) {    
+    synchronized(this.killedTaskRssBuckets) {
+      Integer counter = this.killedTaskRssBuckets.get(index);
+      counter = (counter == null)? 0: counter;
+      this.killedTaskRssBuckets.put(index, 0);
+     
+      return counter.intValue();
+    }
+  }
+
+  public void doStackTrace(TaskAttemptID tid) {
+    TaskInProgress tip = tasks.get(tid);
+    if (tip != null) {
+      jvmManager.doStackTrace(tip.getTaskRunner());
+    }
+  }
+  
+  public void doStackTrace(String pid) {
+    TaskControllerContext context = new TaskControllerContext ();
+    context.pid = pid;
+    taskController.doStackTrace(context);
+  }
+
+  public boolean checkCGroupMemoryWatcherEnabled() {
+    return cgroupMemoryWatcher.checkWatchable();
+  }
+  
+  public void forceCleanTaskDir() {
+    this.directoryCleanupThread.forceClean();
+  }
+
 }

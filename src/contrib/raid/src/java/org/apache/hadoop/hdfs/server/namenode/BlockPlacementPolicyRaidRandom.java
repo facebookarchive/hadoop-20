@@ -38,8 +38,8 @@ import org.apache.hadoop.raid.Codec;
  */
 public class BlockPlacementPolicyRaidRandom extends BlockPlacementPolicyRaid {
   @Override
-  protected FileInfo getFileInfo(String path) throws IOException {
-    FileInfo info = super.getFileInfo(path);
+  protected FileInfo getFileInfo(FSInodeInfo srcINode, String path) throws IOException {
+    FileInfo info = super.getFileInfo(srcINode, path);
     if (info.type == FileType.NOT_RAID) {
       return new FileInfo(FileType.SOURCE, Codec.getCodec("rs"));
     }

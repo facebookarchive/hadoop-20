@@ -62,6 +62,10 @@ public abstract class JobInProgressTraits {
 
   public abstract boolean shouldSpeculateAllRemainingReduces();
 
+  public abstract boolean shouldLogCannotspeculativeMaps();
+
+  public abstract boolean shouldLogCannotspeculativeReduces();
+
   /**
    * Return a vector of completed TaskInProgress objects
    */

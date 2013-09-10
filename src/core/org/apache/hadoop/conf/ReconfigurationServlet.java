@@ -18,22 +18,20 @@
 
 package org.apache.hadoop.conf;
 
-import org.apache.commons.logging.*;
-
-import org.apache.commons.lang.StringEscapeUtils;
-
-import java.util.Collection;
-import java.util.Map;
-import java.util.Enumeration;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.util.Collection;
+import java.util.Enumeration;
+import java.util.Map;
 
-import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.apache.commons.lang.StringEscapeUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -94,9 +92,14 @@ public class ReconfigurationServlet extends HttpServlet {
     Configuration oldConf = reconf.getConf();
     Configuration newConf = new Configuration();
 
+    if (reconf instanceof ReconfigurableBase)
+      ((ReconfigurableBase) reconf).preProcessConfiguration(newConf);
+
     Collection<ReconfigurationUtil.PropertyChange> changes =
       ReconfigurationUtil.getChangedProperties(newConf,
                                                oldConf);
+    
+
 
     boolean changeOK = true;
 
@@ -148,6 +151,9 @@ public class ReconfigurationServlet extends HttpServlet {
     Configuration oldConf = reconf.getConf();
     Configuration newConf = new Configuration();
 
+    if (reconf instanceof ReconfigurableBase)
+      ((ReconfigurableBase) reconf).preProcessConfiguration(newConf); 
+    
     Enumeration<String> params = getParams(req);
 
     synchronized(oldConf) {
@@ -156,6 +162,9 @@ public class ReconfigurationServlet extends HttpServlet {
         String param = StringEscapeUtils.unescapeHtml(rawParam);
         String value =
           StringEscapeUtils.unescapeHtml(req.getParameter(rawParam));
+        if (reconf instanceof ReconfigurableBase)
+          param = ((ReconfigurableBase) reconf).preProcessKey(param);
+        
         if (value != null) {
           if (value.equals(newConf.getRaw(param)) || value.equals("default") ||
               value.equals("null") || value.equals("")) {
@@ -208,7 +217,7 @@ public class ReconfigurationServlet extends HttpServlet {
   @Override
   protected void doGet(HttpServletRequest req, HttpServletResponse resp)
     throws ServletException, IOException {
-    LOG.info("GET");
+    LOG.info("GET from address: " + req.getRemoteAddr());
     PrintWriter out = resp.getWriter();
 
     Reconfigurable reconf = getReconfigurable(req);
@@ -222,10 +231,13 @@ public class ReconfigurationServlet extends HttpServlet {
   /**
    * {@inheritDoc}
    */
+  @SuppressWarnings("unchecked")
   @Override
   protected void doPost(HttpServletRequest req, HttpServletResponse resp)
     throws ServletException, IOException {
-    LOG.info("POST");
+    LOG.info("POST from address: " + req.getRemoteAddr() + " Values trying to set: "
+        + mapToString(req.getParameterMap()));
+
     PrintWriter out = resp.getWriter();
 
     Reconfigurable reconf = getReconfigurable(req);
@@ -243,6 +255,17 @@ public class ReconfigurationServlet extends HttpServlet {
 
     out.println("<p><a href=\"" + req.getServletPath() + "\">back</a></p>");
     printFooter(out);
+  }
+  
+  private String mapToString(Map<String, Object[]> map){
+    StringBuilder sb = new StringBuilder();
+    for (Map.Entry<String, Object[]> entry: map.entrySet()){
+      sb.append(entry.getKey() + " -> [ ");
+      for (Object o : entry.getValue())
+        sb.append(o.toString() + " ");
+      sb.append("]\n");
+    }
+    return sb.toString();
   }
 
 }

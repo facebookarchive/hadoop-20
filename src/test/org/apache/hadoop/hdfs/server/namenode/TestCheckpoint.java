@@ -17,41 +17,48 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import junit.framework.TestCase;
-import java.io.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.List;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Random;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.DFSTestUtil;
-import org.apache.hadoop.hdfs.DistributedFileSystem;
-import org.apache.hadoop.hdfs.MiniDFSCluster;
-import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
-import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
-import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
-import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
-import org.apache.hadoop.hdfs.server.common.StorageInfo;
-import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
-import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
-import org.apache.hadoop.hdfs.tools.DFSAdmin;
-import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.test.GenericTestUtils;
-import org.apache.hadoop.util.InjectionEventI;
-import org.apache.hadoop.util.InjectionHandler;
-import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSTestUtil;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
+import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
+import org.apache.hadoop.hdfs.tools.DFSAdmin;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.test.GenericTestUtils;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
+import org.apache.hadoop.util.StringUtils;
 import org.junit.After;
-import org.junit.Before;
+import org.junit.Test;
 import org.mockito.Mockito;
 
 import com.google.common.base.Joiner;
@@ -59,7 +66,7 @@ import com.google.common.base.Joiner;
 /**
  * This class tests the creation and validation of a checkpoint.
  */
-public class TestCheckpoint extends TestCase {
+public class TestCheckpoint{
   
   final static Log LOG = LogFactory.getLog(TestCheckpoint.class);
   
@@ -80,7 +87,7 @@ public class TestCheckpoint extends TestCase {
     }
   }
 
-  private void writeFile(FileSystem fileSys, Path name, int repl)
+  public void writeFile(FileSystem fileSys, Path name, int repl)
     throws IOException {
     FSDataOutputStream stm = fileSys.create(name, true,
                                             fileSys.getConf().getInt("io.file.buffer.size", 4096),
@@ -93,7 +100,7 @@ public class TestCheckpoint extends TestCase {
   }
   
   
-  private void checkFile(FileSystem fileSys, Path name, int repl)
+  public void checkFile(FileSystem fileSys, Path name, int repl)
     throws IOException {
     assertTrue(fileSys.exists(name));
     int replication = fileSys.getFileStatus(name).getReplication();
@@ -101,7 +108,7 @@ public class TestCheckpoint extends TestCase {
     //We should probably test for more of the file properties.    
   }
   
-  private void cleanupFile(FileSystem fileSys, Path name)
+  public void cleanupFile(FileSystem fileSys, Path name)
     throws IOException {
     assertTrue(fileSys.exists(name));
     fileSys.delete(name, true);
@@ -111,6 +118,7 @@ public class TestCheckpoint extends TestCase {
   /*
    * Verify that namenode does not startup if one namedir is bad.
    */
+  @Test
   public void testNameDirError() throws IOException {
     LOG.info("Starting testNameDirError");
     Configuration conf = new Configuration();
@@ -143,6 +151,7 @@ public class TestCheckpoint extends TestCase {
   /*
    * Simulate namenode crashing after rolling edit log.
    */
+  @Test
   public void testSecondaryNamenodeError1()
     throws IOException {
     Configuration conf = new Configuration();
@@ -215,6 +224,7 @@ public class TestCheckpoint extends TestCase {
   /*
    * Simulate a namenode crash after uploading new image
    */
+  @Test
   public void testSecondaryNamenodeError2()
     throws IOException {
     Configuration conf = new Configuration();
@@ -277,6 +287,7 @@ public class TestCheckpoint extends TestCase {
   /*
    * Simulate a secondary namenode crash after rolling the edit log.
    */
+  @Test
   public void testSecondaryNamenodeError3()
     throws IOException {
     Configuration conf = new Configuration();
@@ -349,6 +360,7 @@ public class TestCheckpoint extends TestCase {
    * back to the name-node.
    * Used to truncate primary fsimage file.
    */
+  @Test
   public void testSecondaryFailsToReturnImage()
     throws IOException {
     Configuration conf = new Configuration();
@@ -404,6 +416,7 @@ public class TestCheckpoint extends TestCase {
    * The length header in the HTTP transfer should prevent
    * this from corrupting the NN.
    */
+  @Test
   public void testNameNodeImageSendFailWrongSize()
       throws IOException {
     System.out.println("Starting testNameNodeImageSendFailWrongSize");
@@ -415,6 +428,7 @@ public class TestCheckpoint extends TestCase {
    * The digest header in the HTTP transfer should prevent
    * this from corrupting the NN.
    */
+  @Test
   public void testNameNodeImageSendFailWrongDigest()
       throws IOException {
     System.out.println("Starting testNameNodeImageSendFailWrongDigest");
@@ -493,6 +507,7 @@ public class TestCheckpoint extends TestCase {
    * <li> Complete failed checkpoint for secondary node.
    * </ol>
    */
+  @Test
   public void testStartup() throws IOException {
     
     Configuration conf = new Configuration();
@@ -653,6 +668,7 @@ public class TestCheckpoint extends TestCase {
   /**
    * Tests checkpoint in HDFS.
    */
+  @Test
   public void testCheckpoint() throws IOException {
     Path file1 = new Path("checkpoint.dat");
     Path file2 = new Path("checkpoint2.dat");
@@ -738,6 +754,7 @@ public class TestCheckpoint extends TestCase {
   /**
    * Tests save namepsace.
    */
+  @Test
   public void testSaveNamespace() throws IOException {
     MiniDFSCluster cluster = null;
     DistributedFileSystem fs = null;
@@ -831,6 +848,7 @@ public class TestCheckpoint extends TestCase {
    * Test that the primary NN will not serve any files to a 2NN who doesn't
    * share its namespace ID, and also will not accept any files from one.
    */
+  @Test
   public void testNamespaceVerifiedOnFileTransfer() throws Exception {
     MiniDFSCluster cluster = null;
     
@@ -840,12 +858,11 @@ public class TestCheckpoint extends TestCase {
       cluster.waitActive();
       
       NameNode nn = cluster.getNameNode();
-      String fsName = NameNode.getHostPortString(
-          cluster.getNameNode().getHttpAddress());
+      String fsName = NetUtils.toIpPort(cluster.getNameNode().getHttpAddress());
 
       // Make a finalized log on the server side. 
       nn.rollEditLog();      
-      NNStorage dstStorage = Mockito.mock(NNStorage.class);
+      final NNStorage dstStorage = Mockito.mock(NNStorage.class);
       Collection<URI> dirs = new ArrayList<URI>();
       dirs.add(new URI("file:/tmp/dir"));     
       dstStorage.setStorageDirectories(dirs, dirs);
@@ -856,23 +873,34 @@ public class TestCheckpoint extends TestCase {
         .when(dstStorage).toColonSeparatedString();
       FSImage dstImage = Mockito.mock(FSImage.class);
       dstImage.storage = dstStorage;
-
-      File[] dstFiles = new File[1];
-      dstFiles[0] = new File("/tmp/temp");
+      Mockito.doReturn(new Iterator<StorageDirectory>() {
+        boolean returned = false;
+        @Override
+        public boolean hasNext() {
+          if (returned)
+            return false;
+          returned = true;
+          return true;
+        }
+        @Override
+        public StorageDirectory next() {
+          return dstStorage.new StorageDirectory(new File("/tmp/dir"));
+        }
+        @Override
+        public void remove() { }
+      }).when(dstStorage).dirIterator(Mockito.<NameNodeDirType>anyObject());
       
-      Mockito.doReturn(new File[] { new File("/wont-be-written")})
-      .when(dstStorage).getFiles(Mockito.<NameNodeDirType>anyObject(), Mockito.anyString());
+      List<OutputStream> oss = new ArrayList<OutputStream>();
+      oss.add(new ByteArrayOutputStream());
+      Mockito.doReturn(oss).when(dstImage).getCheckpointImageOutputStreams(Mockito.anyLong());
+
+      FSEditLog fsEditLog = Mockito.mock(FSEditLog.class);
+      Mockito.doReturn(new ArrayList<JournalManager>()).when(fsEditLog).getNonFileJournalManagers();
+      dstImage.editLog = fsEditLog;
+      dstImage.imageSet = new ImageSet(dstImage, dirs, null, null);
 
       try {
-        TransferFsImage.downloadImageToStorage(fsName, 0L, dstImage.storage, false);
-        fail("Storage info was not verified");
-      } catch (IOException ioe) {
-        String msg = StringUtils.stringifyException(ioe);
-        assertTrue(msg, msg.contains("but the secondary expected"));
-      }
-
-      try {
-        TransferFsImage.downloadEditsToStorage(fsName, new RemoteEditLog(), dstImage.storage);
+        TransferFsImage.downloadImageToStorage(fsName, 0L, dstImage, false);
         fail("Storage info was not verified");
       } catch (IOException ioe) {
         String msg = StringUtils.stringifyException(ioe);
@@ -896,6 +924,7 @@ public class TestCheckpoint extends TestCase {
   }
   
   /* Test case to test CheckpointSignature */
+  @Test
   public void testCheckpointSignature() throws IOException {
 
     MiniDFSCluster cluster = null;
@@ -926,6 +955,7 @@ public class TestCheckpoint extends TestCase {
    * correctly (by removing the storage directory)
    * See https://issues.apache.org/jira/browse/HDFS-2011
    */
+  @Test
   public void testWriteTransactionIdHandlesIOE() throws Exception {
     LOG.info("Check IOException handled correctly by writeTransactionIdFile");
     ArrayList<URI> fsImageDirs = new ArrayList<URI>();
@@ -952,7 +982,7 @@ public class TestCheckpoint extends TestCase {
     fsImageDirs.add(filePath2.toURI());
     editsDirs.add(filePath2.toURI());
     NNStorage nnStorage = new NNStorage(new Configuration(),
-      fsImageDirs, editsDirs);
+      fsImageDirs, editsDirs, null);
     try {
       assertTrue(
           "List of storage directories didn't have storageDirToCheck1.",
@@ -969,7 +999,7 @@ public class TestCheckpoint extends TestCase {
       FileUtil.fullyDelete(filePath1);
     }
     // Just call writeTransactionIdFile using any random number
-    nnStorage.writeTransactionIdFileToStorage(1);
+    nnStorage.writeTransactionIdFileToStorage(1, null);
     List<StorageDirectory> listRsd = nnStorage.getRemovedStorageDirs();
     assertTrue("Removed directory wasn't what was expected",
                listRsd.size() > 0 && listRsd.get(listRsd.size() - 1).getRoot().

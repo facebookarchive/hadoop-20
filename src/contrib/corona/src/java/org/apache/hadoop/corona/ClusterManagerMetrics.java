@@ -96,6 +96,10 @@ class ClusterManagerMetrics implements Updater {
   private Scheduler scheduler;
   /** Cluster manager session notifier for metrics. */
   private SessionNotifier sessionNotifier;
+  /** Number of task tracker get restarted */
+  private final MetricsIntValue numTaskTrackerRestarted;
+  /** Number of remote job tracker timedout */
+  private final MetricsIntValue numRemoteJTTimedout;
 
   /**
    * Constructor.
@@ -123,6 +127,8 @@ class ClusterManagerMetrics implements Updater {
     totalSessionCount = new MetricsTimeVaryingInt("total_sessions", registry);
     pendingCallsCount = new MetricsIntValue("num_pending_calls", registry);
     numCJTFailures = new MetricsTimeVaryingInt("num_cjt_failures", registry);
+    numTaskTrackerRestarted = new MetricsIntValue("num_task_tracker_restarted", registry);
+    numRemoteJTTimedout = new MetricsIntValue("num_remotejt_timedout", registry);
   }
 
   /**
@@ -209,6 +215,23 @@ class ClusterManagerMetrics implements Updater {
    */
   public void setAliveNodes(int numAlive) {
     aliveNodes.set(numAlive);
+  }
+  
+  /**
+   * num of task trackers get restarted
+   * @param num The number of task trackers get restarted
+   */
+  public void restartTaskTracker(int num) {
+    this.numTaskTrackerRestarted.inc(num);
+  }
+
+  /**
+  /**
+   * num of remote JT timedout
+   * @param num The number of remote JT timedout
+   */
+  public void timeoutRemoteJT(int num) {
+    this.numRemoteJTTimedout.inc(num);
   }
 
   /**

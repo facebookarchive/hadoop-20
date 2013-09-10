@@ -180,6 +180,22 @@ public class LeaseManager {
                      leaseOpenTime.openTime :
                      System.currentTimeMillis());
    }
+   
+   /**
+    * Find the pathname for the specified pendingFile
+    */
+   synchronized String findPath(INodeFileUnderConstruction pendingFile) 
+         throws IOException {
+     Lease lease = getLease(pendingFile.getClientName());
+     if (lease != null) {
+       String src = lease.findPath(pendingFile);
+       if (src != null) {
+         return src;
+       }
+     }
+     throw new IOException("pendingFile (=" + pendingFile + ") not found."
+           + "(lease=" + lease + ")");
+   }
  
   /**
    * Remove the specified lease and src.
@@ -330,6 +346,18 @@ public class LeaseManager {
     public boolean expiredSoftLimit() {
       return FSNamesystem.now() - lastUpdate > softLimit;
     }
+    
+    /**
+     * @return the path associated with the pendingFile and null if not found
+     */
+    private String findPath(INodeFileUnderConstruction pendingFile) {
+      for (String src : paths) {
+        if (fsnamesystem.dir.getFileINode(src) == pendingFile) {
+          return src;
+        }
+      }
+      return null;
+    }
 
     /** Does this lease contain any path? */
     boolean hasPath() {return !paths.isEmpty();}
@@ -472,6 +500,16 @@ public class LeaseManager {
         InjectionHandler.processEvent(InjectionEvent.LEASEMANAGER_CHECKLEASES);
         fsnamesystem.writeLock();
         try {
+          // this check needs to be done when holding write lock to ensure
+          // the interruption from FSNamesystem.stopLeaseMonitor() does not
+          // come during checkLeases(). Please see
+          // FSNamesystem.stopLeaseMonitor(). This is crucial during failover!!
+          if ((Thread.currentThread().isInterrupted() || !running)
+              && InjectionHandler
+                  .trueCondition(InjectionEvent.LEASEMANAGER_CHECKINTERRUPTION)) {
+            LOG.info("LeaseManager received shutdown signal - exiting");
+            break;
+          }
           if (!fsnamesystem.isInSafeMode()) {
             checkLeases();
           }
@@ -480,6 +518,7 @@ public class LeaseManager {
         }
 
         try {
+          // The interruption should only affect the sleep()
           Thread.sleep(leaseCheckInterval);
         } catch(InterruptedException ie) {
           if (LOG.isDebugEnabled()) {
@@ -518,6 +557,7 @@ public class LeaseManager {
         } catch (IOException e) {
           LOG.error("Cannot release the path "+p+" in the lease "+oldest, e);
           removeLease(oldest, p);
+          fsnamesystem.getFSNamesystemMetrics().numLeaseManagerMonitorExceptions.inc();
         }
       }
     }

@@ -278,6 +278,23 @@
       name="jackson-mapper-asl"
       rev="1.7.9"
       conf="common->default"/>
-    </dependencies>
-  
+    <dependency org="org.apache.zookeeper"
+      name="zookeeper"
+      rev="3.4.3"
+      conf="common->default"/>
+    <!-- swift -->
+    <dependency org="com.facebook.swift"
+      name="swift-codec"
+      rev="${swift.version}"
+      conf="common->default"/>
+    <dependency org="com.facebook.swift"
+      name="swift-service"
+      rev="${swift.version}"
+      conf="common->default"/>
+    <dependency org="com.facebook.swift"
+      name="swift-annotations"
+      rev="${swift.version}"
+      conf="common->default"/>
+  </dependencies>
+
 </ivy-module>

@@ -1,5 +1,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
@@ -10,15 +12,15 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSTestUtil;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
+import org.apache.hadoop.hdfs.TestDistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.NumberReplicas;
-import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeActivtyMBean;
 
 import junit.framework.TestCase;
 
@@ -28,6 +30,36 @@ import junit.framework.TestCase;
  */
 public class TestNodeCount extends TestCase {
   static final Log LOG = LogFactory.getLog(TestNodeCount.class);
+  
+  
+  public void testCreateFileParentIsFile() throws IOException {
+    Configuration conf = new Configuration();
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 0, true, null);
+
+    try {
+      FileSystem fs = cluster.getFileSystem();
+      INodeDirectoryWithQuota in =
+          (INodeDirectoryWithQuota) cluster.getNameNode().getNamesystem().dir.getExistingPathINodes("/")[0];
+
+      TestCase.assertNotNull(DFSUtil.convertToDFS(fs));
+      
+      TestDistributedFileSystem.createFile(fs, new Path("/testCreateFileParentIsFile"));
+      TestCase.assertEquals(2, in.numItemsInTree());
+
+      
+      try {
+        TestDistributedFileSystem.createFile(fs, new Path("/testCreateFileParentIsFile/f"));
+        TestCase.fail();
+      } catch (FileNotFoundException ioe) {        
+      }
+      TestCase.assertEquals(2, in.numItemsInTree());
+      
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+    }    
+  }
   
   public void testNodeCount() throws Exception {
     // start a mini dfs cluster of 2 nodes

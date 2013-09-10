@@ -19,6 +19,7 @@ package org.apache.hadoop.hdfs;
 
 import org.apache.hadoop.hdfs.protocol.ClientDatanodeProtocol;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
+import org.apache.hadoop.hdfs.protocol.ClientProxyProtocol;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
@@ -41,6 +42,7 @@ public class HDFSPolicyProvider extends PolicyProvider {
     new Service("security.namenode.protocol.acl", NamenodeProtocol.class),
     new Service("security.refresh.policy.protocol.acl", 
                 RefreshAuthorizationPolicyProtocol.class),
+    new Service("security.client.proxy.protocol.acl", ClientProxyProtocol.class),
   };
   
   @Override

@@ -19,7 +19,10 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.Collection;
 
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.Transition;
 import org.apache.hadoop.hdfs.server.common.Storage.FormatConfirmable;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
@@ -34,11 +37,11 @@ import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 public interface JournalManager extends Closeable, FormatConfirmable  {
   
   /**
-   * Format the underlying storage, removing any previously
-   * stored data.
+   * Transition the underlying storage
    */
-  void format(StorageInfo si) throws IOException;
-  
+  void transitionJournal(StorageInfo si, Transition transition,
+      StartupOption startOpt) throws IOException;
+
   /**
    * Begin writing to a new segment of the log stream, which starts at
    * the given transaction ID.
@@ -50,38 +53,7 @@ public interface JournalManager extends Closeable, FormatConfirmable  {
    * as finalized and complete.
    */
   void finalizeLogSegment(long firstTxId, long lastTxId) throws IOException;
-
-   /**
-   * Get the input stream starting with fromTxnId from this journal manager.
-   * Validates inprogress segments.
-   * @param fromTxnId the first transaction id we want to read
-   * @return the stream starting with transaction fromTxnId
-   * @throws IOException if a stream cannot be found.
-   */
-  EditLogInputStream getInputStream(long fromTxnId) throws IOException;
   
-  /**
-  * Get the input stream starting with fromTxnId from this journal manager
-  * @param fromTxnId the first transaction id we want to read
-  * @param validateInProgressSegments whether the inprogress segments need validation
-  *   this can be used for tailers, which do not need to know last transaction id.
-  * @return the stream starting with transaction fromTxnId
-  * @throws IOException if a stream cannot be found.
-  */
-  EditLogInputStream getInputStream(long fromTxnId,
-      boolean validateInProgressSegments) throws IOException;
-
-  /**
-   * Get the number of transaction contiguously available from fromTxnId.
-   *
-   * @param fromTxnId Transaction id to count from
-   * @return The number of transactions available from fromTxnId
-   * @throws IOException if the journal cannot be read.
-   * @throws CorruptionException if there is a gap in the journal at fromTxnId.
-   */
-  long getNumberOfTransactions(long fromTxnId) 
-      throws IOException, CorruptionException;
-
   /**
    * The JournalManager may archive/purge any logs for transactions less than
    * or equal to minImageTxId.
@@ -92,18 +64,19 @@ public interface JournalManager extends Closeable, FormatConfirmable  {
    */
   void purgeLogsOlderThan(long minTxIdToKeep)
     throws IOException;
+  
+  /**
+   * Set the highest successfully committed txid seen by the writer.
+   * @param txid
+   * @param force true if just set the valuable without any checking or metric updating
+   * @throws IOException
+   */
+  void setCommittedTxId(long txid, boolean force) throws IOException;
 
   /**
    * Recover segments which have not been finalized.
    */
   void recoverUnfinalizedSegments() throws IOException;
-  
-  /**
-   * Checks if a segment starting at given txid is in progress.
-   * 
-   * @param startTxId start txid of the segment
-   */
-  boolean isSegmentInProgress(long startTxId) throws IOException;
   
   /**
    * Return a manifest of what edit logs are available. All available
@@ -133,4 +106,34 @@ public interface JournalManager extends Closeable, FormatConfirmable  {
       super(reason);
     }
   }
+  
+  /**
+   * Selects input streams starting with fromTxnId from this journal manager.
+   * Add them to "streams". There will be one stream per each underlying
+   * log segment.
+   * 
+   * @param validateInProgressSegments - validate non-finalized segments
+   * @param fromTxnId the first transaction id we want to read
+   * @throws IOException
+   */
+  public void selectInputStreams(Collection<EditLogInputStream> streams,
+      long fromTxId, boolean inProgressOk, boolean validateInProgressSegments)
+      throws IOException;
+  
+  /**
+   * Get HTML version of toString()
+   * @return
+   */
+  public String toHTMLString();
+  
+  /**
+   * Returns true if this journal is used for storing images together with edit
+   * log.
+   */
+  public boolean hasImageStorage();
+  
+  /**
+   * Analyze the state of remote journal storage.
+   */
+  public RemoteStorageState analyzeJournalStorage() throws IOException;
 }

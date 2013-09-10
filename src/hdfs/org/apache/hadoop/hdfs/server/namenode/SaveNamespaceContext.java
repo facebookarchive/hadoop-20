@@ -24,6 +24,7 @@ package org.apache.hadoop.hdfs.server.namenode;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
@@ -47,6 +48,8 @@ class SaveNamespaceContext {
    */
   private volatile String cancelReason = null;
   
+  private int numFailures = 0;
+  
   SaveNamespaceContext() {}
 
   FSNamesystem getSourceNamesystem() {
@@ -62,8 +65,14 @@ class SaveNamespaceContext {
     this.txid = txid;
   }
 
-  void reportErrorOnStorageDirectory(StorageDirectory sd) {
-    errorSDs.add(sd);
+  synchronized void reportErrorOnStorageDirectory(StorageDirectory sd) {
+    if (sd != null)
+      errorSDs.add(sd);
+    numFailures++;
+  }
+  
+  synchronized int getNumFailures() {
+    return numFailures;
   }
 
   List<StorageDirectory> getErrorSDs() {
@@ -96,5 +105,6 @@ class SaveNamespaceContext {
     this.sourceNamesystem = null;
     this.txid = HdfsConstants.INVALID_TXID;
     this.errorSDs.clear();
+    this.numFailures = 0;
   }
 }

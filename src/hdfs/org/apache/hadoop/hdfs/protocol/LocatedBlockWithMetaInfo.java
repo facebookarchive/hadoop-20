@@ -20,7 +20,11 @@ package org.apache.hadoop.hdfs.protocol;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.List;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
@@ -29,31 +33,49 @@ import org.apache.hadoop.io.WritableFactory;
  * A block with its location and NameNode meta info
  * like data transfer version number and namespace id.
  */
+@ThriftStruct
 public class LocatedBlockWithMetaInfo extends VersionedLocatedBlock {
   private int namespaceid = -1;  // namespace id
   private int methodFingerPrint;
 
   LocatedBlockWithMetaInfo() {
   }
-  
-  public LocatedBlockWithMetaInfo(Block b, DatanodeInfo[] locs, long startOffset, 
+
+  public LocatedBlockWithMetaInfo(Block b, DatanodeInfo[] locs, long startOffset,
       int dataProtocolVersion, int namespaceid, int methodFingerPrint) {
     super(b, locs, startOffset, dataProtocolVersion);
     this.namespaceid = namespaceid;
     this.methodFingerPrint = methodFingerPrint;
   }
 
+  /** Shallow copy constructor */
+  public <V extends LocatedBlockWithMetaInfo> LocatedBlockWithMetaInfo(V other) {
+    this(other.getBlock(), other.getLocations(), other.getStartOffset(),
+        other.getDataProtocolVersion(), other.getNamespaceID(), other.getMethodFingerPrint());
+  }
+
+  @ThriftConstructor
+  public LocatedBlockWithMetaInfo(@ThriftField(1) Block block,
+      @ThriftField(2) List<DatanodeInfo> datanodes, @ThriftField(3) long startOffset,
+      @ThriftField(4) boolean corrupt, @ThriftField(5) int dataProtocolVersion,
+      @ThriftField(6) int namespaceId, @ThriftField(7) int methodFingerPrint) {
+    super(block, datanodes, startOffset, corrupt, dataProtocolVersion);
+    this.namespaceid = namespaceId;
+    this.methodFingerPrint = methodFingerPrint;
+  }
+
   /**
    * Get namespace id
    */
+  @ThriftField(6)
   public int getNamespaceID() {
     return this.namespaceid;
   }
-  
+
+  @ThriftField(7)
   public int getMethodFingerPrint() {
     return methodFingerPrint;
   }
-
 
   //////////////////////////////////////////////////
   // Writable
@@ -71,7 +93,7 @@ public class LocatedBlockWithMetaInfo extends VersionedLocatedBlock {
     out.writeInt(methodFingerPrint);
     super.write(out);
   }
-  
+
   public void readFields(DataInput in) throws IOException {
     this.namespaceid = in.readInt();
     this.methodFingerPrint = in.readInt();

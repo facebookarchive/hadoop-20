@@ -30,6 +30,7 @@ import java.util.Random;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -37,8 +38,10 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
+import org.apache.log4j.Level;
 
 import static org.junit.Assert.*;
 
@@ -47,8 +50,12 @@ public class LocalReadWritePerf extends Configured implements Tool {
 
   final static String TEST_DIR = new File(System.getProperty("test.build.data",
       "benchmarks/TestLocalReadWrite")).getAbsolutePath();
+  
+  {
+    ((Log4JLogger)DataNode.ClientTraceLog).getLogger().setLevel(Level.OFF);
+  }
 
-  final int NUM_DATANODES = 1;
+  final int NUM_DATANODES = 3;
   final int MAX_BUF_SIZE = 1024 * 1024;
   Random rand = null;
 
@@ -111,17 +118,36 @@ public class LocalReadWritePerf extends Configured implements Tool {
     int bufSize = (int) Math.min(MAX_BUF_SIZE, fileSize);
     byte[] data = new byte[bufSize];
     long toWrite = fileSize;
+    rand.nextBytes(data);
     while (toWrite > 0) {
-      rand.nextBytes(data);
       int len = (int) Math.min(toWrite, bufSize);
       os.write(data, 0, len);
       toWrite -= len;
     }
     os.sync();
     os.close();
-
-    FileStatus stat = fs.getFileStatus(filePath);
-    LOG.info("Block Size: " + stat.getBlockSize());
+  }
+  
+  /**
+   * Append to a hdfs file.
+   */
+  private long appendFile(Path filePath, long sizeKB) throws IOException {
+    long start = System.nanoTime();
+    FSDataOutputStream os = fs.append(filePath);
+    long toWrite = sizeKB * 1024;
+    int bufSize = (int) Math.min(MAX_BUF_SIZE, toWrite);
+    byte[] data = new byte[bufSize];
+    rand.nextBytes(data);
+    while (toWrite > 0) {
+      int len = (int) Math.min(toWrite, bufSize);
+      os.write(data, 0, len);
+      toWrite -= len;
+    }
+    long appendTime = System.nanoTime() - start;
+    //os.sync();
+    os.close();
+    
+    return appendTime;
   }
 
   /**
@@ -134,8 +160,8 @@ public class LocalReadWritePerf extends Configured implements Tool {
     int bufSize = (int) Math.min(MAX_BUF_SIZE, fileSize);
     byte[] data = new byte[bufSize];
     long toWrite = fileSize;
+    rand.nextBytes(data);
     while (toWrite > 0) {
-      rand.nextBytes(data);
       int len = (int) Math.min(toWrite, bufSize);
       os.write(data, 0, len);
       toWrite -= len;
@@ -147,25 +173,49 @@ public class LocalReadWritePerf extends Configured implements Tool {
   class WriteWorker extends Thread {
     private TestFileInfo testInfo;
     private long bytesWrite;
-    private Boolean error;
+    private boolean error;
+    private boolean isAppend;
 
     WriteWorker(TestFileInfo testInfo, int id) {
+      this(testInfo, id, false);
+    }
+    
+    WriteWorker(TestFileInfo testInfo, int id, boolean isAppend) {
       super("WriteWorker-" + id);
       this.testInfo = testInfo;
       bytesWrite = 0;
       error = false;
+      this.isAppend = isAppend;
     }
 
     @Override
     public void run() {
+      try {
+        if (isAppend) {
+          FSDataOutputStream out = 
+              fs.create(new Path(testInfo.filePath), true,
+                  getConf().getInt("io.file.buffer.size", 4096), 
+                  (short)3, blockSize);
+          out.close();
+        }
+      } catch (IOException ex) {
+        LOG.error(getName() + ": Error while testing write", ex);
+        error = true;
+        fail(ex.getMessage());
+      }
+      long appendTime = 0;
       for (int i=0; i < nIterations; i++) {
         try {
           if (testInfo.localFile) {
             writeLocalFile(new File(testInfo.filePath + "_" + i), 
                 testInfo.fileSize / 1024);
           } else {
-            writeFile(new Path(testInfo.filePath + "_" + i), 
+            if (isAppend) {
+              appendTime += appendFile(new Path(testInfo.filePath), testInfo.fileSize / 1024);
+            } else {
+              writeFile(new Path(testInfo.filePath + "_" + i), 
                 testInfo.fileSize / 1024);
+            }
           }
           bytesWrite += testInfo.fileSize;
         } catch (IOException ex) {
@@ -173,6 +223,9 @@ public class LocalReadWritePerf extends Configured implements Tool {
           error = true;
           fail(ex.getMessage());
         }
+      }
+      if (isAppend) {
+        System.out.println("Time spent in append data: " + appendTime);
       }
     }
 
@@ -443,7 +496,7 @@ public class LocalReadWritePerf extends Configured implements Tool {
     return res;
   }
 
-  private boolean doWriteFile(boolean local)
+  private boolean doWriteFile(boolean local, boolean isAppend)
       throws IOException {
     WriteWorker[] workers = new WriteWorker[nThreads];
     for (int i = 0; i < workers.length; i++) {
@@ -460,7 +513,7 @@ public class LocalReadWritePerf extends Configured implements Tool {
         testInfo.fileSize = fileSizeKB * 1024;
       }
 
-      workers[i] = new WriteWorker(testInfo, i);
+      workers[i] = new WriteWorker(testInfo, i, isAppend);
     }
 
     long startTime = System.currentTimeMillis();
@@ -485,7 +538,7 @@ public class LocalReadWritePerf extends Configured implements Tool {
     if (local) {
       report = "--- Local Write files Report: ";
     } else {
-      report = "--- DFS Write files Report: ";
+      report = "--- DFS " + (isAppend ? "Append" : "Write") +" files Report: ";
     }
     for (WriteWorker worker : workers) {
       long nwrite = worker.getBytesWrite();
@@ -510,6 +563,7 @@ public class LocalReadWritePerf extends Configured implements Tool {
   }
 
   public static void main(String[] argv) throws Exception {
+    Thread.sleep(5000);
     System.exit(ToolRunner.run(new LocalReadWritePerf(), argv));
   }
   
@@ -519,6 +573,7 @@ public class LocalReadWritePerf extends Configured implements Tool {
         + "operator: 0 -- read from same file \n "
         + "\t1 -- read from different files \n "
         + "\t2 -- write to different files\n"
+        + "\t3 -- append to files\n"
         + "[-n nThreads]   number of reader/writer threads (4 by default)\n"
         + "[-f fileSizeKB]   the size of each test file in KB (256 by default)\n"
         + "[-b blockSizeKB]  the size of the block in KB \n"
@@ -578,10 +633,15 @@ public class LocalReadWritePerf extends Configured implements Tool {
         break;
 
       case 2:
-        if (!doWriteFile(false)) {
+        if (!doWriteFile(false, false)) {
           System.out.println("check log for errors");
         }
-        if (!doWriteFile(true)) {
+        if (!doWriteFile(true, false)) {
+          System.out.println("check log for errors");
+        }
+        break;
+      case 3:
+        if (!doWriteFile(false, true)) {
           System.out.println("check log for errors");
         }
       }

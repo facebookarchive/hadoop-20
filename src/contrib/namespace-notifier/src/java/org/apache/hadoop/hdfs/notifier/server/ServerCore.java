@@ -18,11 +18,11 @@
 package org.apache.hadoop.hdfs.notifier.server;
 
 import java.io.IOException;
-import java.net.URI;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -43,15 +43,11 @@ import org.apache.hadoop.hdfs.notifier.InvalidClientIdException;
 import org.apache.hadoop.hdfs.notifier.NamespaceEvent;
 import org.apache.hadoop.hdfs.notifier.NamespaceEventKey;
 import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
-import org.apache.hadoop.hdfs.notifier.NotifierConfig;
 import org.apache.hadoop.hdfs.notifier.NotifierUtils;
 import org.apache.hadoop.hdfs.notifier.ServerHandler;
 import org.apache.hadoop.hdfs.notifier.TransactionIdTooOldException;
 import org.apache.hadoop.hdfs.notifier.server.metrics.NamespaceNotifierMetrics;
-import org.apache.hadoop.hdfs.protocol.LayoutVersion;
-import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
-import org.apache.hadoop.hdfs.server.common.Util;
-import org.apache.hadoop.hdfs.server.namenode.NNStorage;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.util.Daemon;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.protocol.TProtocol;
@@ -71,13 +67,14 @@ public class ServerCore implements IServerCore {
    
   public static final String DISPATCHER_COUNT = "notifier.dispatcher.count";
   public static final String LISTENING_PORT = "notifier.thrift.port";
-  public static final String SERVER_ID = "notifier.server.id";
   
   // The timeout after which the core will stop trying to do a graceful
   // shutdown and will interrupt the threads
   private static final int SHUTDOWN_TIMEOUT = 5000;
   
   private static final int SOCKET_READ_TIMEOUT = 25000;
+  
+  private static final Random random = new Random();
   
   // The number of dispatcher threads
   private int dispatcherCount;
@@ -115,7 +112,7 @@ public class ServerCore implements IServerCore {
   // Hadoop configuration
   private Configuration conf;
   
-  private long serverId;
+  private String serverId = null; 
   
   private volatile boolean shouldShutdown = false;
   
@@ -128,19 +125,49 @@ public class ServerCore implements IServerCore {
   
   private volatile boolean started = false;  
   
+  // work with the federation of the namenodes.
+  private String serviceName = "";
+  
+  @Override
+  public String getServiceName() {
+    return this.serviceName;
+  }
 
-  public ServerCore(Configuration configuration) throws ConfigurationException {
-    conf = configuration;
-    init(conf);
+  public ServerCore(Configuration conf, StartupInfo info) throws ConfigurationException {
+    this.conf = conf;
+    init(this.conf);
     initDataStructures();
+    checkAndSetServiceName(conf, info);
   }
   
-  public ServerCore() throws ConfigurationException {
+  public ServerCore(StartupInfo info) throws ConfigurationException {
     conf = initConfiguration();
     init(conf);
     initDataStructures();
+    checkAndSetServiceName(conf, info);
   }
   
+  // only used in test cases
+  public ServerCore(Configuration conf) throws ConfigurationException {
+    this(conf, new StartupInfo(""));
+  }
+  
+  /**
+   * Check if this is a fedrated cluster and set the service name.
+   * @throws ConfigurationException
+   */
+  private void checkAndSetServiceName(Configuration conf, StartupInfo info) 
+              throws ConfigurationException {
+    String fedrationMode = conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES);
+    String serviceName = info.serviceName;
+    
+    if (fedrationMode != null && !fedrationMode.trim().isEmpty()) {
+      if (serviceName == null || serviceName.trim().isEmpty()) {
+        throw new ConfigurationException("This is a fedrated DFS cluster, nameservice id is required.");
+      }
+      this.serviceName = serviceName;
+    }
+  }
   
   private void initDataStructures() {
     clientsData = new ConcurrentHashMap<Long, ClientData>();
@@ -149,7 +176,6 @@ public class ServerCore implements IServerCore {
     
     metrics = new NamespaceNotifierMetrics(conf, serverId);
   }
-  
   
   @Override
   public void init(IServerLogReader logReader, IServerHistory serverHistory,
@@ -185,10 +211,10 @@ public class ServerCore implements IServerCore {
     tserver = new TNonblockingServer(serverArgs);
     
     // Start the worker threads
-    threads.add(new Thread(serverHistory));
-    threads.add(new Thread(dispatcher));
-    threads.add(new Thread(logReader));
-    threads.add(new Thread(new ThriftServerRunnable()));
+    threads.add(new Thread(serverHistory, "Thread-ServerHistory"));
+    threads.add(new Thread(dispatcher, "Thread-Dispatcher"));
+    threads.add(new Thread(logReader, "Thread-LogReader"));
+    threads.add(new Thread(new ThriftServerRunnable(), "Thread-ThriftServer"));
     LOG.info("Starting thrift server on port " + listeningPort);
     for (Thread t : threads) {
       t.start();
@@ -280,7 +306,12 @@ public class ServerCore implements IServerCore {
     
     dispatcherCount = conf.getInt(DISPATCHER_COUNT, -1);
     listeningPort = conf.getInt(LISTENING_PORT, -1);
-    serverId = conf.getLong(SERVER_ID, -1);
+    try {
+      serverId = generateServerID();
+    } catch (UnknownHostException e) {
+      throw new ConfigurationException("Can not generate the serverId from " +
+      		"hostname.", e);
+    }
     LOG.info("init the configuration: " + 
               dispatcherCount + " " + listeningPort + " " + serverId);
 
@@ -292,10 +323,15 @@ public class ServerCore implements IServerCore {
       throw new ConfigurationException("Invalid or missing listeningPort: " +
           listeningPort);
     }
-    if (serverId == -1) {
+    if (serverId == null || serverId.isEmpty()) {
       throw new ConfigurationException("Invalid or missing serverId: " +
           serverId);
     }
+  }
+  
+  private String generateServerID() throws UnknownHostException {
+    String hostname = InetAddress.getLocalHost().getHostName();
+    return hostname + "_" + random.nextLong();
   }
 
 
@@ -359,7 +395,7 @@ public class ServerCore implements IServerCore {
 
     // Add the notification to the queues
     Set<Long> clientsForNotification = getClientsForNotification(n);
-    if (clientsForNotification != null) {
+    if (clientsForNotification != null && clientsForNotification.size() > 0) {
       synchronized (clientsForNotification) {
         for (Long clientId : clientsForNotification) {
           ConcurrentLinkedQueue<NamespaceNotification> clientQueue =
@@ -474,11 +510,18 @@ public class ServerCore implements IServerCore {
       LOG.debug("getClientsForNotification called for " +
           NotifierUtils.asString(n) + ". Searching at path " + eventPath);
     }
+    List<String> ancestors = NotifierUtils.getAllAncestors(eventPath);
+    Set<Long> clients = new HashSet<Long>();
     synchronized (subscriptions) {
-      return subscriptions.get(new NamespaceEventKey(eventPath, n.type));
+      for (String path : ancestors) {
+        Set<Long> clientsOnPath = subscriptions.get(new NamespaceEventKey(path, n.type));
+        if (clientsOnPath != null) {
+          clients.addAll(clientsOnPath);
+        }
+      }
     }
+    return clients;
   }
-  
   
   /**
    * @return the set of clients id's for all the clients that are currently
@@ -575,7 +618,7 @@ public class ServerCore implements IServerCore {
    * @return the id of this server
    */
   @Override
-  public long getId() {
+  public String getId() {
     return serverId;
   }
 
@@ -697,26 +740,11 @@ public class ServerCore implements IServerCore {
   }
   
   static IServerLogReader getReader(IServerCore core) throws IOException {
-    // edits directory uri
-    String editsString = core.getConfiguration().get(
-        NotifierConfig.NOTIFIER_EDITS_SOURCE);
-    URI editsURI = Util.stringAsURI(editsString);
-    int lv = NotifierUtils.getVersion(editsURI);
-
-    // for transactional layout, we operate on journal abstraction
-    if (LayoutVersion.supports(Feature.TXID_BASED_LAYOUT, lv)) {
-      // transaction based reader
-      return new ServerLogReaderTransactional(core, editsURI);
-    } else if (editsURI.getScheme().equals(NNStorage.LOCAL_URI_SCHEME)) {
-      // pre-transaction based reader
-      return new ServerLogReaderPreTransactional(core, editsURI);
-    } else {
-      // otherwise something is inconsistent
-      throw new IOException("Error for journal URI: " + editsString);
-    }    
+    // we only support avatar version of hdfs now.
+    return new ServerLogReaderAvatar(core);
   }
   
-  public static ServerCore createNotifier(Configuration conf) {
+  public static ServerCore createNotifier(Configuration conf, String serviceName) {
     IServerDispatcher dispatcher;
     IServerLogReader logReader;
     IServerHistory serverHistory;
@@ -725,7 +753,7 @@ public class ServerCore implements IServerCore {
     Daemon coreDaemon = null;
     
     try {
-      core = new ServerCore(conf);
+      core = new ServerCore(conf, new StartupInfo(serviceName));
       
       serverHistory = new ServerHistory(core, false); // TODO - enable ramp-up
       // we need to instantiate appropriate reader based on VERSION file
@@ -754,6 +782,33 @@ public class ServerCore implements IServerCore {
     } 
     return core;
   } 
+  
+  public static class StartupInfo {
+    String serviceName;
+    
+    public StartupInfo(String serviceName) {
+      this.serviceName = serviceName;
+    }
+  }
+  
+  private static StartupInfo parseArguments(String[] args) {
+    String serviceName = "";
+    int argsLen = (args == null) ? 0 : args.length;
+    for (int i = 0; i < argsLen; i++) {
+      String cmd = args[i];
+      if ("-service".equalsIgnoreCase(cmd)) {
+        if (++i < argsLen) {
+          serviceName = args[i];
+        } else {
+          return null;
+        }
+      } else {
+        return null;
+      }
+    }
+    
+    return new StartupInfo(serviceName);
+  }
 
   public static void main(String[] args) {
     IServerDispatcher dispatcher;
@@ -764,7 +819,8 @@ public class ServerCore implements IServerCore {
     Daemon coreDaemon = null;
     
     try {
-      core = new ServerCore();
+      StartupInfo info = parseArguments(args);
+      core = new ServerCore(info);
       
       serverHistory = new ServerHistory(core, false); // TODO - enable ramp-up
       // we need to instantiate appropriate reader based on VERSION file

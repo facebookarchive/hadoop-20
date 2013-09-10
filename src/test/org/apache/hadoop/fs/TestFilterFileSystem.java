@@ -25,6 +25,8 @@ import java.lang.reflect.Modifier;
 import junit.framework.TestCase;
 import org.apache.commons.logging.Log;
 import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.io.ReadOptions;
+import org.apache.hadoop.io.WriteOptions;
 import org.apache.hadoop.util.Progressable;
 
 public class TestFilterFileSystem extends TestCase {
@@ -41,6 +43,8 @@ public class TestFilterFileSystem extends TestCase {
     public boolean createNewFile(Path f) { return false; }
     public boolean mkdirs(Path f) { return false; }
     public FSDataInputStream open(Path f) { return null; }
+    public FSDataInputStream open(Path f, int bufferSize, ReadOptions options) { return null;}
+    public FSDataInputStream open(Path f, ReadOptions options) { return null;}
     public FSDataOutputStream create(Path f) { return null; }
     public FSDataOutputStream create(Path f, boolean overwrite) { return null; }
     public FSDataOutputStream create(Path f, Progressable progress) {
@@ -91,6 +95,13 @@ public class TestFilterFileSystem extends TestCase {
         Progressable progress) throws IOException {
       return null;
     }
+    public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
+        boolean overwrite,
+        int bufferSize, short replication, long blockSize,
+        Progressable progress, boolean forceSync, boolean doParallelWrites,
+        WriteOptions options) throws IOException {
+      return null;
+    }
     public FSDataOutputStream create(Path f,
 		FsPermission permission,
         boolean overwrite,
@@ -110,6 +121,8 @@ public class TestFilterFileSystem extends TestCase {
       return null; }
     public RemoteIterator<FileStatus> listLocatedStatus(Path file,
         PathFilter filter) { return null; }
+    public RemoteIterator<LocatedBlockFileStatus> listLocatedBlockStatus(
+        Path file) {return null; }
     public FileStatus[] listLocatedStatus(Path[] files) { return null; }
     public FileStatus[] listLocatedStatus(Path[] files, PathFilter filter) { return null; }
     public FileStatus[] globStatus(Path pathPattern) { return null; }

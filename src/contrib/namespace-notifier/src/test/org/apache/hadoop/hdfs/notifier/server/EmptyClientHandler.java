@@ -31,14 +31,14 @@ import org.apache.thrift.TException;
 
   @Override
   public void handleNotification(NamespaceNotification notification,
-      long serverId) throws InvalidServerIdException, TException {}
+      String serverId) throws InvalidServerIdException, TException {}
 
   @Override
-  public void heartbeat(long serverId) throws InvalidServerIdException,
+  public void heartbeat(String serverId) throws InvalidServerIdException,
       TException {}
 
   @Override
-  public void registerServer(long clientId, long serverId, long token)
+  public void registerServer(long clientId, String serverId, long token)
       throws InvalidTokenException, TException {}
 
 }

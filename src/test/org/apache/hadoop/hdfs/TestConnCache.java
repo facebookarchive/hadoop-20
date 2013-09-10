@@ -29,6 +29,7 @@ import static org.junit.Assert.assertEquals;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSClientReadProfilingData;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
@@ -201,7 +202,9 @@ public class TestConnCache {
             (InetSocketAddress) Matchers.anyObject(), Matchers.anyString(),
             Matchers.anyLong(), Matchers.anyLong(), Matchers.anyLong(),
             Matchers.anyLong(), Matchers.anyInt(), Matchers.anyBoolean(),
-            Matchers.anyString(), Matchers.anyLong(), Matchers.eq(true));
+            Matchers.anyString(), Matchers.anyLong(),
+            Matchers.anyLong(), Matchers.eq(true), 
+            (FSClientReadProfilingData) Matchers.anyObject());
     
     // Initial read
     pread(in, 0, dataBuf, 0, dataBuf.length);

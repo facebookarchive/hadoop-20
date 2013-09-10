@@ -52,7 +52,7 @@ public class TestReduceTaskNoMapOutput extends TestCase {
     }
   }
 
-  @SuppressWarnings("deprecation")
+  @SuppressWarnings({ "deprecation", "unchecked" })
   public static TaskCompletionEvent[] runJob(JobConf conf, Class mapperClass,
                   boolean enableNoFetchEmptyMapOutputs) throws Exception {
     conf.setMapperClass(mapperClass);

@@ -61,7 +61,7 @@ public class TestFileCorruption extends TestCase {
     ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.ALL);
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+    DataNode.LOG.getLogger().setLevel(Level.ALL);
   }
   static Log LOG = ((Log4JLogger)NameNode.stateChangeLog);
   private static String TEST_ROOT_DIR = System.getProperty("test.build.data", "build/test/data");

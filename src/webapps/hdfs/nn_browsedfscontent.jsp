@@ -3,11 +3,11 @@
   import="javax.servlet.*"
   import="javax.servlet.http.*"
   import="java.io.*"
-  import="java.util.*"
   import="org.apache.hadoop.hdfs.*"
   import="org.apache.hadoop.hdfs.server.namenode.*"
   import="org.apache.hadoop.hdfs.server.datanode.*"
   import="org.apache.hadoop.hdfs.protocol.*"
+  import="org.apache.hadoop.net.NetUtils"
   import="org.apache.hadoop.util.*"
   import="java.text.DateFormat"
   import="java.net.InetAddress"
@@ -27,12 +27,12 @@
       nodeToRedirect = datanode.substring(0, datanode.indexOf(':'));
     }
     else {
-      nodeToRedirect = nn.getHttpAddress().getHostName();
+      nodeToRedirect = nn.getHttpAddress().getAddress().getHostAddress();
       redirectPort = nn.getHttpAddress().getPort();
     }
-    String addr = NameNode.getHostPortString(nn.getNameNodeAddress());
-    String fqdn = InetAddress.getByName(nodeToRedirect).getCanonicalHostName();
-    redirectLocation = "http://" + fqdn + ":" + redirectPort + 
+    String addr = NetUtils.toIpPort(nn.getNameNodeAddress());
+    String fqdn = InetAddress.getByName(nodeToRedirect).getHostAddress();
+    redirectLocation = "http://" + NetUtils.toIpPort(fqdn, redirectPort) + 
                        "/browseDirectory.jsp?namenodeInfoPort=" + 
                        nn.getHttpAddress().getPort() +
                        "&dir=" + URLEncoder.encode("/", "UTF-8") +
@@ -53,7 +53,7 @@
 <hr>
 
 <h2>Local logs</h2>
-<a href="/logs/">Log</a> directory
+<a href="logs/">Log</a> directory
 
 <%
 out.println(ServletUtil.htmlFooter());

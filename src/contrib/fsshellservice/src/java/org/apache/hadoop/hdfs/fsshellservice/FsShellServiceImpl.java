@@ -75,13 +75,14 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
   }
   
   @Override
-  public void copyFromLocal(String src, String dest)
+  public void copyFromLocal(String src, String dest, boolean validate)
       throws FsShellException, TException {
     LOG.info("copy from local: src: " + src + " dest: " + dest);
     try {
       FileSystem fs = getFileSystem(dest, true);
       try {
-        fs.copyFromLocalFile(new Path(src), new Path(dest));
+        fs.copyFromLocalFile(false, false, validate, new Path(src), new Path(
+            dest));
       } finally {
         fs.close();
       }
@@ -93,11 +94,12 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
   }
 
   @Override
-  public void copyToLocal(String src, String dest) throws FsShellException,
-      TException {
+  public void copyToLocal(String src, String dest, boolean validate)
+      throws FsShellException, TException {
     LOG.info("copy to local: src: " + src + " dest: " + dest);
     try {
-      getFileSystem(src, false).copyToLocalFile(new Path(src), new Path(dest));
+      getFileSystem(src, false).copyToLocalFile(false, validate, new Path(src),
+          new Path(dest));
     } catch (IOException e) {
       LOG.info("copyToLocal IOException", e);
       throw new FsShellException(e.toString());
@@ -112,16 +114,7 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
     LOG.info("remove: src: " + path + " recusive: " + recursive
         + " skipTrash: " + skipTrash);
     try {
-      FileSystem fs = getFileSystem(path, false);
-      if (!skipTrash) {
-        return getFileSystem(path, false).delete(new Path(path), recursive);
-      } else {
-        DistributedFileSystem dfs = DFSUtil.convertToDFS(fs);
-        if (dfs == null) {
-          throw new FsShellException(path + " is not a distributed path");
-        }
-        return dfs.getClient().delete(new Path(path).toUri().getPath(), recursive);
-      }
+      return getFileSystem(path, false).delete(new Path(path), recursive, skipTrash);
     } catch (IOException e) {
       LOG.info("remove IOException", e);
       throw new FsShellException(e.toString());
@@ -220,7 +213,19 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
     }
   }
 
-  
+  @Override
+  public int getFileCrc(String path) throws FsShellException, TException {
+    LOG.info("getFileCrc: path: " + path);
+    try {
+      return getFileSystem(path, false).getFileCrc(new Path(path));
+    } catch (IOException e) {
+      LOG.info("getFileCrc IOException", e);
+      throw new FsShellException(e.toString());
+    } catch (URISyntaxException e) {
+      throw new FsShellException(e.toString());
+    }
+  }
+
   private void initThriftServer(int port, int maxQueue) {
     // Setup the Thrift server
     LOG.info("Setting up Thrift server listening port " + port);

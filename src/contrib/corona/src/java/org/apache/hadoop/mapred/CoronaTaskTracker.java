@@ -33,6 +33,7 @@ import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.RPC.Server;
 import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.util.CoronaFailureEventInjector;
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.ResourceCalculatorPlugin;
@@ -57,7 +58,16 @@ public class CoronaTaskTracker extends TaskTracker
   public static final String CORONA_TASK_TRACKER_HANDLER_COUNT_KEY = "corona.task.tracker.handler.count";
   public static final String HEART_BEAT_INTERVAL_KEY = "corona.clustermanager.heartbeat.interval";
   public static final String JT_CONNECT_TIMEOUT_MSEC_KEY = "corona.jobtracker.connect.timeout.msec";
-  public static final int SLOT_MULTIPLIER = 10;
+  /**
+   * Multiplier for the number of slots to simulate on Corona to allow task
+   * overlapping (1 means no task overlapping) key
+   */
+  public static final String SLOT_MULTIPLIER_KEY = "corona.slot.multiplier";
+  /**
+   * Default multiplier for the number of slots to simulate on Corona to allow
+   * task overlapping, 10 seems to be enough.
+   */
+  public static final int SLOT_MULTIPLIER_DEFAULT = 10;
   private static final int MAX_CM_CONNECT_RETRIES = 10;
 
   private ClusterManagerService.Client client = null;
@@ -76,6 +86,11 @@ public class CoronaTaskTracker extends TaskTracker
   long jtConnectTimeoutMsec = 0;
   private int clusterManagerConnectRetries;
   private CoronaReleaseManager crReleaseManager;
+  /**
+   * Multiplier for the number of slots to simulate on Corona to allow
+   * task overlapping (1 means no task overlapping)
+   */
+  private final int slotMultiplier;
 
   /**
    * Purge old Corona Job Tracker logs.
@@ -85,8 +100,15 @@ public class CoronaTaskTracker extends TaskTracker
       new LogCleanupThread(
         TaskLog.getLogDir(CoronaTaskTracker.jobTrackerLogDir())),
       "CJTLogCleanup");
-
+  
+  // for failure emulation
+  CoronaFailureEventInjector jtFailureEventInjector = null;
+  public void setJTFailureEventInjector(CoronaFailureEventInjector jtFailureEventInjector) {
+    this.jtFailureEventInjector = jtFailureEventInjector;
+  }
+  
   public CoronaTaskTracker(JobConf conf) throws IOException {
+    slotMultiplier = conf.getInt(SLOT_MULTIPLIER_KEY, SLOT_MULTIPLIER_DEFAULT);
     // Default is to use netty over jetty
     boolean useNetty = conf.getBoolean(NETTY_MAPOUTPUT_USE, true);
     this.shuffleServerMetrics = new ShuffleServerMetrics(conf);
@@ -95,8 +117,8 @@ public class CoronaTaskTracker extends TaskTracker
     }
     initHttpServer(conf, useNetty);
     LOG.info("Http port " + httpPort +
-             ", netty map output http port " + nettyMapOutputHttpPort +
-             ", use netty = " + useNetty);
+        ", netty map output http port " + nettyMapOutputHttpPort +
+        ", use netty = " + useNetty);
     super.initialize(conf);
     initializeTaskActionServer();
     initializeClusterManagerCallbackServer();
@@ -105,7 +127,6 @@ public class CoronaTaskTracker extends TaskTracker
     jtConnectTimeoutMsec = conf.getLong(JT_CONNECT_TIMEOUT_MSEC_KEY, 60000L);
     crReleaseManager = new CoronaReleaseManager(conf);
     crReleaseManager.start();
-
   }
 
   private synchronized void initializeTaskActionServer() throws IOException {
@@ -348,7 +369,8 @@ public class CoronaTaskTracker extends TaskTracker
    */
   class JobTrackerReporter extends Thread {
     private static final long SLOW_HEARTBEAT_INTERVAL = 3 * 60 * 1000;
-    final InetSocketAddress jobTrackerAddr;
+    private InetSocketAddress jobTrackerAddr;
+    final InetSocketAddress secondaryTrackerAddr;
     final String sessionHandle;
     final RunningJob rJob;
     InterTrackerProtocol jobClient = null;
@@ -363,9 +385,10 @@ public class CoronaTaskTracker extends TaskTracker
     // Can make configurable later, 10 is the count used for connection errors.
     final int maxErrorCount = 10;
     JobTrackerReporter(RunningJob rJob, InetSocketAddress jobTrackerAddr,
-        String sessionHandle) {
+        InetSocketAddress secondaryTrackerAddr, String sessionHandle) {
       this.rJob = rJob;
       this.jobTrackerAddr = jobTrackerAddr;
+      this.secondaryTrackerAddr = secondaryTrackerAddr;
       this.sessionHandle = sessionHandle;
       this.name = "JobTrackerReporter(" + rJob.getJobID() + ")";
     }
@@ -411,8 +434,7 @@ public class CoronaTaskTracker extends TaskTracker
           boolean doHeartbeat = false;
           synchronized (CoronaTaskTracker.this) {
             for (TaskTracker.TaskInProgress tip : runningTasks.values()) {
-              CoronaSessionInfo info = (CoronaSessionInfo)(tip.getExtensible());
-              if (info.getSessionHandle().equals(sessionHandle)) {
+              if (rJob.getJobID().equals(tip.getTask().getJobID())) {
                 tipsInSession.add(tip);
               }
             }
@@ -437,8 +459,14 @@ public class CoronaTaskTracker extends TaskTracker
               " hearbeatId:" + heartbeatResponseId + " " + status.toString());
 
             try {
-              HeartbeatResponse heartbeatResponse = transmitHeartBeat(
-                  jobClient, heartbeatResponseId, status);
+              HeartbeatResponse heartbeatResponse =
+                  (new Caller<HeartbeatResponse>() {
+                @Override
+                protected HeartbeatResponse call() throws IOException {
+                  return transmitHeartBeat(jobClient, heartbeatResponseId,
+                      status);
+                }
+              }).makeCall();
 
               // The heartbeat got through successfully!
               // Reset error count after a successful heartbeat.
@@ -458,21 +486,7 @@ public class CoronaTaskTracker extends TaskTracker
               LOG.error(name + " connect error in reporting to " + jobTrackerAddr, e);
               throw e;
             } catch (IOException e) {
-              errorCount++;
-              if (errorCount == maxErrorCount) {
-                LOG.error(name + " too many errors " + maxErrorCount +
-                  " in reporting to " + jobTrackerAddr, e);
-                throw e;
-              } else {
-                long backoff = errorCount * heartbeatJTInterval;
-                LOG.warn(
-                  name + " error " + errorCount + " in reporting to " + jobTrackerAddr +
-                  " will wait " + backoff + " msec", e);
-                try {
-                  Thread.sleep(backoff);
-                } catch (InterruptedException ie) {
-                }
-              }
+              handleIOException(e);
             }
           }
         }
@@ -495,6 +509,7 @@ public class CoronaTaskTracker extends TaskTracker
 
     private void connect() throws IOException {
       try {
+        LOG.info(name + " connecting to " + this.jobTrackerAddr);
         jobClient = RPC.waitForProtocolProxy(
             InterTrackerProtocol.class,
             InterTrackerProtocol.versionID,
@@ -513,6 +528,78 @@ public class CoronaTaskTracker extends TaskTracker
       RPC.stopProxy(jobClient);
       shuttingDown = true;
     }
+    
+    private void handleIOException(IOException e) throws IOException {
+      errorCount++;
+      if (errorCount >= maxErrorCount) {
+        LOG.error(name + " too many errors " + maxErrorCount +
+          " in reporting to " + jobTrackerAddr, e);
+        throw e;
+      } else {
+        long backoff = errorCount * heartbeatJTInterval;
+        LOG.warn(
+          name + " error " + errorCount + " in reporting to " + jobTrackerAddr +
+          " will wait " + backoff + " msec", e);
+        try {
+          Thread.sleep(backoff);
+        } catch (InterruptedException ie) {
+        }
+      }
+    } 
+    
+    /**
+     * Handles fallback process and connecting to new job tracker
+     * @param <T> return type of called function
+     */
+    private abstract class Caller<T> extends CoronaJTFallbackCaller<T> {
+
+      @Override
+      protected void handleIOException(IOException e) throws IOException {
+        JobTrackerReporter.this.handleIOException(e);
+      }
+
+      @Override
+      protected void connect(InetSocketAddress address) throws IOException {
+        JobTrackerReporter.this.jobTrackerAddr = address;
+        JobTrackerReporter.this.connect();
+      }
+
+      @Override
+      protected void shutdown() {
+        RPC.stopProxy(JobTrackerReporter.this.jobClient);
+      }
+
+      @Override
+      protected InetSocketAddress getCurrentClientAddress() {
+        return JobTrackerReporter.this.jobTrackerAddr;
+      }
+
+      @Override
+      protected JobConf getConf() {
+        return CoronaTaskTracker.this.fConf;
+      }
+
+      @Override
+      protected boolean predRetry(int retryNum) {
+        return super.predRetry(retryNum)
+            && (CoronaTaskTracker.this.running
+                && !CoronaTaskTracker.this.shuttingDown
+                && !JobTrackerReporter.this.shuttingDown);
+      }
+
+      @Override
+      protected void waitRetry() throws InterruptedException {
+        synchronized (finishedCount) {
+          finishedCount.wait(heartbeatJTInterval);
+        }
+      }
+
+      @Override
+      protected InetSocketAddress getSecondaryTracker() {
+        return JobTrackerReporter.this.secondaryTrackerAddr;
+      }
+    }
+    
   }
 
   @Override
@@ -593,7 +680,7 @@ public class CoronaTaskTracker extends TaskTracker
     String releasePath = crReleaseManager.getRelease(jobTask.getJobID());
     String originalPath = crReleaseManager.getOriginal();
     CoronaJobTrackerRunner runner =
-      new CoronaJobTrackerRunner(tip, jobTask, this, new JobConf(), info,
+      new CoronaJobTrackerRunner(tip, jobTask, this, new JobConf(this.getJobConf()), info,
         originalPath, releasePath);
     runner.start();
   }
@@ -631,9 +718,9 @@ public class CoronaTaskTracker extends TaskTracker
   @Override
   protected int getMaxSlots(JobConf conf, int numCpuOnTT, TaskType type) {
     int ret = getMaxActualSlots(conf, numCpuOnTT, type);
-    // Use a large value of slots. This effectively removes slots as a concept
-    // and lets the Cluster Manager manage the resources.
-    return ret * SLOT_MULTIPLIER;
+    // Use a large value of slots if desired. This effectively removes slots as
+    // a concept and lets the Cluster Manager manage the resources.
+    return ret * slotMultiplier;
   }
 
   @Override
@@ -666,8 +753,9 @@ public class CoronaTaskTracker extends TaskTracker
     CoronaSessionInfo info = (CoronaSessionInfo)(tip.getExtensible());
     // JobClient will be set by JobTrackerReporter thread later
     RunningJob rJob = new RunningJob(jobId, null, info);
-    JobTrackerReporter reporter = new JobTrackerReporter(
-        rJob, info.getJobTrackerAddr(), info.getSessionHandle());
+    JobTrackerReporter reporter = new JobTrackerReporter(rJob,
+        info.getJobTrackerAddr(), info.getSecondaryTracker(),
+        info.getSessionHandle());
     reporter.setName("JobTrackerReporter for " + jobId);
     // Start the heartbeat to the jobtracker
     reporter.start();
@@ -719,7 +807,7 @@ public class CoronaTaskTracker extends TaskTracker
     ReflectionUtils.setContentionTracing
       (conf.getBoolean("tasktracker.contention.tracking", false));
     try {
-    new CoronaTaskTracker(conf).run();
+      new CoronaTaskTracker(conf).run();
     } catch (Throwable t) {
       LOG.fatal("Error running CoronaTaskTracker", t);
       System.exit(-2);
@@ -745,13 +833,25 @@ public class CoronaTaskTracker extends TaskTracker
   }
 
   @Override
-  protected void reconfigureLocalJobConf(
-      JobConf localJobConf, Path localJobFile, TaskInProgress tip, boolean changed)
+  protected void reconfigureLocalJobConf(JobConf localJobConf,
+      Path localJobFile, TaskInProgress tip, boolean changed)
       throws IOException {
-    CoronaSessionInfo info = (CoronaSessionInfo)(tip.getExtensible());
-    localJobConf.set(DirectTaskUmbilical.MAPRED_DIRECT_TASK_UMBILICAL_ADDRESS,
-        info.getJobTrackerAddr().getHostName() + ":" + info.getJobTrackerAddr().getPort());
-    super.reconfigureLocalJobConf(localJobConf, localJobFile, tip, true);
+    localJobConf.set(JobConf.TASK_RUNNER_CHILD_CLASS_CONF,
+        CoronaChild.class.getName());
+    CoronaSessionInfo info = (CoronaSessionInfo) (tip.getExtensible());
+    InetSocketAddress directAddress = CoronaDirectTaskUmbilical.getAddress(
+        localJobConf, CoronaDirectTaskUmbilical.DIRECT_UMBILICAL_JT_ADDRESS);
+    if (directAddress == null
+        || !directAddress.equals(info.getJobTrackerAddr())) {
+      CoronaDirectTaskUmbilical.setAddress(localJobConf,
+          CoronaDirectTaskUmbilical.DIRECT_UMBILICAL_JT_ADDRESS,
+          info.getJobTrackerAddr());
+      CoronaDirectTaskUmbilical.setAddress(localJobConf,
+          CoronaDirectTaskUmbilical.DIRECT_UMBILICAL_FALLBACK_ADDRESS,
+          info.getSecondaryTracker());
+      changed = true;
+    }
+    super.reconfigureLocalJobConf(localJobConf, localJobFile, tip, changed);
   }
 
   @Override
@@ -759,16 +859,16 @@ public class CoronaTaskTracker extends TaskTracker
     throws IOException {
     CoronaSessionInfo info = (CoronaSessionInfo)(tip.getExtensible());
     if (info != null) {
-      return DirectTaskUmbilical.createDirectUmbilical(
-        this, info.getJobTrackerAddr(), fConf);
+      return CoronaDirectTaskUmbilical.createDirectUmbilical(
+        this, info.getJobTrackerAddr(), info.getSecondaryTracker(), fConf);
     }
     return this;
   }
 
   @Override
   protected void cleanupUmbilical(TaskUmbilicalProtocol t) {
-    if (t instanceof DirectTaskUmbilical) {
-      ((DirectTaskUmbilical) t).close();
+    if (t instanceof CoronaDirectTaskUmbilical) {
+      ((CoronaDirectTaskUmbilical) t).close();
     }
   }
 

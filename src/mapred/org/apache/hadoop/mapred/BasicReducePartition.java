@@ -26,6 +26,7 @@ import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.mapred.Counters.Counter;
 import org.apache.hadoop.mapred.Task.TaskReporter;
 import org.apache.hadoop.util.IndexedSortable;
+import org.apache.hadoop.util.LexicographicalComparerHolder;
 import org.apache.hadoop.util.QuickSort;
 
 public abstract class BasicReducePartition<K extends BytesWritable, V extends BytesWritable>

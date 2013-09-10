@@ -20,7 +20,7 @@ if [[ "$IS_HADOOP_ENV_ALREADY_SOURCED" != "true" ]]; then
 
   # Extra Java runtime options.  Empty by default.
   # export HADOOP_OPTS=-server
-
+  export HADOOP_OPTS=" -Ddns_call_stack_logging=true "
   # Command specific options appended to HADOOP_OPTS when specified
   export HADOOP_NAMENODE_OPTS="-Dcom.sun.management.jmxremote $HADOOP_NAMENODE_OPTS"
   export HADOOP_SECONDARYNAMENODE_OPTS="-Dcom.sun.management.jmxremote $HADOOP_SECONDARYNAMENODE_OPTS"

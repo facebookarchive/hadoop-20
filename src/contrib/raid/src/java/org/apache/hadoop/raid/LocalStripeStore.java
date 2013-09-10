@@ -91,6 +91,9 @@ public class LocalStripeStore extends StripeStore {
     static public LocalStripeInfo getStripeInfo(File storeDir, String fileName)
         throws IOException {
       String[] parts = fileName.split(DELIMITER);
+      if (parts.length <= 1) {
+        return null;
+      }
       String codecId = parts[0];
       Block blk = getBlock(parts[1]);
       Codec codec = Codec.getCodec(codecId);
@@ -151,6 +154,9 @@ public class LocalStripeStore extends StripeStore {
     
     for (String fileName: storeDir.list()) {
       LocalStripeInfo si = LocalStripeInfo.getStripeInfo(storeDir, fileName);
+      if (si == null) {
+        continue;
+      }
       // Add to stripeStore
       LocalStripeInfo oldSi = blockToStripeStore.put(si.getKey(), si);
       if (oldSi != null) {

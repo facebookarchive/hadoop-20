@@ -35,19 +35,19 @@ public class TestRackAwareTaskPlacement extends TestCase {
     "/r1"
   };
   private static final String hosts1[] = new String[] {
-    "host1.rack1.com"
+    "127.0.0.1"
   };
   private static final String rack2[] = new String[] {
     "/r2", "/r2"
   };
   private static final String hosts2[] = new String[] {
-    "host1.rack2.com", "host2.rack2.com"
+    "127.0.0.1", "127.0.0.1"
   };
   private static final String hosts3[] = new String[] {
-    "host3.rack1.com"
+    "127.0.0.1"
   };
   private static final String hosts4[] = new String[] {
-    "host1.rack2.com"
+    "127.0.0.1"
   };
   final Path inDir = new Path("/racktesting");
   final Path outputPath = new Path("/output");
@@ -136,7 +136,7 @@ public class TestRackAwareTaskPlacement extends TestCase {
        * The third input file is pulled from rack1.
        */
       launchJobAndTestCounters(testName, mr, fileSys, inDir, outputPath, 3, 0,
-                               2, 0);
+                               3, 0);
       mr.shutdown();
       
       /* Run a job with the (only)tasktracker on rack1.
@@ -149,7 +149,7 @@ public class TestRackAwareTaskPlacement extends TestCase {
        * Thus, a tasktracker will find all inputs in this rack.
        */
       launchJobAndTestCounters(testName, mr, fileSys, inDir, outputPath, 3, 0,
-                               0, 3);
+                               3, 0);
       mr.shutdown();
       
     } finally {

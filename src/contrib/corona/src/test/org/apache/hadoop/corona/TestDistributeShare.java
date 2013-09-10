@@ -87,10 +87,77 @@ public class TestDistributeShare extends TestCase {
     assertEquals(4.0 / 10 * 16, schedulables.get(3).getShare(), ERROR);
   }
 
+  /**
+   * Total share < sum(min) && Total share > sum(demand)
+   */
+  public void testDistributeMinFairShareWayUnderAllocatedOptimistic() {
+    List<Schedulable> schedulables = new ArrayList<Schedulable>();
+    schedulables.add(new SchedulableForTest("s1", 5, 0, 10, 40, 1.0, 0L, 3));
+    schedulables.add(new SchedulableForTest("s2", 5, 0, 20, 50, 2.0, 0L, 3));
+    schedulables.add(new SchedulableForTest("s3", 5, 0, 30, 60, 3.0, 0L, 2));
+    schedulables.add(new SchedulableForTest("s4", 5, 0, 40, 70, 4.0, 0L, 1));
+    Schedulable.distributeShare(30, schedulables, ScheduleComparator.PRIORITY);
+    assertEquals(10, schedulables.get(0).getShare(), ERROR);
+    assertEquals(20, schedulables.get(1).getShare(), ERROR);
+    assertEquals(30, schedulables.get(2).getShare(), ERROR);
+    assertEquals(40, schedulables.get(3).getShare(), ERROR);
+  }
+
+  /**
+   * Total share < sum(min) && Total share < sum(demand)
+   */
+  public void testDistributeMinFairShareWayUnderAllocatedPessimistic() {
+    List<Schedulable> schedulables = new ArrayList<Schedulable>();
+    schedulables.add(new SchedulableForTest("s1", 10, 0, 10, 40, 1.0, 0L, 3));
+    schedulables.add(new SchedulableForTest("s2", 10, 0, 20, 50, 2.0, 0L, 3));
+    schedulables.add(new SchedulableForTest("s3", 10, 0, 30, 60, 3.0, 0L, 2));
+    schedulables.add(new SchedulableForTest("s4", 10, 0, 40, 70, 4.0, 0L, 1));
+    Schedulable.distributeShare(30, schedulables, ScheduleComparator.PRIORITY);
+    assertEquals(10, schedulables.get(0).getShare(), ERROR);
+    assertEquals(20, schedulables.get(1).getShare(), ERROR);
+    assertEquals(30, schedulables.get(2).getShare(), ERROR);
+    assertEquals(40, schedulables.get(3).getShare(), ERROR);
+  }
+
+  /**
+   * Total share > sum(max or demand)
+   */
+  public void testDistributeMinFairShareWayOverAllocated() {
+    List<Schedulable> schedulables = new ArrayList<Schedulable>();
+    schedulables.add(new SchedulableForTest("s1", 15, 0, 10, 40, 1.0, 0L, 3));
+    schedulables.add(new SchedulableForTest("s2", 25, 0, 20, 50, 2.0, 0L, 3));
+    schedulables.add(new SchedulableForTest("s3", 35, 0, 30, 60, 3.0, 0L, 2));
+    schedulables.add(new SchedulableForTest("s4", 45, 0, 40, 70, 4.0, 0L, 1));
+    Schedulable.distributeShare(250, schedulables,
+                                ScheduleComparator.PRIORITY);
+    assertEquals(15, schedulables.get(0).getShare(), ERROR);
+    assertEquals(25, schedulables.get(1).getShare(), ERROR);
+    assertEquals(35, schedulables.get(2).getShare(), ERROR);
+    assertEquals(45, schedulables.get(3).getShare(), ERROR);
+  }
+
+  /**
+   * Total share < sum(demand) && Total > sum(min)
+   */
+  public void testDistributeMinFairShareOverAllocated() {
+    List<Schedulable> schedulables = new ArrayList<Schedulable>();
+    schedulables.add(new SchedulableForTest("s1", 15, 0, 10, 40, 1.0, 0L, 3));
+    schedulables.add(new SchedulableForTest("s2", 25, 0, 20, 50, 2.0, 0L, 2));
+    schedulables.add(new SchedulableForTest("s3", 35, 0, 30, 60, 3.0, 0L, 2));
+    schedulables.add(new SchedulableForTest("s4", 45, 0, 40, 70, 4.0, 0L, 1));
+    Schedulable.distributeShare(110, schedulables,
+                                ScheduleComparator.PRIORITY);
+    assertEquals(15, schedulables.get(0).getShare(), ERROR);
+    assertEquals(22, schedulables.get(1).getShare(), ERROR);
+    assertEquals(33, schedulables.get(2).getShare(), ERROR);
+    assertEquals(40, schedulables.get(3).getShare(), ERROR);
+  }
+
   private class SchedulableForTest extends Schedulable {
     final int requested, granted, min, max;
     final long startTime;
     final double weight;
+    final int priority;
 
     SchedulableForTest(String name, int requested, int granted,
         int min, int max, double weight, long startTime) {
@@ -101,6 +168,19 @@ public class TestDistributeShare extends TestCase {
       this.max = max;
       this.weight = weight;
       this.startTime = startTime;
+      this.priority = 0;
+    }
+
+    SchedulableForTest(String name, int requested, int granted,
+        int min, int max, double weight, long startTime, int priority) {
+      super(name, ResourceType.MAP);
+      this.requested = requested;
+      this.granted = granted;
+      this.min = min;
+      this.max = max;
+      this.weight = weight;
+      this.startTime = startTime;
+      this.priority = priority;
     }
 
     @Override
@@ -135,7 +215,7 @@ public class TestDistributeShare extends TestCase {
 
     @Override
     public int getPriority() {
-      return 0;
+      return priority;
     }
 
     @Override

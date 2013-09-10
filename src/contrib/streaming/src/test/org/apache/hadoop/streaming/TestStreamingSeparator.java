@@ -18,18 +18,12 @@
 
 package org.apache.hadoop.streaming;
 
-import junit.framework.TestCase;
 import java.io.*;
-import java.util.*;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FileUtil;
-import org.apache.hadoop.fs.Path;
 
 /**
  * This class tests hadoopStreaming with customized separator in MapReduce local mode.
  */
-public class TestStreamingSeparator extends TestCase
+public class TestStreamingSeparator extends TestStreaming
 {
 
   // "map" command: grep -E (red|green|blue)
@@ -49,21 +43,12 @@ public class TestStreamingSeparator extends TestCase
   // mapred.textoutputformat.separator outputs 5 as separator
   protected String outputExpect = "bunnies5are.pink\nroses5are.red\nviolets5are.blue\n";
 
-  private StreamJob job;
-
-  public TestStreamingSeparator() throws IOException
-  {
-    UtilTest utilTest = new UtilTest(getClass().getName());
-    utilTest.checkUserDir();
-    utilTest.redirectIfAntJunit();
-  }
-
-  protected void createInput() throws IOException
-  {
-    DataOutputStream out = new DataOutputStream(
-                                                new FileOutputStream(INPUT_FILE.getAbsoluteFile()));
-    out.write(input.getBytes("UTF-8"));
-    out.close();
+  public TestStreamingSeparator() throws IOException {
+    super();
+    setInputFile(INPUT_FILE);
+    setOutputDir(OUTPUT_DIR);
+    setInputString(input);
+    setExpectedOutput(outputExpect);
   }
 
   protected String[] genArgs() {
@@ -86,49 +71,8 @@ public class TestStreamingSeparator extends TestCase
     };
   }
   
-  public void testCommandLine()
-  {
-    try {
-      try {
-        FileUtil.fullyDelete(OUTPUT_DIR.getAbsoluteFile());
-      } catch (Exception e) {
-      }
-
-      createInput();
-      boolean mayExit = false;
-
-      // During tests, the default Configuration will use a local mapred
-      // So don't specify -config or -cluster
-      job = new StreamJob(genArgs(), mayExit);      
-      job.go();
-      File outFile = new File(OUTPUT_DIR, "part-00000").getAbsoluteFile();
-      String output = StreamUtil.slurp(outFile);
-      outFile.delete();
-      System.err.println("outEx1=" + outputExpect);
-      System.err.println("  out1=" + output);
-      assertEquals(outputExpect, output);
-    } catch(Exception e) {
-      failTrace(e);
-    } finally {
-      try {
-      INPUT_FILE.delete();
-        FileUtil.fullyDelete(OUTPUT_DIR.getAbsoluteFile());
-      } catch(Exception e) {
-        failTrace(e);
-      }
-    }
-  }
-
-  private void failTrace(Exception e)
-  {
-    StringWriter sw = new StringWriter();
-    e.printStackTrace(new PrintWriter(sw));
-    fail(sw.toString());
-  }
-
   public static void main(String[]args) throws Exception
   {
     new TestStreamingSeparator().testCommandLine();
   }
-
 }

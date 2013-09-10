@@ -27,6 +27,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.PrintStream;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.io.Reader;
@@ -169,6 +170,9 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
   
   private boolean loadDefaults = true;
   
+  protected Path bigParamPath = null;
+  protected int bigParamThreshold = 0;
+  protected FileSystem localFs = null;
   /**
    * Configuration objects
    */
@@ -1283,6 +1287,30 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
         
         // Ignore this parameter if it has already been marked as 'final'
         if (attr != null) {
+          if (localFs != null && bigParamPath != null) {
+            if (attr.equals("mapred.input.dir") &&
+              value != null && value.length() > bigParamThreshold) {
+              PrintStream out = null;
+              boolean done = false;
+              try {
+                out = new PrintStream(localFs.create(bigParamPath));
+                out.print(value);
+                done = true;
+              }
+              catch (Exception e) {
+                LOG.info("Unable to put mapred.input.dir to " + bigParamPath, e);
+              } finally {
+                if (out != null) {
+                  out.close();
+                }
+              }
+              if (done) {
+                LOG.info("put mapred.input.dir to " + bigParamPath);
+                properties.setProperty("mapred.bigparam.path", bigParamPath.toString());
+                continue;
+              }
+            }
+          }
           if (value != null) {
             if (!finalParameters.contains(attr)) {
               properties.setProperty(attr, value);
@@ -1345,7 +1373,7 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    * Given a xml config file specified as a string, return the
    * corresponding json object if it exists.
    */
-  private JSONObject getJsonConfig(String name) throws IOException, 
+  public JSONObject getJsonConfig(String name) throws IOException, 
                                                        JSONException {
     if (name.endsWith(".xml")) {
       URL url = getResource(MATERIALIZEDJSON);
@@ -1366,7 +1394,7 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    * Given a xml config file specified by a path, return the corresponding json
    * object if it exists.
    */ 
-  private JSONObject getJsonConfig(Path name)
+  public JSONObject getJsonConfig(Path name)
       throws IOException, JSONException {
     String pathString = name.toUri().getPath();
     String xml = new Path(pathString).getName();

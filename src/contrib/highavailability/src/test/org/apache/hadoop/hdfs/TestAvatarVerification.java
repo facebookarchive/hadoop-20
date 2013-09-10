@@ -57,6 +57,7 @@ public class TestAvatarVerification {
       cluster.shutDown();
     }
     InjectionHandler.clear();
+    MiniAvatarCluster.clearAvatarDir();
   }
 
   @Test
@@ -84,6 +85,9 @@ public class TestAvatarVerification {
       conf = new Configuration();
       cluster = new MiniAvatarCluster(conf, 1, true, null, null);
 
+      // wait to separate checkpoints
+      DFSTestUtil.waitNMilliSecond(500);
+      
       TestAvatarVerificationHandler h = new TestAvatarVerificationHandler();
       InjectionHandler.set(h);
 

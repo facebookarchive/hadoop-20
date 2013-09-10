@@ -37,6 +37,14 @@ public class PureJavaCrc32C implements Checksum {
     reset();
   }
 
+  final int getCrcValue() {
+    return crc;
+  }
+
+  final void setValueInternal(int crc) {
+    this.crc = crc;
+  }
+
   /** {@inheritDoc} */
   public long getValue() {
     long ret = crc;

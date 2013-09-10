@@ -19,9 +19,9 @@ package org.apache.hadoop.hdfs.server.namenode.bookkeeper.metadata;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
+import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.server.namenode.bookkeeper.BookKeeperJournalManager;
 import org.apache.hadoop.hdfs.server.namenode.bookkeeper.metadata.proto.EditLogLedgerMetadataWritable;
 import org.apache.hadoop.hdfs.server.namenode.bookkeeper.metadata.proto.WritableUtil;
@@ -37,6 +37,11 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
 import java.util.TreeSet;
+
+import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZkUtil.deleteRecursively;
+import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZkUtil.interruptedException;
+import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZkUtil.joinPath;
+import static org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZkUtil.keeperException;
 
 /**
  * Since BookKeeper only keeps track of numeric ledger ids, we need to
@@ -57,8 +62,12 @@ import java.util.TreeSet;
  */
 public class BookKeeperJournalMetadataManager {
 
-  /** Suffix for ZNodes holding metadata for in-progress log segments */
+  /** Prefix for ZNodes holding metadata for in-progress log segments */
   public static final String BKJM_EDIT_INPROGRESS = "inprogress_";
+
+  /** Suffix for ZNodes holding metadata for corrupt regions */
+  @VisibleForTesting
+  public static final String BKJM_EDIT_CORRUPT = ".corrupt";
 
   private static final Log LOG =
       LogFactory.getLog(BookKeeperJournalMetadataManager.class);
@@ -99,12 +108,19 @@ public class BookKeeperJournalMetadataManager {
     this.zooKeeper = zooKeeper;
     this.zooKeeperParentPath = zooKeeperParentPath;
     this.ledgerParentPath =
-        zooKeeperParentPath + Path.SEPARATOR + "ledgers";
-    init();
+        joinPath(zooKeeperParentPath, "ledgers");
   }
 
-  // Create all of the ZNodes if they do not exist
-  private void init() throws IOException {
+  public String getLedgerParentPath() {
+    return ledgerParentPath;
+  }
+
+  /**
+   * Create znodes for storing ledger metadata if they have not been
+   * created before
+   * @throws IOException If there an unrecoverable error talking to ZooKeeper
+   */
+  public void init() throws IOException {
     try {
       if (zooKeeper.exists(zooKeeperParentPath, false) == null) {
         zooKeeper.create(zooKeeperParentPath, new byte[] { '0' },
@@ -120,8 +136,10 @@ public class BookKeeperJournalMetadataManager {
       interruptedException("Interrupted ensuring that ZNodes " +
           zooKeeperParentPath + " and " + ledgerParentPath + " exist!", e);
     } catch (KeeperException e) {
-      keeperException("Unrecoverable ZooKeeper error ensuring that ZNodes "
-          + zooKeeperParentPath + " and " + ledgerParentPath + " exist!", e);
+      keeperException(
+          "Unrecoverable ZooKeeper error ensuring that ZNodes "
+              + zooKeeperParentPath + " and " + ledgerParentPath + " exist!",
+          e);
     }
   }
 
@@ -131,18 +149,35 @@ public class BookKeeperJournalMetadataManager {
    * @return A string containing the name of a ledger's child ZNode
    */
   public static String nameForLedger(EditLogLedgerMetadata e) {
-    boolean isInProgress = e.getLastTxId() == -1;
+   return nameForLedger(e.getFirstTxId(), e.getLastTxId());
+  }
+
+  private static String nameForLedger(long firstTxId, long lastTxId) {
+    boolean isInProgress = lastTxId == -1;
     StringBuilder nameBuilder = new StringBuilder();
     nameBuilder.append("ledger-");
     if (isInProgress) {
       nameBuilder.append(BKJM_EDIT_INPROGRESS)
-          .append(e.getFirstTxId());
+          .append(firstTxId);
     } else {
-      nameBuilder.append(e.getFirstTxId())
+      nameBuilder.append(firstTxId)
           .append("_")
-          .append(e.getLastTxId());
+          .append(lastTxId);
     }
     return nameBuilder.toString();
+  }
+
+  public Versioned<EditLogLedgerMetadata> findInProgressLedger(long firstTxId)
+      throws IOException {
+    String fullyQualifiedInProgressPath =
+        fullyQualifiedPathForLedger(nameForLedger(firstTxId, -1));
+    // TODO: try using a ThreadLocal here as well. Will test this once unit
+    // test is written for this method
+    Stat stat = new Stat();
+    EditLogLedgerMetadataWritable metadataWritable = readWritableFromZk(
+        fullyQualifiedInProgressPath, localWritable.get(), stat);
+    return metadataWritable == null ?
+        null : Versioned.of(stat.getVersion(), metadataWritable.get());
   }
 
   /**
@@ -152,7 +187,7 @@ public class BookKeeperJournalMetadataManager {
    * @return Fully qualified ZNode path that may be read from or written to.
    */
   public String fullyQualifiedPathForLedger(String ledgerName) {
-    return ledgerParentPath + Path.SEPARATOR + ledgerName;
+    return joinPath(ledgerParentPath, ledgerName);
   }
 
   /**
@@ -166,6 +201,54 @@ public class BookKeeperJournalMetadataManager {
     return fullyQualifiedPathForLedger(nameForLedger);
   }
 
+  /**
+   * Removes ledger-related Metadata from BookKeeper. Does not delete
+   * the ledger itself.
+   * @param ledger The object for the ledger metadata that we want to delete
+   *               from BookKeeper
+   * @param version The version of the ledger metadata (or -1 to delete any
+   *                version). Used as a way to guard against deleting a ledger
+   *                metadata that is being updated by another process.
+   * @return True if the process successfully deletes the metadata objection,
+   *         false if it has already been deleted by another process.
+   * @throws IOException If there is an error communicating to ZooKeeper or if
+   *                     the metadata object has been modified within ZooKeeper
+   *                     by another process (version mis-match).
+   */
+  public boolean deleteLedgerMetadata(EditLogLedgerMetadata ledger, int version)
+      throws IOException {
+    String ledgerPath = fullyQualifiedPathForLedger(ledger);
+    try {
+      zooKeeper.delete(ledgerPath, version);
+      return true;
+    } catch (KeeperException.NoNodeException e) {
+      LOG.warn(ledgerPath + " does not exist. Returning false, ignoring " +
+          e);
+    } catch (KeeperException.BadVersionException e) {
+      keeperException("Unable to delete " + ledgerPath + ", version does not match." +
+          " Updated by another process?", e);
+    } catch (KeeperException e) {
+      keeperException("Unrecoverable ZooKeeper error deleting " + ledgerPath,
+          e);
+    } catch (InterruptedException e) {
+      interruptedException("Interrupted deleting " + ledgerPath, e);
+    }
+    return false;
+  }
+
+  public boolean ledgerExists(String fullyQualifiedPath) throws IOException {
+    try {
+      return zooKeeper.exists(fullyQualifiedPath, false) != null;
+    } catch (KeeperException e) {
+      keeperException("Unrecoverable ZooKeeper error checking if " +
+          fullyQualifiedPath + " exists!", e);
+      return false; // Never reached
+    } catch (InterruptedException e) {
+      interruptedException("Interrupted checking if " + fullyQualifiedPath +
+          " exists!", e);
+      return false; // Never reached
+    }
+  }
   /**
    * Read a {@link Writable} from a specified ZNode path ZooKeeper and
    * (optionally) update its {@link Stat} information (if supplied).
@@ -183,8 +266,7 @@ public class BookKeeperJournalMetadataManager {
    * @throws IllegalArgumentException If the data contained in the specified
    *                                  ZNode is null
    */
-  @VisibleForTesting
-  <T extends Writable> T readWritableFromZk(
+  public <T extends Writable> T readWritableFromZk(
       String fullyQualifiedPath, T writable, Stat stat) throws IOException {
     try {
       byte[] data = zooKeeper.getData(fullyQualifiedPath, false, stat);
@@ -252,7 +334,8 @@ public class BookKeeperJournalMetadataManager {
         CreateMode.PERSISTENT);
       return true;
     } catch (InterruptedException e) {
-      interruptedException("Interrupted creating " + fullyQualifiedPath, e);
+      interruptedException("Interrupted creating " + fullyQualifiedPath,
+          e);
       return false; // never reached
     } catch (KeeperException.NodeExistsException e) {
       LOG.warn(fullyQualifiedPath +
@@ -292,6 +375,13 @@ public class BookKeeperJournalMetadataManager {
     return false;
   }
 
+  public void moveAsideCorruptLedger(EditLogLedgerMetadata ledger)
+      throws IOException {
+    deleteLedgerMetadata(ledger, -1);
+    writeEditLogLedgerMetadata(fullyQualifiedPathForLedger(ledger) +
+        BKJM_EDIT_CORRUPT, ledger);
+  }
+
   /**
    * List all ledgers in this instance's ZooKeeper namespace.
    * @param includeInProgressLedgers If true, will include in-progress
@@ -311,6 +401,9 @@ public class BookKeeperJournalMetadataManager {
       List<String> ledgerNames = zooKeeper.getChildren(ledgerParentPath,
           false);
       for (String ledgerName : ledgerNames) {
+        if (ledgerName.endsWith(BKJM_EDIT_CORRUPT)) {
+          continue;
+        }
         if (!includeInProgressLedgers && ledgerName.contains(BKJM_EDIT_INPROGRESS)) {
           continue;
         }
@@ -329,36 +422,12 @@ public class BookKeeperJournalMetadataManager {
         }
       }
     } catch (InterruptedException e) {
-     interruptedException(
-         "Interrupted listing ledgers under " + ledgerParentPath, e);
+      interruptedException(
+          "Interrupted listing ledgers under " + ledgerParentPath, e);
     } catch (KeeperException e) {
       keeperException("Unrecoverable ZooKeeper error listing ledgers " +
           "under " + ledgerParentPath, e);
     }
     return ledgers;
-  }
-
-  /**
-   * Interrupt the thread and then log and re-throw an InterruptedException
-   * as an IOException.
-   * @param msg The message to log and include when re-throwing
-   * @param e The actual exception instances
-   * @throws IOException
-   */
-  public static void interruptedException(String msg, InterruptedException e)
-      throws IOException {
-    Thread.currentThread().interrupt();
-    LOG.error(msg, e);
-    throw new IOException(msg, e);
-  }
-
-  /**
-   * Like {@link #interruptedException(String, InterruptedException)} but
-   * handles KeeperException and will not interrupt the thread.
-   */
-  public static void keeperException(String msg, KeeperException e)
-      throws IOException {
-    LOG.error(msg, e);
-    throw new IOException(msg, e);
   }
 }

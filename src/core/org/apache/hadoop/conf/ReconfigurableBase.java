@@ -110,5 +110,21 @@ public abstract class ReconfigurableBase
    */
   protected abstract void reconfigurePropertyImpl(String property, String newVal) 
     throws ReconfigurationException;
-
+  
+  /**
+   * <b>Currently it does nothing.</b> Subclass should override to get it working.
+   * Subclasses may override this method to do some preProcess before using config.
+   * It is not called in startup, but is called in updating configurations.
+   */
+  protected void preProcessConfiguration(Configuration config){
+  }
+  
+  /**
+   * <b>Currently it does nothing.</b> Subclass should override to get it working.
+   * Subclasses may override this method to do some preProcess on configuration keys
+   * before using. It is not called in startup, but is called in updating configurations.
+   */
+  protected String preProcessKey(String key){
+    return key;
+  }
 }

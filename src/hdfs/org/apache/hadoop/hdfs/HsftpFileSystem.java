@@ -28,6 +28,8 @@ import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLSession;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 
 /** An implementation of a protocol for accessing filesystems over HTTPS.
  * The following implementation provides a limited, read-only interface
@@ -40,6 +42,14 @@ public class HsftpFileSystem extends HftpFileSystem {
   @Override
   public void initialize(URI name, Configuration conf) throws IOException {
     super.initialize(name, conf);
+    initializedWith = name;
+    if (conf.getBoolean(FSConstants.CLIENT_CONFIGURATION_LOOKUP_DONE, false)) {
+      try {
+        initializedWith = new URI(conf.get(FileSystem.FS_DEFAULT_NAME_KEY));
+      } catch (URISyntaxException e) {
+        LOG.error(e);
+      }
+    }
     setupSsl(conf);
   }
 
@@ -68,7 +78,7 @@ public class HsftpFileSystem extends HftpFileSystem {
   protected HttpURLConnection openConnection(String path, String query)
       throws IOException {
     try {
-      final URL url = new URI("https", null, nnAddr.getHostName(),
+      final URL url = new URI("https", null, nnAddr.getAddress().getHostAddress(),
           nnAddr.getPort(), path, query, null).toURL();
       HttpsURLConnection conn = (HttpsURLConnection)url.openConnection();
       // bypass hostname verification
@@ -82,8 +92,7 @@ public class HsftpFileSystem extends HftpFileSystem {
   @Override
   public URI getUri() {
     try {
-      return new URI("hsftp", null, nnAddr.getHostName(), nnAddr.getPort(),
-                     null, null, null);
+      return new URI("hsftp", initializedWith.getAuthority(), null, null, null); 
     } catch (URISyntaxException e) {
       return null;
     } 

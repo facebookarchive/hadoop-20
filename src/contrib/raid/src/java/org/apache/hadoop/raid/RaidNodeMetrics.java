@@ -166,6 +166,7 @@ public class RaidNodeMetrics implements Updater {
 
 
   Map<String, MetricsLongValue> corruptFiles = null;
+  Map<String, MetricsLongValue> underRedundantFiles = null;
 
   MetricsLongValue effectiveReplicationTimes1000 =
       new MetricsLongValue("effective_replication_1000", registry);
@@ -250,6 +251,20 @@ public class RaidNodeMetrics implements Updater {
         String name = dir + "_corrupt_files";
         corruptFiles.put(dir, new MetricsLongValue(name, registry));
       }
+    }
+  }
+  
+  public synchronized void initUnderRedundantFilesMetrics(Configuration conf) {
+    if (underRedundantFiles == null) {
+      String[] dirs = DistBlockIntegrityMonitor.getCorruptMonitorDirs(conf);
+      underRedundantFiles = new HashMap<String, MetricsLongValue>();
+      for (String dir: dirs) {
+        String name = "under_redundant_files_" + dir;
+        underRedundantFiles.put(dir, new MetricsLongValue(name, registry));
+      }
+      String name = "under_redundant_files_" + BlockIntegrityMonitor.OTHERS;
+      underRedundantFiles.put(BlockIntegrityMonitor.OTHERS,
+          new MetricsLongValue(name, registry));
     }
   }
   

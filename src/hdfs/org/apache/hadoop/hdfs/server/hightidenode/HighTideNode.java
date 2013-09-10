@@ -246,9 +246,9 @@ public class HighTideNode implements HighTideProtocol {
     // create Metrics object
     myMetrics = new HighTideNodeMetrics(conf, this);
 
-    // create rpc server 
-    this.server = RPC.getServer(this, socAddr.getHostName(), socAddr.getPort(),
-                                handlerCount, false, conf);
+    // create rpc server
+    this.server = RPC.getServer(this, socAddr.getAddress().getHostAddress(), socAddr.getPort(),
+        handlerCount, false, conf);
 
     // The rpc-server port can be ephemeral... ensure we have the correct info
     this.serverAddress = this.server.getListenerAddress();
@@ -486,6 +486,7 @@ public class HighTideNode implements HighTideProtocol {
   /**
    */
   public static void main(String argv[]) throws Exception {
+    org.apache.hadoop.hdfs.DnsMonitorSecurityManager.setTheManager();
     try {
       StringUtils.startupShutdownMessage(HighTideNode.class, argv, LOG);
       HighTideNode hightidenode = createHighTideNode(argv, null);

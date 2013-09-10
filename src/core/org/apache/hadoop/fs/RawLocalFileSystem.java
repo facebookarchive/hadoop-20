@@ -300,7 +300,7 @@ public class RawLocalFileSystem extends FileSystem {
     }
     return FileUtil.fullyDelete(f);
   }
- 
+
   public FileStatus[] listStatus(Path f) throws IOException {
     File localf = pathToFile(f);
     FileStatus[] results;
@@ -377,7 +377,7 @@ public class RawLocalFileSystem extends FileSystem {
   @Override
   public int getFileCrc(Path f) throws IOException {
     File p2f = pathToFile(f);
-    DataChecksum checksum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_CRC32, -1);
+    DataChecksum checksum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_CRC32, 1);
     byte[] buf = new byte[1024];
     DataInputStream streamIn = new DataInputStream(new BufferedInputStream(
         new FileInputStream(p2f), 128 * 1024));

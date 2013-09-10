@@ -55,6 +55,10 @@ import org.apache.hadoop.corona.SessionDriverService.revokeResource_args;
 import org.apache.hadoop.corona.SessionDriverService.revokeResource_result;
 import org.apache.hadoop.corona.SessionDriverService.processDeadNode_args;
 import org.apache.hadoop.corona.SessionDriverService.processDeadNode_result;
+import org.apache.hadoop.mapred.CoronaJobTracker;
+import org.apache.hadoop.mapred.Counters;
+import org.apache.hadoop.mapred.JobInProgress;
+import org.apache.hadoop.mapred.Task.Counter;
 
 
 /**
@@ -64,6 +68,7 @@ public class SessionDriver {
 
   /** Logger */
   public static final Log LOG = LogFactory.getLog(SessionDriver.class);
+  
   /**
    * Maximum size of the incoming queue. Thrift calls from the
    * Cluster Manager will block if the queue reaches this size.
@@ -361,6 +366,16 @@ public class SessionDriver {
     cmNotifier.addCall(
       new ClusterManagerService.sessionUpdateInfo_args(sessionId, newInfo));
   }
+  
+
+  /**
+   * Stops session acquired by remote JT
+   * @param remoteId id of remote JT session
+   */
+  public void stopRemoteSession(String remoteId) {
+    cmNotifier.addCall(new ClusterManagerService.sessionEnd_args(remoteId,
+        SessionStatus.TIMED_OUT));
+  }
 
   /**
    * For test purposes. Abort a sessiondriver without sending a sessionEnd()
@@ -465,7 +480,22 @@ public class SessionDriver {
     cmNotifier.addCall(
         new ClusterManagerService.releaseResource_args(sessionId, releasedIds));
   }
-
+  
+  public Map<ResourceType, List<Long>> getResourceUsageMap()
+  {
+    return ((CoronaJobTracker)iface).getResourceUsageMap();
+  }
+  
+  public void incCMClientRetryCounter () {
+    if (iface instanceof CoronaJobTracker) {
+      Counters jobCounters = ((CoronaJobTracker)iface).getJobCounters();
+      if (jobCounters != null) {
+        LOG.info("inc retry session counter");
+        jobCounters.incrCounter(JobInProgress.Counter.NUM_SESSION_DRIVER_CM_CLIENT_RETRY, 1);
+      }
+    }
+  }
+  
   /**
    * This thread is responsible for dispatching calls to the ClusterManager
    * The session driver is adding the calls to the list of pending calls and
@@ -518,6 +548,14 @@ public class SessionDriver {
     private CoronaConf coronaConf;
     /** If sessionHeartbeatV2 is sipported by CM */
     private boolean useHeartbeatV2 = true;
+    
+    private int readTimeout;
+    /**
+     * the timeout value used by session driver cm client
+     */
+    public static final String CM_CLIENT_TIMEOUT = 
+        "corona.sessiondriver.cm.client.timeout";
+    private static final int SESSION_DRIVER_CM_CLIENT_TIMEOUT = 300000;
 
     /**
      * Construct a CMNotifier given a Configuration, SessionInfo and for a
@@ -534,6 +572,7 @@ public class SessionDriver {
       retryIntervalStart = conf.getNotifierRetryIntervalStart();
       heartbeatInterval = Math.max(conf.getSessionExpiryInterval() / 8, 1);
       sessionDriver = sdriver;
+      readTimeout = conf.getInt(CM_CLIENT_TIMEOUT, SESSION_DRIVER_CM_CLIENT_TIMEOUT);
 
       String target = conf.getClusterManagerAddress();
       InetSocketAddress address = NetUtils.createSocketAddr(target);
@@ -644,7 +683,7 @@ public class SessionDriver {
      */
     private void init() throws TException {
       if (transport == null) {
-        transport = new TFramedTransport(new TSocket(host, port));
+        transport = new TFramedTransport(new TSocket(host, port, readTimeout));
         client = new ClusterManagerService.Client(
             new TBinaryProtocol(transport));
         transport.open();
@@ -698,7 +737,9 @@ public class SessionDriver {
             LOG.debug("Sending heartbeat for " + sreg.handle + " with (" +
               sessionDriver.heartbeatInfo.requestId + " " +sessionDriver.heartbeatInfo.grantId +")");
             if (useHeartbeatV2) {
-              try {
+              try {      
+                sessionDriver.heartbeatInfo.resourceUsages = sessionDriver.getResourceUsageMap();
+                
                 client.sessionHeartbeatV2(sreg.handle, sessionDriver.heartbeatInfo);
               } catch (org.apache.thrift.TApplicationException e) {
                 LOG.info("heartbeatV2 is not suported by CM for session " + sreg.handle);
@@ -764,7 +805,7 @@ public class SessionDriver {
           // close the transport/client on any exception
           // will be reopened on next try
           close();
-
+          sessionDriver.incCMClientRetryCounter();
           /**
            * If we don't know if ClusterManager was going for an upgrade,
            * Check with the ProxyJobTracker if the ClusterManager went down
@@ -812,8 +853,15 @@ public class SessionDriver {
       } else if (call instanceof ClusterManagerService.sessionEnd_args) {
         ClusterManagerService.sessionEnd_args args =
           (ClusterManagerService.sessionEnd_args)call;
-
-        client.sessionEnd(args.handle, args.status);
+        // For job tracker fail over, we will close the remote session
+        // but sometimes we will meet the InvalidSessionHandle exception,
+        // like remote job tracker has failed in job_end1 or job_end2, so just 
+        // catching this exception
+        try {
+          client.sessionEnd(args.handle, args.status);
+        } catch (InvalidSessionHandle e) {
+          LOG.warn("sessionEnd get InvalidSessionHandle exception", e);
+        }
       } else if (call instanceof ClusterManagerService.sessionUpdateInfo_args) {
         ClusterManagerService.sessionUpdateInfo_args args =
           (ClusterManagerService.sessionUpdateInfo_args)call;

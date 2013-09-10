@@ -37,7 +37,7 @@ public class DataTransferThrottler implements IOThrottler {
    * @param bandwidthPerSec bandwidth allowed in bytes per second. 
    */
   public DataTransferThrottler(long bandwidthPerSec) {
-    this(500, bandwidthPerSec);  // by default throttling period is 500ms 
+    this(200, bandwidthPerSec);  // by default throttling period is 200ms 
   }
 
   /**

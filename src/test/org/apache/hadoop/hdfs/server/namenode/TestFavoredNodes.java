@@ -145,10 +145,10 @@ public class TestFavoredNodes {
     ClientProtocol dstNamenode = DFSClient.createRPCNamenode(
         NameNode.getAddress(remoteCluster.getFileSystem().getUri()
             .getAuthority()), remoteConf,
-        UnixUserGroupInformation.login(remoteConf, true)).getProxy();
+        UnixUserGroupInformation.login(remoteConf, true), 0).getProxy();
     ClientProtocol srcNamenode = DFSClient.createRPCNamenode(
         NameNode.getAddress(cluster.getFileSystem().getUri().getAuthority()),
-        conf, UnixUserGroupInformation.login(conf, true)).getProxy();
+        conf, UnixUserGroupInformation.login(conf, true), 0).getProxy();
 
     // Create destination file.
     String dstFile = "/dst" + fileName;
@@ -194,7 +194,7 @@ public class TestFavoredNodes {
     // Create RPC connections
     ClientProtocol srcNamenode = DFSClient.createRPCNamenode(
         NameNode.getAddress(cluster.getFileSystem().getUri().getAuthority()),
-        conf, UnixUserGroupInformation.login(conf, true)).getProxy();
+        conf, UnixUserGroupInformation.login(conf, true), 0).getProxy();
 
     // Create destination file.
     String dstFile = "/dst" + fileName;

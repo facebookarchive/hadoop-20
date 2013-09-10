@@ -490,6 +490,7 @@ class LinuxTaskController extends TaskController {
    */
   @Override
   void setup() {
+    super.setup();
     //set up job cache directory and associated permissions
     String localDirs[] = this.mapredLocalDirs;
     for(String localDir : localDirs) {
@@ -602,6 +603,21 @@ class LinuxTaskController extends TaskController {
       LOG.warn("Exception thrown while sending destroy to the Task VM " + 
           StringUtils.stringifyException(e));
     }
+  }
+
+  @Override
+  boolean supportsIsTaskAlive() {
+    return false;
+  }
+
+  @Override
+  boolean isTaskAlive(TaskControllerContext context) {
+    throw new RuntimeException("isTaskAlive: This method is not supported");
+  }
+
+  @Override
+  void doStackTrace(TaskControllerContext context) {
+    return;
   }
 }
 

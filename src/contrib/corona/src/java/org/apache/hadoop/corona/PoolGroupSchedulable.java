@@ -100,7 +100,8 @@ public class PoolGroupSchedulable extends Schedulable {
    */
   public Queue<PoolSchedulable> getScheduleQueue() {
     if (scheduleQueue == null) {
-      scheduleQueue = createPoolQueue(ScheduleComparator.FAIR);
+      ScheduleComparator sc = configManager.getPoolGroupComparator(getName());
+      scheduleQueue = createPoolQueue(sc);
     }
     return scheduleQueue;
   }
@@ -110,8 +111,17 @@ public class PoolGroupSchedulable extends Schedulable {
    * @return the queue of pool sorted for preemption
    */
   public Queue<PoolSchedulable> getPreemptQueue() {
+    // TODO: For now, we support only one kind of scheduling.
+    // Also note that FAIR is PRIORITY with equal priorities (by default)
+    ScheduleComparator sPreempt = null;
     if (preemptQueue == null) {
-      preemptQueue = createPoolQueue(ScheduleComparator.FAIR_PREEMPT);
+      ScheduleComparator sc = configManager.getPoolGroupComparator(getName());
+      if (sc == ScheduleComparator.PRIORITY) {
+        sPreempt = ScheduleComparator.PRIORITY_PREEMPT;
+      } else {
+        throw new IllegalArgumentException("Unknown/misconfigured poolgroup");
+      }
+      preemptQueue = createPoolQueue(sPreempt);
     }
     return preemptQueue;
   }
@@ -167,8 +177,8 @@ public class PoolGroupSchedulable extends Schedulable {
    */
   public void distributeShare() {
     if (needRedistributed) {
-      Schedulable.distributeShare(
-          getShare(), snapshotPools, ScheduleComparator.FAIR);
+      ScheduleComparator sc = configManager.getPoolGroupComparator(getName());
+      Schedulable.distributeShare(getShare(), snapshotPools, sc);
     }
     needRedistributed = false;
   }

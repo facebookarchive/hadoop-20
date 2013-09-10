@@ -9,4 +9,9 @@
   <value>2000</value>
   <description></description>
 </property>
+
+<property>
+  <name>raid.blockreconstruction.decommissioning.disable</name>
+  <value>false</value>
+</property>
 </configuration>

@@ -47,6 +47,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.filecache.DistributedCache;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.mapred.FileInputFormat;
@@ -708,8 +709,18 @@ public class StreamJob implements Tool {
 
     jobConf_.setInputFormat(fmt);
 
-    jobConf_.setOutputKeyClass(Text.class);
-    jobConf_.setOutputValueClass(Text.class);
+    String key_value_class = jobConf_.get("stream.key_value.class", "Text");
+    if (key_value_class.equalsIgnoreCase("Text")) {
+      jobConf_.setOutputKeyClass(Text.class);
+      jobConf_.setOutputValueClass(Text.class);
+    } else if (key_value_class.equalsIgnoreCase("BytesWritable")) {
+      jobConf_.setOutputKeyClass(BytesWritable.class);
+      jobConf_.setOutputValueClass(BytesWritable.class);
+    } else {
+      throw new InvalidJobConfException("Key value class " +
+        key_value_class + " is not supported. Only Text and " +
+        " BytesWritable are supported.");
+    }
 
     jobConf_.set("stream.addenvironment", addTaskEnvironment_);
 
@@ -787,7 +798,7 @@ public class StreamJob implements Tool {
       fmt = TextOutputFormat.class;
     }
     jobConf_.setOutputFormat(fmt);
-
+    
     if (partitionerSpec_!= null) {
       c = StreamUtil.goodClassOrNull(jobConf_, partitionerSpec_, defaultPackage);
       if (c != null) {

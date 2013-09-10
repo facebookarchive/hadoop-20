@@ -24,10 +24,12 @@ import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.conf.ClientConfiguration;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniAvatarCluster;
 import org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.BasicZooKeeper;
 import org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.RecoveringZooKeeper;
+import org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZkUtil;
 import org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk.ZooKeeperIface;
 import org.apache.zookeeper.ZooKeeper;
 import org.junit.After;
@@ -36,10 +38,12 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 
 import static junit.framework.Assert.assertEquals;
+import static junit.framework.Assert.assertTrue;
 
 /**
  * A utility class for intended to start a local BookKeeper and ZooKeeper
@@ -51,25 +55,27 @@ public class BookKeeperSetupUtil {
   private static final Log LOG = LogFactory.getLog(BookKeeperSetupUtil.class);
 
   /** ZooKeeper connection timeout, in milliseconds */
-  private static final int ZK_TIMEOUT_MS = 10000;
+  public static final int ZK_TIMEOUT_MS = 10000;
 
   // Maximum number of ZooKeeper retries
-  private static final int MAX_ZK_RETRIES = 3;
+  public static final int MAX_ZK_RETRIES = 3;
 
   // Retry interval in milliseconds
-  private static final int ZK_RETRY_MS = 1000;
+  public static final int ZK_RETRY_MS = 1000;
 
   /** Total number of bookies in the mini-cluster */
-  private static final int BOOKIES = 3;
+  public static final int BOOKIES = 3;
 
   /** The size of the quorum (i.e. this many bookies must ack the write) */
-  private static final int QUORUM_SIZE = 2;
+  public static final int QUORUM_SIZE = 2;
 
   /** Number of bookies eligible to participate in a read or write quorum */
-  private static final int ENSEMBLE_SIZE = 3;
+  public static final int ENSEMBLE_SIZE = 3;
 
   /** Ledger password */
-  private static final byte[] LEDGER_PW = "".getBytes();
+  public static final byte[] LEDGER_PW = "".getBytes();
+
+  public static String zkQuorum;
 
   private static MiniBookKeeperCluster bookKeeperCluster;
   private static BookKeeper bookKeeperClient;
@@ -83,16 +89,7 @@ public class BookKeeperSetupUtil {
   @BeforeClass
   public static void setUpStatic() throws Exception {
     MiniAvatarCluster.createAndStartZooKeeper();
-    String zkQuorum = "127.0.0.1:" + MiniAvatarCluster.zkClientPort;
-    bookKeeperCluster = new MiniBookKeeperCluster(zkQuorum,
-        BOOKIES,
-        ZK_TIMEOUT_MS,
-        ZK_TIMEOUT_MS);
-    bookKeeperCluster.start();
-
-    // Check that all bookies are initially up
-    assertEquals(bookKeeperCluster.getNumBookiesAvailable(BOOKIES, 10),
-        BOOKIES);
+    createAndStartBookKeeperCluster();
     zooKeeperClient = bookKeeperCluster.initZK();
     bookKeeperClient = new BookKeeper(new ClientConfiguration(),
         zooKeeperClient);
@@ -103,6 +100,27 @@ public class BookKeeperSetupUtil {
   @Before
   public void setUp() throws Exception {
     createdLedgers = new ArrayList<LedgerHandle>();
+  }
+
+  public static MiniBookKeeperCluster createAndStartBookKeeperCluster()
+      throws IOException {
+    zkQuorum = "127.0.0.1:" + MiniAvatarCluster.zkClientPort;
+    bookKeeperCluster = new MiniBookKeeperCluster(zkQuorum,
+        BOOKIES,
+        ZK_TIMEOUT_MS,
+        ZK_TIMEOUT_MS);
+    bookKeeperCluster.start();
+    assertTrue(bookKeeperCluster.getNumBookiesAvailable(BOOKIES, 10) >=
+        BOOKIES);
+    return bookKeeperCluster;
+  }
+
+  public static URI createJournalURI(String nsPath) {
+    return URI.create(createJournalURIAsString(nsPath));
+  }
+
+  public static String createJournalURIAsString(String nsPath) {
+    return "bookkeeper://" + zkQuorum + Path.SEPARATOR_CHAR + nsPath;
   }
 
   @AfterClass
@@ -207,11 +225,7 @@ public class BookKeeperSetupUtil {
    */
   public static void zkDeleteRecursively(String path)
       throws Exception {
-    List<String> children = recoveringZooKeeperClient.getChildren(path, false);
-    for (String child : children) {
-      zkDeleteRecursively(path + Path.SEPARATOR + child);
-    }
-    recoveringZooKeeperClient.delete(path, -1);
+    ZkUtil.deleteRecursively(recoveringZooKeeperClient, path);
   }
 
 }

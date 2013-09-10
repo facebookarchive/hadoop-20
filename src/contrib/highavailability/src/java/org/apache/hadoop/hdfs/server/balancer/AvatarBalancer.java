@@ -77,6 +77,7 @@ public class AvatarBalancer extends Balancer implements FailoverClient {
    * @param args
    */
   public static void main(String[] args) {
+    org.apache.hadoop.hdfs.DnsMonitorSecurityManager.setTheManager();
     try {
       System.exit(runBalancer(args));
     } catch (Throwable e) {

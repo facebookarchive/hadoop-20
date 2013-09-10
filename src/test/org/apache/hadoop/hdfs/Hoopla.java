@@ -62,7 +62,7 @@ public class Hoopla extends Configured implements Tool {
 
   // switch off all logging so that the benchmark runs in constant time
   {
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.WARN);
+    DataNode.LOG.getLogger().setLevel(Level.WARN);
     ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.WARN);
     ((Log4JLogger)DataNode.ClientTraceLog).getLogger().setLevel(Level.WARN);
   }

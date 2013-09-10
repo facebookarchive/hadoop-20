@@ -19778,7 +19778,6 @@ if test $JAVA_HOME != ""
 then
   JNI_LDFLAGS="-L$JAVA_HOME/jre/lib/$OS_ARCH/server"
 fi
-ldflags_bak=$LDFLAGS
 LDFLAGS="$LDFLAGS $JNI_LDFLAGS"
 
 echo "$as_me:$LINENO: checking for JNI_GetCreatedJavaVMs in -ljvm" >&5
@@ -19854,7 +19853,6 @@ _ACEOF
 
 fi
 
-LDFLAGS=$ldflags_bak
 
 
 # Checks for header files.
@@ -20723,6 +20721,197 @@ else
   { { echo "$as_me:$LINENO: error: lzma headers were not found... native-hadoop library needs lzma to build. Please install the requisite lzma-4.999.5alpha development package.
 " >&5
 echo "$as_me: error: lzma headers were not found... native-hadoop library needs lzma to build. Please install the requisite lzma-4.999.5alpha development package.
+" >&2;}
+   { (exit 1); exit 1; }; }
+fi
+
+done
+
+
+
+for ac_header in lz4/lz4.h
+do
+as_ac_Header=`echo "ac_cv_header_$ac_header" | $as_tr_sh`
+if eval "test \"\${$as_ac_Header+set}\" = set"; then
+  echo "$as_me:$LINENO: checking for $ac_header" >&5
+echo $ECHO_N "checking for $ac_header... $ECHO_C" >&6
+if eval "test \"\${$as_ac_Header+set}\" = set"; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+fi
+echo "$as_me:$LINENO: result: `eval echo '${'$as_ac_Header'}'`" >&5
+echo "${ECHO_T}`eval echo '${'$as_ac_Header'}'`" >&6
+else
+  # Is the header compilable?
+echo "$as_me:$LINENO: checking $ac_header usability" >&5
+echo $ECHO_N "checking $ac_header usability... $ECHO_C" >&6
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+$ac_includes_default
+#include <$ac_header>
+_ACEOF
+rm -f conftest.$ac_objext
+if { (eval echo "$as_me:$LINENO: \"$ac_compile\"") >&5
+  (eval $ac_compile) 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } &&
+	 { ac_try='test -z "$ac_c_werror_flag"
+			 || test ! -s conftest.err'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; } &&
+	 { ac_try='test -s conftest.$ac_objext'
+  { (eval echo "$as_me:$LINENO: \"$ac_try\"") >&5
+  (eval $ac_try) 2>&5
+  ac_status=$?
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); }; }; then
+  ac_header_compiler=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+ac_header_compiler=no
+fi
+rm -f conftest.err conftest.$ac_objext conftest.$ac_ext
+echo "$as_me:$LINENO: result: $ac_header_compiler" >&5
+echo "${ECHO_T}$ac_header_compiler" >&6
+
+# Is the header present?
+echo "$as_me:$LINENO: checking $ac_header presence" >&5
+echo $ECHO_N "checking $ac_header presence... $ECHO_C" >&6
+cat >conftest.$ac_ext <<_ACEOF
+/* confdefs.h.  */
+_ACEOF
+cat confdefs.h >>conftest.$ac_ext
+cat >>conftest.$ac_ext <<_ACEOF
+/* end confdefs.h.  */
+#include <$ac_header>
+_ACEOF
+if { (eval echo "$as_me:$LINENO: \"$ac_cpp conftest.$ac_ext\"") >&5
+  (eval $ac_cpp conftest.$ac_ext) 2>conftest.er1
+  ac_status=$?
+  grep -v '^ *+' conftest.er1 >conftest.err
+  rm -f conftest.er1
+  cat conftest.err >&5
+  echo "$as_me:$LINENO: \$? = $ac_status" >&5
+  (exit $ac_status); } >/dev/null; then
+  if test -s conftest.err; then
+    ac_cpp_err=$ac_c_preproc_warn_flag
+    ac_cpp_err=$ac_cpp_err$ac_c_werror_flag
+  else
+    ac_cpp_err=
+  fi
+else
+  ac_cpp_err=yes
+fi
+if test -z "$ac_cpp_err"; then
+  ac_header_preproc=yes
+else
+  echo "$as_me: failed program was:" >&5
+sed 's/^/| /' conftest.$ac_ext >&5
+
+  ac_header_preproc=no
+fi
+rm -f conftest.err conftest.$ac_ext
+echo "$as_me:$LINENO: result: $ac_header_preproc" >&5
+echo "${ECHO_T}$ac_header_preproc" >&6
+
+# So?  What about this header?
+case $ac_header_compiler:$ac_header_preproc:$ac_c_preproc_warn_flag in
+  yes:no: )
+    { echo "$as_me:$LINENO: WARNING: $ac_header: accepted by the compiler, rejected by the preprocessor!" >&5
+echo "$as_me: WARNING: $ac_header: accepted by the compiler, rejected by the preprocessor!" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: proceeding with the compiler's result" >&5
+echo "$as_me: WARNING: $ac_header: proceeding with the compiler's result" >&2;}
+    ac_header_preproc=yes
+    ;;
+  no:yes:* )
+    { echo "$as_me:$LINENO: WARNING: $ac_header: present but cannot be compiled" >&5
+echo "$as_me: WARNING: $ac_header: present but cannot be compiled" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header:     check for missing prerequisite headers?" >&5
+echo "$as_me: WARNING: $ac_header:     check for missing prerequisite headers?" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: see the Autoconf documentation" >&5
+echo "$as_me: WARNING: $ac_header: see the Autoconf documentation" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header:     section \"Present But Cannot Be Compiled\"" >&5
+echo "$as_me: WARNING: $ac_header:     section \"Present But Cannot Be Compiled\"" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: proceeding with the preprocessor's result" >&5
+echo "$as_me: WARNING: $ac_header: proceeding with the preprocessor's result" >&2;}
+    { echo "$as_me:$LINENO: WARNING: $ac_header: in the future, the compiler will take precedence" >&5
+echo "$as_me: WARNING: $ac_header: in the future, the compiler will take precedence" >&2;}
+    (
+      cat <<\_ASBOX
+## ------------------------------------------ ##
+## Report this to the AC_PACKAGE_NAME lists.  ##
+## ------------------------------------------ ##
+_ASBOX
+    ) |
+      sed "s/^/$as_me: WARNING:     /" >&2
+    ;;
+esac
+echo "$as_me:$LINENO: checking for $ac_header" >&5
+echo $ECHO_N "checking for $ac_header... $ECHO_C" >&6
+if eval "test \"\${$as_ac_Header+set}\" = set"; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+  eval "$as_ac_Header=\$ac_header_preproc"
+fi
+echo "$as_me:$LINENO: result: `eval echo '${'$as_ac_Header'}'`" >&5
+echo "${ECHO_T}`eval echo '${'$as_ac_Header'}'`" >&6
+
+fi
+if test `eval echo '${'$as_ac_Header'}'` = yes; then
+  cat >>confdefs.h <<_ACEOF
+#define `echo "HAVE_$ac_header" | $as_tr_cpp` 1
+_ACEOF
+
+echo "$as_me:$LINENO: checking Checking for the 'actual' dynamic-library for '-llz4'" >&5
+echo $ECHO_N "checking Checking for the 'actual' dynamic-library for '-llz4'... $ECHO_C" >&6
+if test "${ac_cv_libname_lz4+set}" = set; then
+  echo $ECHO_N "(cached) $ECHO_C" >&6
+else
+
+  echo 'int main(int argc, char **argv){return 0;}' > conftest.c
+  if test -z "`${CC} ${LDFLAGS} -o conftest conftest.c -llz4 2>&1`"; then
+        if test ! -z "`which objdump | grep -v 'no objdump'`"; then
+      ac_cv_libname_lz4="`objdump -p conftest | grep NEEDED | grep lz4 | sed 's/\W*NEEDED\W*\(.*\)\W*$/\"\1\"/'`"
+    elif test ! -z "`which ldd | grep -v 'no ldd'`"; then
+      ac_cv_libname_lz4="`ldd conftest | grep lz4 | sed 's/^[^A-Za-z0-9]*\([A-Za-z0-9\.]*\)[^A-Za-z0-9]*=>.*$/\"\1\"/'`"
+    elif test ! -z "`which otool | grep -v 'no otool'`"; then
+      ac_cv_libname_lz4=\"`otool -L conftest | grep lz4 | sed -e 's/^  *//' -e 's/ .*//' -e 's/.*\/\(.*\)$/\1/'`\";
+    else
+      { { echo "$as_me:$LINENO: error: Can't find either 'objdump' or 'ldd' to compute the dynamic library for '-llz4'" >&5
+echo "$as_me: error: Can't find either 'objdump' or 'ldd' to compute the dynamic library for '-llz4'" >&2;}
+   { (exit 1); exit 1; }; }
+    fi
+  else
+    ac_cv_libname_lz4=libnotfound.so
+  fi
+  rm -f conftest*
+
+
+fi
+echo "$as_me:$LINENO: result: $ac_cv_libname_lz4" >&5
+echo "${ECHO_T}$ac_cv_libname_lz4" >&6
+
+cat >>confdefs.h <<_ACEOF
+#define HADOOP_LZ4_LIBRARY ${ac_cv_libname_lz4}
+_ACEOF
+
+
+else
+  { { echo "$as_me:$LINENO: error: lz4 headers were not found... native-hadoop library needs lz4 to build. Please install the requisite lz4 development package.
+" >&5
+echo "$as_me: error: lz4 headers were not found... native-hadoop library needs lz4 to build. Please install the requisite lz4 development package.
 " >&2;}
    { (exit 1); exit 1; }; }
 fi
@@ -21635,7 +21824,7 @@ fi
 done
 
 
-                                                            ac_config_files="$ac_config_files Makefile src/org/apache/hadoop/io/compress/snappy/Makefile src/org/apache/hadoop/io/compress/zlib/Makefile src/org/apache/hadoop/io/compress/lzma/Makefile src/org/apache/hadoop/syscall/Makefile lib/Makefile"
+                                                                      ac_config_files="$ac_config_files Makefile src/org/apache/hadoop/io/compress/snappy/Makefile src/org/apache/hadoop/io/compress/zlib/Makefile src/org/apache/hadoop/io/compress/lzma/Makefile src/org/apache/hadoop/io/compress/lz4/Makefile src/org/apache/hadoop/syscall/Makefile lib/Makefile"
 
 cat >confcache <<\_ACEOF
 # This file is a shell script that caches the results of configure
@@ -22197,6 +22386,7 @@ do
   "src/org/apache/hadoop/io/compress/snappy/Makefile" ) CONFIG_FILES="$CONFIG_FILES src/org/apache/hadoop/io/compress/snappy/Makefile" ;;
   "src/org/apache/hadoop/io/compress/zlib/Makefile" ) CONFIG_FILES="$CONFIG_FILES src/org/apache/hadoop/io/compress/zlib/Makefile" ;;
   "src/org/apache/hadoop/io/compress/lzma/Makefile" ) CONFIG_FILES="$CONFIG_FILES src/org/apache/hadoop/io/compress/lzma/Makefile" ;;
+  "src/org/apache/hadoop/io/compress/lz4/Makefile" ) CONFIG_FILES="$CONFIG_FILES src/org/apache/hadoop/io/compress/lz4/Makefile" ;;
   "src/org/apache/hadoop/syscall/Makefile" ) CONFIG_FILES="$CONFIG_FILES src/org/apache/hadoop/syscall/Makefile" ;;
   "lib/Makefile" ) CONFIG_FILES="$CONFIG_FILES lib/Makefile" ;;
   "depfiles" ) CONFIG_COMMANDS="$CONFIG_COMMANDS depfiles" ;;

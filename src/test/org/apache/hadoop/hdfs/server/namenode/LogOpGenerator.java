@@ -24,7 +24,10 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
+import org.apache.zookeeper.Op;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -50,6 +53,7 @@ public class LogOpGenerator {
   private final ArrayList<FSEditLogOp> possibleOps;
   private final int numOpsPossible;
   private final Random random;
+  private INodeId inodeId;
 
   /**
    * Instantiates pseudo-random edit log sequence generator.
@@ -62,6 +66,7 @@ public class LogOpGenerator {
     numOpsPossible = numFiles * OPS_PER_FILE;
     possibleOps = Lists.newArrayListWithExpectedSize(numOpsPossible);
     random = new Random();
+    inodeId = new INodeId();
     init();
   }
 
@@ -70,15 +75,21 @@ public class LogOpGenerator {
    */
   private void init() {
     LOG.info("--- Generating " + numOpsPossible + " log operations! ---");
+    Random rng = new Random();
     for (int i = 0; i < numFiles; i++) {
       PermissionStatus p = new PermissionStatus("hadoop",
           "hadoop", new FsPermission((short)0777));
-      INodeFileUnderConstruction inode = new INodeFileUnderConstruction(p,
-          (short) 3, 64, 0, "", "", null);
+      INodeFileUnderConstruction inode = new INodeFileUnderConstruction(inodeId.nextValue(),
+          p, (short) 3, 64, 0, "", "", null);
       for (int b = 0; b < blocksPerFile; b++) {
         Block block = new Block(b);
-        BlocksMap.BlockInfo bi = new BlocksMap.BlockInfo(block, 3);
-        inode.addBlock(bi);
+        BlockInfo bi = new BlockInfo(block, 3);
+        bi.setChecksum(rng.nextInt(Integer.MAX_VALUE) + 1);
+        try {
+          inode.storage.addBlock(bi);
+        } catch (IOException ioe) {
+          LOG.error("Cannot add block", ioe);
+        }
       }
       FsPermission perm = new FsPermission((short) 0);
       String name = "/filename-" + i;
@@ -93,7 +104,8 @@ public class LogOpGenerator {
           newSetQuota(name, 1, 1),
           newTimes(name, 0 , 0),
           newSetPermissions(name, perm),
-          newConcat(name, new String[] { name, name, name}, i)));
+          newConcat(name, new String[] { name, name, name}, i),
+          newMerge(name, name, "xor", new int[]{1, 1, 1}, i)));
     }
     LOG.info("--- Created " + numOpsPossible + " log operations! ---");
   }
@@ -122,7 +134,8 @@ public class LogOpGenerator {
   public static FSEditLogOp newOpenFile(String path,
       INodeFileUnderConstruction newNode) {
     FSEditLogOp.AddOp op = FSEditLogOp.AddOp.getUniqueInstance();
-    op.set(path,
+    op.set(newNode.getId(),
+        path,
         newNode.getReplication(),
         newNode.getModificationTime(),
         newNode.getAccessTime(),
@@ -136,7 +149,8 @@ public class LogOpGenerator {
 
   public static FSEditLogOp newCloseFile(String path, INodeFile newNode) {
     FSEditLogOp.CloseOp op = FSEditLogOp.CloseOp.getUniqueInstance();
-    op.set(path,
+    op.set(newNode.getId(),
+        path,
         newNode.getReplication(),
         newNode.getModificationTime(),
         newNode.getAccessTime(),
@@ -172,8 +186,15 @@ public class LogOpGenerator {
 
   public static FSEditLogOp newMkDir(String path, INode newNode) {
     FSEditLogOp.MkdirOp op = FSEditLogOp.MkdirOp.getUniqueInstance();
-    op.set(path, newNode.getModificationTime(),
+    op.set(newNode.getId(), path, newNode.getModificationTime(),
         newNode.getPermissionStatus());
+    return op;
+  }
+  
+  public static FSEditLogOp getMkDirInstance(String path) {
+    FSEditLogOp.MkdirOp op = FSEditLogOp.MkdirOp.getUniqueInstance();
+    op.set(INodeId.GRANDFATHER_INODE_ID, path, 0, new PermissionStatus("hadoop", "hadoop", new FsPermission(
+        (short) 0777)));
     return op;
   }
 
@@ -212,6 +233,14 @@ public class LogOpGenerator {
     FSEditLogOp.ConcatDeleteOp op =
         FSEditLogOp.ConcatDeleteOp.getUniqueInstance();
     op.set(trg, srcs, timestamp);
+    return op;
+  }
+  
+  public static FSEditLogOp newMerge(String parity, String source, String codecId, 
+      int[] checksums, long timestamp) {
+    FSEditLogOp.MergeOp op = 
+        FSEditLogOp.MergeOp.getUniqueInstance();
+    op.set(parity, source, codecId, checksums, timestamp);
     return op;
   }
 }

@@ -108,4 +108,10 @@ public class LocalFileSystem extends ChecksumFileSystem {
     }
     return false;
   }
+  
+  /** {@inheritDoc} */
+  @Override
+  public int getFileCrc(Path f) throws IOException {
+    return ((RawLocalFileSystem)rfs).getFileCrc(f);
+  }
 }

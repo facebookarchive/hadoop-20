@@ -38,19 +38,21 @@ public abstract class FSDatasetTestUtil {
     throws IOException {
     FSDataset ds = (FSDataset) dn.data;
 
-    File blockFile = ds.getReplicaToRead(namespaceId,block).getDataFileToRead();
+    ReplicaToRead rr = ds.getReplicaToRead(namespaceId, block);
+    File blockFile = rr.getDataFileToRead();
     if (blockFile == null) {
       throw new IOException("Can't find block file for block " +
         block + " on DN " + dn);
     }
     if (useInlineChecksum) {
-      new BlockInlineChecksumWriter(blockFile, DataChecksum.CHECKSUM_CRC32,
-          dn.conf.getInt("io.bytes.per.checksum", 512),
-          HdfsConstants.DEFAULT_PACKETSIZE)
+      new BlockInlineChecksumWriter(ds.getReplicaToRead(namespaceId, block)
+          .getBlockDataFile(), DataChecksum.CHECKSUM_CRC32, dn.conf.getInt(
+          "io.bytes.per.checksum", 512), HdfsConstants.DEFAULT_PACKETSIZE)
           .truncateBlock(newLength);
     } else {
       File metaFile = BlockWithChecksumFileWriter.findMetaFile(blockFile);
-      new BlockWithChecksumFileWriter(blockFile, metaFile).truncateBlock(
+      new BlockWithChecksumFileWriter(ds.getReplicaToRead(namespaceId, block)
+          .getBlockDataFile(), metaFile).truncateBlock(
         blockFile.length(), newLength);
     }
     ((DatanodeBlockInfo) (ds.getReplicaToRead(namespaceId, block)))
@@ -60,12 +62,13 @@ public abstract class FSDatasetTestUtil {
   public static void truncateBlockFile(File blockFile, long newLength,
       boolean useInlineChecksum, int bytesPerChecksum)    throws IOException {
     if (useInlineChecksum) {
-      new BlockInlineChecksumWriter(blockFile, DataChecksum.CHECKSUM_CRC32,
-          bytesPerChecksum, HdfsConstants.DEFAULT_PACKETSIZE).truncateBlock(newLength);
+      new BlockInlineChecksumWriter(new BlockDataFile(blockFile, null),
+          DataChecksum.CHECKSUM_CRC32, bytesPerChecksum,
+          HdfsConstants.DEFAULT_PACKETSIZE).truncateBlock(newLength);
     } else {
       File metaFile = BlockWithChecksumFileWriter.findMetaFile(blockFile);
-      new BlockWithChecksumFileWriter(blockFile, metaFile).truncateBlock(
-        blockFile.length(), newLength);
+      new BlockWithChecksumFileWriter(new BlockDataFile(blockFile, null),
+          metaFile).truncateBlock(blockFile.length(), newLength);
     }
   }
 }

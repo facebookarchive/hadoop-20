@@ -25,6 +25,7 @@ import java.util.LinkedList;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.DatanodeDescriptor.DecommissioningStatus;
 
 /**
@@ -157,7 +158,7 @@ class DecommissionManager {
         do {
           fsnamesystem.writeLock();
           try {
-            Iterator<Block> it = nodeBeingCheck.getBlockIterator();
+            Iterator<BlockInfo> it = nodeBeingCheck.getBlockIterator();
             // scan to the last checked position
             for(int i=0; i<numCheckedBlocks && it.hasNext(); i++, it.next()) ;
             // start checking blocks
@@ -175,12 +176,12 @@ class DecommissionManager {
       } else {
         // Check to see if all blocks in this decommissioned
         // node has reached their target replication factor.
-        ArrayList<Block> needReplicationBlocks = new ArrayList<Block>();
+        ArrayList<BlockInfo> needReplicationBlocks = new ArrayList<BlockInfo>();
         fsnamesystem.readLock();
         try {
-          for( Iterator<Block> it = nodeBeingCheck.getBlockIterator();
+          for( Iterator<BlockInfo> it = nodeBeingCheck.getBlockIterator();
                                     it.hasNext(); ) {
-            final Block block = fsnamesystem.isReplicationInProgress(
+            final BlockInfo block = fsnamesystem.isReplicationInProgress(
                 nodeStatus, nodeBeingCheck, it.next(), false);
             if (block != null) {
               needReplicationBlocks.add(block);
@@ -196,7 +197,7 @@ class DecommissionManager {
               needReplicationBlocks.size() + " under-replicated blocks");
           fsnamesystem.writeLock();
           try {
-            for (Block block : needReplicationBlocks) {
+            for (BlockInfo block : needReplicationBlocks) {
               fsnamesystem.isReplicationInProgress(
                   null, nodeBeingCheck, block, true);
             }

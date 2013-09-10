@@ -59,15 +59,22 @@ public class NameNodeMetrics implements Updater {
                     new MetricsTimeVaryingLong("GetBlockLocations", registry);
     public MetricsTimeVaryingLong numFilesRenamed =
                     new MetricsTimeVaryingLong("FilesRenamed", registry);
+    public MetricsTimeVaryingLong numFilesMerged = 
+                    new MetricsTimeVaryingLong("FileMerged", registry);
     public MetricsTimeVaryingLong numFilesDeleted =
                     new MetricsTimeVaryingLong("FilesDeleted", registry,
                     "The number of files/dirs deleted by delete or rename operations");
+    public MetricsTimeVaryingLong numFilesRaided = 
+                    new MetricsTimeVaryingLong("FileRaided", registry,
+                    "The number of files raided by raidFile operations");
     public MetricsTimeVaryingLong numGetListingOps =
                     new MetricsTimeVaryingLong("GetListingOps", registry);
     public MetricsTimeVaryingLong numCreateFileOps =
                     new MetricsTimeVaryingLong("CreateFileOps", registry);
     public MetricsTimeVaryingLong numDeleteFileOps =
                           new MetricsTimeVaryingLong("DeleteFileOps", registry);
+    public MetricsTimeVaryingLong numRaidFileOps = 
+                          new MetricsTimeVaryingLong("RaidFileOps", registry);
     public MetricsTimeVaryingLong numFileInfoOps =
                           new MetricsTimeVaryingLong("FileInfoOps", registry);
     public MetricsTimeVaryingLong numAddBlockOps =
@@ -119,6 +126,10 @@ public class NameNodeMetrics implements Updater {
         new MetricsTimeVaryingLong("numFileDataServletDoGet", registry);
     public MetricsTimeVaryingLong numListPathsServletDoGet =
         new MetricsTimeVaryingLong("numListPathsServletDoGet", registry);
+    public MetricsTimeVaryingLong numRedirectServletDoGet =
+        new MetricsTimeVaryingLong("numRedirectServletDoGet", registry);
+    public MetricsTimeVaryingLong numFsckDoGet =
+        new MetricsTimeVaryingLong("numFsckDoGet", registry);
     
     public MetricsTimeVaryingRate transactions =
                     new MetricsTimeVaryingRate("Transactions", registry, "Journal Transaction");
@@ -145,15 +156,16 @@ public class NameNodeMetrics implements Updater {
                     new MetricsIntValue("numBufferedTransactions", registry);
     public MetricsLongValue numOverReplicatedBlocks =
                     new MetricsLongValue("numOverReplicatedBlocks", registry);
-    public MetricsTimeVaryingLong numFsckOperations =
-                    new MetricsTimeVaryingLong("numFsckOperations", registry);
+    public MetricsLongValue numRaidEncodingTasks =
+                    new MetricsLongValue("numRaidEncodingTasks", registry);
     public MetricsIntValue imagesFailed = 
                     new MetricsIntValue("imagesFailed", registry, 
                         "Number of failed image directories");
     public MetricsIntValue journalsFailed = 
                     new MetricsIntValue("journalsFailed", registry, 
                         "Number of failed journals");
-
+    public MetricsLongValue tsLastEditsRoll = new MetricsLongValue(
+        "tsLastEditsRoll", registry, "Timestamp of last edits rolling");
       
     public NameNodeMetrics(Configuration conf, NameNode nameNode) {
       String sessionId = conf.get("session.id");

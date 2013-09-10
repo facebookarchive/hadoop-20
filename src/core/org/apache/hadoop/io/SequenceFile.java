@@ -467,6 +467,17 @@ public class SequenceFile {
                         codec, metadata, forceSync, false);
   }
 
+  public static Writer createWriter(FileSystem fs, Configuration conf,
+      Path name, Class keyClass, Class valClass, int bufferSize,
+      short replication, long blockSize, boolean createParent,
+      CompressionType compressionType, CompressionCodec codec,
+      Metadata metadata, boolean forceSync, boolean doParallelWrites)
+      throws IOException {
+    return createWriter(fs, conf, name, keyClass, valClass, bufferSize,
+        replication, blockSize, createParent, compressionType, codec, metadata,
+        forceSync, doParallelWrites, new WriteOptions());
+  }
+
   /**
    * Construct the preferred type of SequenceFile Writer.
    * @param fs The configured filesystem.
@@ -493,7 +504,8 @@ public class SequenceFile {
                  short replication, long blockSize, boolean createParent,
                  CompressionType compressionType, CompressionCodec codec,
                  Metadata metadata, boolean forceSync,
-                 boolean doParallelWrites) throws IOException {
+                 boolean doParallelWrites,
+                 WriteOptions options) throws IOException {
     if ((codec instanceof GzipCodec) &&
         !NativeCodeLoader.isNativeCodeLoaded() &&
         !ZlibFactory.isNativeZlibLoaded(conf)) {
@@ -505,18 +517,18 @@ public class SequenceFile {
     case NONE:
       return new Writer(conf,
           fs.createNonRecursive(name, FsPermission.getDefault(),true,
-              bufferSize, replication, blockSize, null,forceSync, doParallelWrites),
-          keyClass, valClass, metadata).ownStream();
+              bufferSize, replication, blockSize, null,forceSync, doParallelWrites,
+              options), keyClass, valClass, metadata).ownStream();
     case RECORD:
       return new RecordCompressWriter(conf,
           fs.createNonRecursive(name, FsPermission.getDefault(), true,
-              bufferSize, replication, blockSize, null,forceSync, doParallelWrites),
-          keyClass, valClass, codec, metadata).ownStream();
+              bufferSize, replication, blockSize, null,forceSync, doParallelWrites,
+              options), keyClass, valClass, codec, metadata).ownStream();
     case BLOCK:
       return new BlockCompressWriter(conf,
           fs.createNonRecursive(name, FsPermission.getDefault(), true,
-              bufferSize, replication, blockSize, null, forceSync, doParallelWrites),
-          keyClass, valClass, codec, metadata).ownStream();
+              bufferSize, replication, blockSize, null, forceSync, doParallelWrites,
+              options), keyClass, valClass, codec, metadata).ownStream();
     default:
       return null;
     }

@@ -77,6 +77,8 @@ public abstract class PipeMapRed {
 
   Serializer<Object> clientInputSerializer;
   
+  boolean useBytesWritable = false;
+  
   /** "map" or "reduce", used for creating configuration keys */
   private final String mapOrReduce;
 
@@ -146,6 +148,12 @@ public abstract class PipeMapRed {
       fs_ = FileSystem.get(job_);
 
       nonZeroExitIsFailure_ = job_.getBoolean("stream.non.zero.exit.is.failure", true);
+      String key_val_class = job_.get("stream.key_value.class", "Text");
+      if (key_val_class.equalsIgnoreCase("BytesWritable")) {
+        useBytesWritable = true;
+      } else {
+        useBytesWritable = false;
+      }
       
       doPipe_ = getDoPipe();
       if (!doPipe_) return;
@@ -387,6 +395,29 @@ public abstract class PipeMapRed {
     }
   }
 
+  void splitKeyVal(byte[] line, int length, BytesWritable key, BytesWritable val)
+  throws IOException {
+    int numKeyFields = getNumOfKeyFields();
+    byte[] separator = getFieldSeparator();
+    
+    // Need to find numKeyFields separators
+    int pos = UTF8ByteArrayUtils.findBytes(line, 0, length, separator);
+    for(int k=1; k<numKeyFields && pos!=-1; k++) {
+      pos = UTF8ByteArrayUtils.findBytes(line, pos + separator.length, 
+          length, separator);
+    }
+    try {
+      if (pos == -1) {
+        key.set(line, 0, length);
+        val.set(new byte[0], 0, 0);
+      } else {
+        StreamKeyValUtil.splitKeyVal(line, 0, length, key, val, pos, separator.length);
+      }
+    } catch (CharacterCodingException e) {
+      LOG.warn(StringUtils.stringifyException(e));
+    }
+  }
+
   class MROutputThread extends Thread {
 
     MROutputThread(OutputCollector output, Reporter reporter) {
@@ -398,15 +429,22 @@ public abstract class PipeMapRed {
     public void run() {
       LineReader lineReader = null;
       try {
-        Text key = new Text();
-        Text val = new Text();
         Text line = new Text();
         lineReader = new LineReader((InputStream)clientIn_, job_);
         // 3/4 Tool to Hadoop
         while (lineReader.readLine(line) > 0) {
           answer = line.getBytes();
-          splitKeyVal(answer, line.getLength(), key, val);
-          output.collect(key, val);
+          if (useBytesWritable) {
+            BytesWritable key = new BytesWritable();
+            BytesWritable val = new BytesWritable();
+            splitKeyVal(answer, line.getLength(), key, val);
+            output.collect(key, val);
+          } else {
+            Text key = new Text();
+            Text val = new Text();
+            splitKeyVal(answer, line.getLength(), key, val);
+            output.collect(key, val);
+          }
           line.clear();
           numRecWritten_++;
           long now = System.currentTimeMillis();
@@ -584,9 +622,9 @@ public abstract class PipeMapRed {
       logprintln(info);
       logflush();
       if (nextRecReadLog_ < 100000) {
-	  nextRecReadLog_ *= 10;
+        nextRecReadLog_ *= 10;
       } else {
-	  nextRecReadLog_ += 100000;
+        nextRecReadLog_ += 100000;
       }
     }
   }

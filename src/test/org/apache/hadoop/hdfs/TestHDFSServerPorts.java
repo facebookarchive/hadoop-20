@@ -24,6 +24,7 @@ import junit.framework.TestCase;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.namenode.SecondaryNameNode;
@@ -189,21 +190,21 @@ public class TestHDFSServerPorts extends TestCase {
       // start data-node on the same port as name-node
       Configuration conf2 = new Configuration(config);
       conf2.set("dfs.data.dir", new File(hdfsDir, "data").getPath());
-      conf2.set("dfs.datanode.address",
+      conf2.set(FSConstants.DFS_DATANODE_ADDRESS_KEY,
                 FileSystem.getDefaultUri(config).getAuthority());
       conf2.set("dfs.datanode.http.address", NAME_NODE_HTTP_HOST + "0");
       boolean started = canStartDataNode(conf2);
       assertFalse(started); // should fail
 
       // bind http server to the same port as name-node
-      conf2.set("dfs.datanode.address", NAME_NODE_HOST + "0");
+      conf2.set(FSConstants.DFS_DATANODE_ADDRESS_KEY, NAME_NODE_HOST + "0");
       conf2.set("dfs.datanode.http.address", 
                 config.get("dfs.http.address"));
       started = canStartDataNode(conf2);
       assertFalse(started); // should fail
     
       // both ports are different from the name-node ones
-      conf2.set("dfs.datanode.address", NAME_NODE_HOST + "0");
+      conf2.set(FSConstants.DFS_DATANODE_ADDRESS_KEY, NAME_NODE_HOST + "0");
       conf2.set("dfs.datanode.http.address", NAME_NODE_HTTP_HOST + "0");
       conf2.set("dfs.datanode.ipc.address", NAME_NODE_HOST + "0");
       started = canStartDataNode(conf2);

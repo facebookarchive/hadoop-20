@@ -41,6 +41,8 @@ public interface IServerCore extends Runnable {
   
   public void shutdown();
   
+  public String getServiceName();
+  
   public boolean shutdownPending();
   
   public void join();
@@ -70,7 +72,7 @@ public interface IServerCore extends Runnable {
   public void unsubscribeClient(long clientId, NamespaceEvent event) 
       throws ClientNotSubscribedException, InvalidClientIdException;
   
-  public long getId();
+  public String getId();
   
   public Queue<NamespaceNotification> getClientNotificationQueue(long clientId);
   

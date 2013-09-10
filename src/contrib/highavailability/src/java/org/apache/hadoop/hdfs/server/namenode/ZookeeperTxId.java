@@ -38,6 +38,12 @@ public class ZookeeperTxId implements Serializable {
   public byte[] toBytes() throws IOException {
     return SerializableUtils.toBytes(this);
   }
+  
+  public String toString() {
+    return String.format(
+        "TxId(ssid: %d, txid: %d, totalBlocks: %d, totalInodes: %d)", ssid,
+        txid, totalBlocks, totalInodes);
+  }
 
   private void writeObject(ObjectOutputStream out)
   throws IOException {

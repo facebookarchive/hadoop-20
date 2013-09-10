@@ -14,8 +14,10 @@ import junit.framework.TestCase;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.ResourceTracker;
 import org.apache.hadoop.mapred.UtilsForTests;
+import org.apache.hadoop.mapred.CoronaJobTracker;
 
 public class TestSessionDriver extends TestCase {
   final static Log LOG = LogFactory.getLog(TestSessionDriver.class);
@@ -28,10 +30,14 @@ public class TestSessionDriver extends TestCase {
   SessionDriver driver;
   UtilsForTests.FakeClock myclock;
 
-  class ResourceDriver implements SessionDriverService.Iface {
+  //class ResourceDriver implements SessionDriverService.Iface {
+  class ResourceDriver extends CoronaJobTracker {
     public List<ResourceGrant> granted = new ArrayList<ResourceGrant> ();
     public List<ResourceGrant> revoked = new ArrayList<ResourceGrant> ();
 
+    public ResourceDriver() throws IOException{
+      super(new JobConf());
+    }
     @Override
     public void grantResource(String handle, List<ResourceGrant> granted) {
       LOG.info("Received " + granted.size() + " grants for session: " + handle);
@@ -242,14 +248,18 @@ public class TestSessionDriver extends TestCase {
       cms.stopRunning();
       cms.interrupt();
       cms.join();
-
+      
       List<ResourceRequest> rlist = TstUtils.createRequests(this.numNodes, 800, 0);
 
       // requests some resources
-      driver.requestResources(rlist.subList(0, 400));
+      try {
+        driver.requestResources(rlist.subList(0, 400));
+      } catch (IOException e) {
+        
+      }
 
       // these requests will timeout immediately
-      TestClusterManager.reliableSleep(500);
+      TestClusterManager.reliableSleep(20000);
 
       if (driver.getFailed() == null)
         assertEquals("CM failure not detected", null);

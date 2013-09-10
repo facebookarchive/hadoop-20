@@ -77,7 +77,7 @@ import static org.mockito.Mockito.verify;
  */
 public class TestNameNodeIdempotence extends TestCase {
   {
-    ((Log4JLogger) DataNode.LOG).getLogger().setLevel(Level.ALL);
+    DataNode.LOG.getLogger().setLevel(Level.ALL);
     ((Log4JLogger) DFSClient.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger) FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger) NameNode.LOG).getLogger().setLevel(Level.ALL);
@@ -101,7 +101,8 @@ public class TestNameNodeIdempotence extends TestCase {
    * Test closeFile() name-node RPC is idempotent
    */
   public void testIdepotentCloseCalls() throws IOException {
-    ClientProtocol nn = cluster.getNameNode();
+    NameNode miniNN = cluster.getNameNode();
+    ClientProtocol nn = miniNN;
     FileSystem fs = cluster.getFileSystem();
     DFSClient dfsclient = ((DistributedFileSystem) fs).dfs;
     DFSClient mockDfs = spy(dfsclient);

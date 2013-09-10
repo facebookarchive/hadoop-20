@@ -18,6 +18,7 @@
 package org.apache.hadoop.fs;
 
 import org.apache.hadoop.io.*;
+import org.apache.hadoop.net.NodeBase;
 
 import java.io.*;
 
@@ -132,6 +133,18 @@ public class BlockLocation implements Writable {
       return new String[0];
     } else {
       return this.topologyPaths;
+    }
+  }
+  
+  public String[] getRacks() throws IOException {
+    if ((topologyPaths == null) || (topologyPaths.length == 0)) {
+      return new String[0];
+    } else {
+      String[] racks = new String[topologyPaths.length];
+      for (int i = 0; i < topologyPaths.length; i++) {
+        racks[i] = new NodeBase(topologyPaths[i]).getNetworkLocation(); 
+      }
+      return racks;
     }
   }
   

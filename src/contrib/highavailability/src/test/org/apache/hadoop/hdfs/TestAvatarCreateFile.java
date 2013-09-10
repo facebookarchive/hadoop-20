@@ -34,6 +34,7 @@ public class TestAvatarCreateFile {
     conf.setBoolean("fs.ha.retrywrites", true);
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     fs = cluster.getFileSystem();
+    pass = true;
   }
 
   @After
@@ -74,11 +75,13 @@ public class TestAvatarCreateFile {
     cluster.clearZooKeeperNode(0);
     ClientProtocol namenode = ((DistributedAvatarFileSystem) fs).getClient()
         .getNameNodeRPC();
-    new FailoverThread().start();
+    Thread t = new FailoverThread();
+    t.start();
     FsPermission perm = new FsPermission((short) 0264);
     namenode.create("/test", perm, ((DistributedAvatarFileSystem) fs)
         .getClient().getClientName(), true, true, (short) 3, (long) 1024);
     LOG.info("Done with create");
+    t.join();
     assertTrue(fs.exists(new Path("/test")));
     assertTrue(pass);
   }
@@ -90,11 +93,13 @@ public class TestAvatarCreateFile {
     cluster.clearZooKeeperNode(0);
     ClientProtocol namenode = ((DistributedAvatarFileSystem) fs).getClient()
         .getNameNodeRPC();
-    new FailoverThread().start();
+    Thread t = new FailoverThread();
+    t.start();
     FsPermission perm = new FsPermission((short) 0264);
     namenode.create("/test1", perm, ((DistributedAvatarFileSystem) fs)
         .getClient().getClientName(), false, true, (short) 3, (long) 1024);
     LOG.info("Done with create");
+    t.join();
     assertTrue(fs.exists(new Path("/test1")));
     assertTrue(pass);
   }

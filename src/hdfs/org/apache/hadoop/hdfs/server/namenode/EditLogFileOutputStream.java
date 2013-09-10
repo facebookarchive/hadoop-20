@@ -91,10 +91,34 @@ public class EditLogFileOutputStream extends EditLogOutputStream {
       }
     }
   }
+  
+  @Override
+  public String toString() {
+    return "EditLogFileOutputStream(" + file + ")";
+  }
 
   @Override
   public void write(FSEditLogOp op) throws IOException {
     doubleBuf.writeOp(op);
+  }
+  
+  /**
+   * Write a transaction to the stream. The serialization format is:
+   * <ul>
+   *   <li>the opcode (byte)</li>
+   *   <li>the transaction id (long)</li>
+   *   <li>the actual Writables for the transaction</li>
+   * </ul>
+   * */
+  @Override
+  public void writeRaw(byte[] bytes, int offset, int length) throws IOException {
+    doubleBuf.writeRaw(bytes, offset, length);
+  }
+  
+  @Override
+  public void writeRawOp(byte[] bytes, int offset, int length, long txid)
+      throws IOException {
+    doubleBuf.writeRawOp(bytes, offset, length, txid);
   }
 
   /**
@@ -163,7 +187,7 @@ public class EditLogFileOutputStream extends EditLogOutputStream {
    * accumulates new log records while readyBuffer will be flushed and synced.
    */
   @Override
-  protected void flushAndSync() throws IOException {
+  protected void flushAndSync(boolean durable) throws IOException {
     if (fp == null) {
       throw new IOException("Trying to use aborted output stream");
     }
@@ -172,8 +196,10 @@ public class EditLogFileOutputStream extends EditLogOutputStream {
       return;
     }
     doubleBuf.flushTo(fp);
-    fc.force(false); // metadata updates not needed
-    fc.position(fc.position() - 1); // skip back the end-of-file marker         
+    if (durable) {
+      fc.force(false); // metadata updates not needed
+    }
+    fc.position(fc.position() - 1); // skip back the end-of-file marker
   }
   
   /**

@@ -36,15 +36,27 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import javax.management.NotCompliantMBeanException;
+import javax.management.ObjectName;
+import javax.management.StandardMBean;
 import javax.xml.parsers.ParserConfigurationException;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.BlockLocation;
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocatedFileStatus;
@@ -52,14 +64,18 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.ipc.Server;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.raid.Decoder.DecoderInputStream;
+import org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptFile;
+import org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptFileStatus;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Worker;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptFileCounter;
+import org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptionWorker;
 import org.apache.hadoop.raid.DistRaid.EncodingCandidate;
 import org.apache.hadoop.raid.LogUtils.LOGRESULTS;
 import org.apache.hadoop.raid.LogUtils.LOGTYPES;
@@ -69,22 +85,21 @@ import org.apache.hadoop.raid.protocol.RaidProtocol;
 import org.apache.hadoop.raid.StripeStore;
 import org.apache.hadoop.tools.HadoopArchives;
 import org.apache.hadoop.util.Daemon;
-import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.Progressable;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
-import org.xml.sax.SAXException;
-import org.apache.hadoop.mapred.JobConf;
+import org.apache.hadoop.util.VersionInfo;
 import org.json.JSONException;
-import org.json.JSONObject;
+import org.xml.sax.SAXException;
+import org.apache.hadoop.metrics.util.MBeanUtil;
 
 /**
  * A base class that implements {@link RaidProtocol}.
  *
  * use raid.classname to specify which implementation to use
  */
-public abstract class RaidNode implements RaidProtocol {
+public abstract class RaidNode implements RaidProtocol, RaidNodeStatusMBean {
 
   static{
     Configuration.addDefaultResource("hdfs-default.xml");
@@ -104,6 +119,8 @@ public abstract class RaidNode implements RaidProtocol {
   public static final long SLEEP_TIME = 10000L; // 10 seconds
   public static final String TRIGGER_MONITOR_SLEEP_TIME_KEY = 
       "hdfs.raid.trigger.monitor.sleep.time";
+  public static final String UNDER_REDUNDANT_FILES_PROCESSOR_SLEEP_TIME_KEY=
+      "hdfs.raid.under.redundant.files.processor.sleep.time";
   public static final int DEFAULT_PORT = 60000;
   // we don't raid too small files
   public static final long MINIMUM_RAIDABLE_FILESIZE = 10*1024L;
@@ -123,6 +140,8 @@ public abstract class RaidNode implements RaidProtocol {
   public static final String RAID_DIRECTORYTRAVERSAL_THREADS =
       "raid.directorytraversal.threads";
 
+  public static final String RAID_UNDER_REDUNDANT_FILES = 
+      "raid.under.redundant.files";
   public static final String RAID_MAPREDUCE_UPLOAD_CLASSES = 
       "raid.mapreduce.upload.classes";
   public static final String RAID_DISABLE_CORRUPT_BLOCK_FIXER_KEY = 
@@ -148,14 +167,14 @@ public abstract class RaidNode implements RaidProtocol {
       "hdfs.raid.parity.initial.repl";
   public static final int DEFAULT_RAID_PARITY_INITIAL_REPL = 3;
   public static final String JOBUSER = "raid";
-
+  
   public static final String HAR_SUFFIX = "_raid.har";
   public static final Pattern PARITY_HAR_PARTFILE_PATTERN =
 
       Pattern.compile(".*" + HAR_SUFFIX + "/part-.*");
 
   public static final String RAIDNODE_CLASSNAME_KEY = "raid.classname";  
-  public static final DateFormat df = new SimpleDateFormat("yyyy-MM-dd-HH-mm");
+  public static final DateFormat df = new SimpleDateFormat("yyyy-MM-dd-HH-mm-ss-SSS");
   public static Random rand = new Random();
 
   /** RPC server */
@@ -182,7 +201,9 @@ public abstract class RaidNode implements RaidProtocol {
 
   /** Deamon thread to trigger policies */
   Daemon triggerThread = null;
+  Daemon urfThread = null;
   public static long triggerMonitorSleepTime = SLEEP_TIME;
+  public static long underRedundantFilesProcessorSleepTime = SLEEP_TIME;
 
   /** Deamon thread to delete obsolete parity files */
   PurgeMonitor purgeMonitor = null;
@@ -205,9 +226,12 @@ public abstract class RaidNode implements RaidProtocol {
   Daemon placementMonitorThread = null;
   
   TriggerMonitor triggerMonitor = null;
+  UnderRedundantFilesProcessor urfProcessor = null;
 
   private int directoryTraversalThreads;
   private boolean directoryTraversalShuffle;
+  private ObjectName beanName;
+  private ObjectName raidnodeMXBeanName;
 
   // statistics about RAW hdfs blocks. This counts all replicas of a block.
   public static class Statistics {
@@ -308,6 +332,7 @@ public abstract class RaidNode implements RaidProtocol {
     try {
       if (server != null) server.join();
       if (triggerThread != null) triggerThread.join();
+      if (urfThread != null) urfThread.join();
       if (blockFixerThread != null) blockFixerThread.join();
       if (blockCopierThread != null) blockCopierThread.join();
       if (corruptFileCounterThread != null) corruptFileCounterThread.join();
@@ -332,6 +357,10 @@ public abstract class RaidNode implements RaidProtocol {
       triggerThread.interrupt();
       triggerMonitor = null;
     }
+    if (urfThread != null) {
+      urfThread.interrupt();
+      urfProcessor = null;
+    }
     if (blockIntegrityMonitor != null) blockIntegrityMonitor.running = false;
     if (blockFixerThread != null) blockFixerThread.interrupt();
     if (blockCopierThread != null) blockCopierThread.interrupt();
@@ -348,6 +377,7 @@ public abstract class RaidNode implements RaidProtocol {
         LOG.warn("Exception shutting down " + RaidNode.class, e);
       }
     }
+    this.unregisterMBean();
   }
 
   private static InetSocketAddress getAddress(String address) {
@@ -409,7 +439,7 @@ public abstract class RaidNode implements RaidProtocol {
 
   private void initialize(Configuration conf) 
       throws IOException, SAXException, InterruptedException, RaidConfigurationException,
-      ClassNotFoundException, ParserConfigurationException, URISyntaxException {
+      ClassNotFoundException, ParserConfigurationException, URISyntaxException, JSONException {
     this.startTime = RaidNode.now();
     this.conf = conf;
     modTimePeriod = conf.getLong(RAID_MOD_TIME_PERIOD_KEY, 
@@ -424,8 +454,8 @@ public abstract class RaidNode implements RaidProtocol {
     // read in the configuration
     configMgr = new ConfigManager(conf);
 
-    // create rpc server 
-    this.server = RPC.getServer(this, socAddr.getHostName(), socAddr.getPort(),
+    // create rpc server
+    this.server = RPC.getServer(this, socAddr.getAddress().getHostAddress(), socAddr.getPort(),
         handlerCount, false, conf);
 
     // create checksum store if not exist  
@@ -448,7 +478,7 @@ public abstract class RaidNode implements RaidProtocol {
     boolean useBlockFixer = 
         !conf.getBoolean(RAID_DISABLE_CORRUPT_BLOCK_FIXER_KEY, false);
     boolean useBlockCopier = 
-        !conf.getBoolean(RAID_DISABLE_DECOMMISSIONING_BLOCK_COPIER_KEY, false);
+        !conf.getBoolean(RAID_DISABLE_DECOMMISSIONING_BLOCK_COPIER_KEY, true);
     boolean useCorruptFileCounter = 
         !conf.getBoolean(RAID_DISABLE_CORRUPTFILE_COUNTER_KEY, false);
 
@@ -477,10 +507,18 @@ public abstract class RaidNode implements RaidProtocol {
     RaidNode.triggerMonitorSleepTime = conf.getLong(
         TRIGGER_MONITOR_SLEEP_TIME_KEY, 
         SLEEP_TIME);
+    RaidNode.underRedundantFilesProcessorSleepTime = conf.getLong(
+        UNDER_REDUNDANT_FILES_PROCESSOR_SLEEP_TIME_KEY,
+        SLEEP_TIME);
     this.triggerMonitor = new TriggerMonitor();
     this.triggerThread = new Daemon(this.triggerMonitor);
     this.triggerThread.setName("Trigger Thread");
     this.triggerThread.start();
+    
+    this.urfProcessor = new UnderRedundantFilesProcessor(conf);
+    this.urfThread = new Daemon(this.urfProcessor);
+    this.urfThread.setName("UnderRedundantFilesProcessor Thread");
+    this.urfThread.start();
 
     // start the thread that monitor and moves blocks
     this.placementMonitor = new PlacementMonitor(conf);
@@ -509,14 +547,37 @@ public abstract class RaidNode implements RaidProtocol {
         conf.getInt(RAID_DIRECTORYTRAVERSAL_THREADS, 4);
 
     startHttpServer();
+    this.registerMBean();
 
     initialized = true;
+  }
+  
+  public void registerMBean() {
+    StandardMBean bean;
+    try {
+      beanName = VersionInfo.registerJMX("RaidNode");
+      bean = new StandardMBean(this, RaidNodeStatusMBean.class);
+      raidnodeMXBeanName = MBeanUtil.registerMBean("RaidNode", "RaidNodeState", bean);
+    } catch (NotCompliantMBeanException e) {
+      e.printStackTrace();
+    }
+    LOG.info("Registered RaidNodeStatusMBean");
+  }
+  
+  public void unregisterMBean() {
+    if (this.raidnodeMXBeanName != null) {
+      MBeanUtil.unregisterMBean(raidnodeMXBeanName);
+    }
+    if (this.beanName != null) {
+      MBeanUtil.unregisterMBean(beanName);
+    }
+    LOG.info("Unregistered RaidNodeStatusMBean");
   }
 
   private void startHttpServer() throws IOException {
     String infoAddr = conf.get("mapred.raid.http.address", "localhost:50091");
     InetSocketAddress infoSocAddr = NetUtils.createSocketAddr(infoAddr);
-    this.infoBindAddress = infoSocAddr.getHostName();
+    this.infoBindAddress = infoSocAddr.getAddress().getHostAddress();
     int tmpInfoPort = infoSocAddr.getPort();
     this.infoServer = new HttpServer("raid", this.infoBindAddress, tmpInfoPort,
         tmpInfoPort == 0, conf);
@@ -543,8 +604,16 @@ public abstract class RaidNode implements RaidProtocol {
     return this.triggerMonitor;
   }
 
+  public UnderRedundantFilesProcessor getURFProcessor() {
+    return this.urfProcessor;
+  }
+  
   public PurgeMonitor getPurgeMonitor() {
     return this.purgeMonitor;
+  }
+  
+  public BlockIntegrityMonitor getBlockIntegrityMonitor() {
+    return blockIntegrityMonitor;
   }
 
   public BlockIntegrityMonitor.Status getBlockIntegrityMonitorStatus() {
@@ -558,17 +627,23 @@ public abstract class RaidNode implements RaidProtocol {
   public BlockIntegrityMonitor.Status getBlockCopierStatus() {
     return ((Worker)blockIntegrityMonitor.getDecommissioningMonitor()).getStatus();
   }
-
-  // Return the counter map where key is the check directories, 
-  // the value is the number of corrupt files under that directory 
-  public Map<String, Long> getUnRecoverableFileCounterMap() {
-    return ((CorruptFileCounter)blockIntegrityMonitor.
-        getCorruptFileCounter()).getUnRecoverableCounterMap();
+  
+  public double getNumDetectionsPerSec() {
+    return ((CorruptionWorker)blockIntegrityMonitor.getCorruptionMonitor()).
+        getNumDetectionsPerSec();
   }
   
-  public Map<String, Long> getRecoverableFileCounterMap() {
-    return ((CorruptFileCounter)blockIntegrityMonitor.
-        getCorruptFileCounter()).getRecoverableCounterMap();
+  public ArrayList<CorruptFile> getCorruptFileList(String monitorDir, 
+      CorruptFileStatus cfs) {
+    return ((CorruptionWorker)blockIntegrityMonitor.getCorruptionMonitor()).
+        getCorruptFileList(monitorDir, cfs);
+  }
+
+  // Return the counter map where key is the check directories, 
+  // the value is counters of different types of corrupt files 
+  public Map<String, Map<CorruptFileStatus, Long>> getCorruptFilesCounterMap() {
+    return ((CorruptionWorker)blockIntegrityMonitor.getCorruptionMonitor()).
+        getCorruptFilesCounterMap();
   }
   
   public long getNumFilesWithMissingBlks() {
@@ -636,11 +711,236 @@ public abstract class RaidNode implements RaidProtocol {
   public String recoverFile(String inStr, long corruptOffset) throws IOException {
     throw new IOException("Not supported");
   }
-
+  
+  /** {@inheritDoc} */
+  public void sendRecoveryTime(String path, long recoveryTime, String taskId)
+      throws IOException {
+    this.blockIntegrityMonitor.sendRecoveryTime(path, recoveryTime, taskId);
+  }
+  
+  public boolean startSmokeTest() throws Exception {
+    return startSmokeTest(true);
+  }
+  
+  public boolean startSmokeTest(boolean wait) throws Exception {
+    Runnable worker = this.blockIntegrityMonitor.getCorruptionMonitor();
+    if (worker == null || !(worker instanceof CorruptionWorker)) {
+      throw new IOException("CorruptionWorker is not found");
+    }
+    if (!(this instanceof DistRaidNode)) {
+      throw new IOException("Current Raid daemon is not DistRaidNode");
+    }
+    if (!(this.blockIntegrityMonitor instanceof DistBlockIntegrityMonitor)) {
+      throw new IOException("Current BlockFix daemon is not DistBlockIntegrityMonitor");
+    }
+    SmokeTestThread.LOG.info("[SMOKETEST] Start Raid Smoke Test");
+    long startTime = System.currentTimeMillis();
+    SmokeTestThread str = new SmokeTestThread(this);
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    Future<Boolean> future = executor.submit(str);
+    boolean result = false;
+    if (wait) {
+      try {
+        result = future.get(1200, TimeUnit.SECONDS);
+      } catch (Throwable exp) {
+        SmokeTestThread.LOG.info("[SMOKETEST] Get Exception ", exp);
+      } finally {
+        executor.shutdownNow();
+        SmokeTestThread.LOG.info("[SMOKETEST] Finish Raid Smoke Test (" + 
+            (result? "succeed": "fail") + ") using " + 
+            (System.currentTimeMillis() - startTime) + "ms");
+        if (str.ioe != null) {
+          throw str.ioe;
+        }
+      }
+    } 
+    return result;
+  }
+  
   /**
    * returns the number of raid jobs running for a particular policy
    */
   abstract int getRunningJobsForPolicy(String policyName);
+  
+  class IncreaseReplicationRunnable implements Runnable {
+    List<String> files = null;
+    FileSystem fs = null;
+    AtomicLong failFilesCount = null;
+    AtomicLong succeedFilesCount = null;
+    IncreaseReplicationRunnable(List<String> newFiles, FileSystem newFs,
+        AtomicLong newFailFilesCount, AtomicLong newSucceedFilesCount) {
+      files = newFiles;
+      fs = newFs;
+      failFilesCount = newFailFilesCount;
+      succeedFilesCount = newSucceedFilesCount;
+    }
+    public void run() {
+      short repl = 3;
+      int failCount = 0;
+      int succeedCount = 0;
+      try {
+        for (String file: files) {
+          FileStatus stat = null;
+          Path p = new Path(file);
+          try {
+            stat = fs.getFileStatus(p);
+          } catch (FileNotFoundException fnfe) {
+            // File doesn't exist, skip it
+            continue;
+          }
+          if (stat.isDir() || stat.getReplication() >= repl) {
+            // It's a directory or it already has enough replication, skip it
+            continue;
+          }
+          if (!fs.setReplication(new Path(file), repl)) {
+            failCount++;
+            LOG.warn("Fail to increase replication for " + file);
+          } else {
+            succeedCount++;
+          }
+        }
+      } catch (Throwable th) {
+        LOG.error("Fail to increase replication", th);
+      } finally {
+        failFilesCount.addAndGet(failCount);
+        succeedFilesCount.addAndGet(succeedCount);
+      }
+    }
+  }
+  
+  public class UnderRedundantFilesProcessor implements Runnable {
+    public static final String UNDER_REDUNDANT_FILES_PROCESSOR_THREADS_NUM_KEY = 
+        "raid.under.redundant.files.processor.threads.num";
+    public static final String INCREASE_REPLICATION_BATCH_SIZE_KEY = 
+        "raid.increase.replication.batch.size";
+    public static final int DEFAULT_UNDER_REDUNDANT_FILES_PROCESSOR_THREADS_NUM = 5;
+    public static final int DEFAULT_INCREASE_REPLICATION_BATCH_SIZE = 50;
+    int numThreads = DEFAULT_UNDER_REDUNDANT_FILES_PROCESSOR_THREADS_NUM;
+    int incReplBatch = DEFAULT_INCREASE_REPLICATION_BATCH_SIZE;
+    long lastFileModificationTime = 0;
+    AtomicLong failedFilesCount = new AtomicLong(0);
+    AtomicLong succeedFilesCount = new AtomicLong(0);
+    String[] monitorDirs = null;
+    int[] counters = null;
+    int others = 0;
+    
+    public UnderRedundantFilesProcessor(Configuration conf) {
+      numThreads = conf.getInt(UNDER_REDUNDANT_FILES_PROCESSOR_THREADS_NUM_KEY,
+          DEFAULT_UNDER_REDUNDANT_FILES_PROCESSOR_THREADS_NUM);
+      incReplBatch = conf.getInt(INCREASE_REPLICATION_BATCH_SIZE_KEY,
+          DEFAULT_INCREASE_REPLICATION_BATCH_SIZE);
+    }
+    
+    public void processUnderRedundantFiles(ExecutorService executor, int counterLen)
+        throws IOException {
+      String underRedundantFile = conf.get(RAID_UNDER_REDUNDANT_FILES);
+      if (underRedundantFile == null) {
+        return;
+      }
+      Path fileListPath = new Path(underRedundantFile);
+      BufferedReader fileListReader;
+      final FileSystem fs = fileListPath.getFileSystem(conf);
+      FileStatus stat = null;
+      try {
+        stat = fs.getFileStatus(fileListPath);
+        if (stat.isDir() || stat.getModificationTime() == lastFileModificationTime) {
+          // Skip directory and already-scan files
+          return;
+        }
+      } catch (FileNotFoundException fnfe) {
+        return;
+      }
+      try {
+        InputStream in = fs.open(fileListPath);
+        fileListReader = new BufferedReader(new InputStreamReader(in));
+      } catch (IOException e) {
+        LOG.warn("Could not create reader for " + fileListPath, e);
+        return;
+      }
+      int[] newCounters = new int[counterLen];
+      int newOthers = 0;
+      String l = null;
+      List<String> files = new ArrayList<String>();
+      try {
+        while ((l = fileListReader.readLine()) != null) {
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("checking file " + l);
+          }
+          for (Codec codec: Codec.getCodecs()) {
+            if (l.startsWith(codec.tmpParityDirectory)) {
+              // Skip tmp parity files 
+              continue;
+            }
+          }
+          boolean match = false;
+          for (int i = 0; i < newCounters.length; i++) {
+            if (l.startsWith(monitorDirs[i])) {
+              newCounters[i]++;
+              match = true;
+            }
+          }
+          if (!match) {
+            newOthers++;
+          }
+          files.add(l);
+          if (files.size() == incReplBatch) {
+            Runnable work = new IncreaseReplicationRunnable(files, fs,
+                failedFilesCount, succeedFilesCount);
+            executor.submit(work);
+            files = new ArrayList<String>();
+          }
+        }
+        if (files.size() > 0) {
+          Runnable work = new IncreaseReplicationRunnable(files, fs,
+              failedFilesCount, succeedFilesCount);
+          executor.submit(work);
+        }
+        counters = newCounters;
+        others = newOthers;
+        lastFileModificationTime = stat.getModificationTime();
+      } catch (IOException e) {
+        LOG.error("Encountered error in processUnderRedundantFiles", e);
+      }
+    }
+    
+    public void run() {
+      RaidNodeMetrics rnm = RaidNodeMetrics.getInstance(
+          RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
+      rnm.initUnderRedundantFilesMetrics(conf);
+      ExecutorService executor = null;
+      ThreadFactory factory = new ThreadFactory() {
+        final AtomicInteger tnum = new AtomicInteger();
+        public Thread newThread(Runnable r) {
+          Thread t = new Thread(r);
+          t.setName("IncReplication-" + tnum.incrementAndGet());
+          return t;
+        }
+      };
+      executor = Executors.newFixedThreadPool(numThreads, factory);
+      monitorDirs = BlockIntegrityMonitor.getCorruptMonitorDirs(conf);
+      while (running) {
+        LOG.info("Start process UnderRedundantFiles");
+        try {
+          processUnderRedundantFiles(executor, monitorDirs.length);
+          LOG.info("Update UnderRedundantFiles Metrics");
+          if (counters != null) {
+            for (int i = 0; i < counters.length; i++) {
+              rnm.underRedundantFiles.get(monitorDirs[i]).set(counters[i]);
+            }
+            rnm.underRedundantFiles.get(BlockIntegrityMonitor.OTHERS).set(others);
+          }
+        } catch (Throwable e) {
+          LOG.error(e);
+        }
+        try {
+          Thread.sleep(RaidNode.underRedundantFilesProcessorSleepTime);
+        } catch (InterruptedException ie) {
+          break;
+        }
+      }
+      executor.shutdown();
+    }    
+  }
 
   /**
    * Periodically checks to see which policies should be fired.
@@ -889,7 +1189,6 @@ public abstract class RaidNode implements RaidProtocol {
       }
       return list;
     }
-
 
     /**
      * Keep processing policies.
@@ -1302,7 +1601,7 @@ public abstract class RaidNode implements RaidProtocol {
    * RAID an individual directory
    * @throws InterruptedException 
    */
-  public static LOGRESULTS doDirRaid(Configuration conf, EncodingCandidate ec,
+  private static LOGRESULTS doDirRaid(Configuration conf, EncodingCandidate ec,
       Path destPath, Codec codec, Statistics statistics,
       Progressable reporter, boolean doSimulate, int targetRepl, int metaRepl)
         throws IOException {
@@ -1382,7 +1681,7 @@ public abstract class RaidNode implements RaidProtocol {
    * RAID an individual file
    * @throws InterruptedException 
    */
-  public static LOGRESULTS doFileRaid(Configuration conf, EncodingCandidate ec,
+  private static LOGRESULTS doFileRaid(Configuration conf, EncodingCandidate ec,
       Path destPath, Codec codec, Statistics statistics,
       Progressable reporter, boolean doSimulate, int targetRepl, int metaRepl)
         throws IOException, InterruptedException {
@@ -1887,12 +2186,31 @@ public abstract class RaidNode implements RaidProtocol {
    * Get the job id from the configuration
    */
   public static String getJobID(Configuration conf) {
-    return conf.get("mapred.job.id", 
-        "localRaid" + df.format(new Date())); 
+    String jobId = conf.get("mapred.job.id", null);
+    if (jobId == null) {
+      jobId = "localRaid" + df.format(new Date());
+      conf.set("mapred.job.id", jobId);
+    }
+    return jobId;
   }
   
   public String getReadReconstructionMetricsUrl() {
     return configMgr.getReadReconstructionMetricsUrl();
+  }
+  
+  @Override //RaidNodeStatusMBean
+  public long getTimeSinceLastSuccessfulFix() {
+    return this.blockIntegrityMonitor.getTimeSinceLastSuccessfulFix();
+  }
+  
+  @Override //RaidNodeStatusMBean
+  public long getNumUnderRedundantFilesFailedIncreaseReplication() {
+    return this.urfProcessor.failedFilesCount.get();
+  }
+  
+  @Override //RaidNodeStatusMBean
+  public long getNumUnderRedundantFilesSucceededIncreaseReplication() {
+    return this.urfProcessor.succeedFilesCount.get();
   }
 
   public static void main(String argv[]) throws Exception {

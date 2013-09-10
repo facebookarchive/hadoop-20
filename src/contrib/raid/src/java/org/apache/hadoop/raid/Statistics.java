@@ -29,6 +29,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.DFSClient;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 import org.apache.hadoop.util.StringUtils;
 
@@ -36,7 +37,6 @@ import org.apache.hadoop.util.StringUtils;
  * Capacity statistics for a type of erasure code.
  */
 public class Statistics implements Serializable {
-
   final protected String codecId;
   final protected Codec codec;
   final protected int parityLength;
@@ -234,9 +234,9 @@ public class Statistics implements Serializable {
    * Get the saving of this code in bytes
    * @return The saving in bytes
    */
-  public long getSaving() {
+  public long getSaving(Configuration conf) {
     try {
-      DFSClient dfs = new DFSClient(new Configuration());
+      DFSClient dfs = ((DistributedFileSystem)FileSystem.get(conf)).getClient();
       Counters raidedCounters = stateToSourceCounters.get(RaidState.RAIDED);
       long physical = raidedCounters.getNumBytes() +
           parityCounters.getNumBytes();
@@ -251,9 +251,9 @@ public class Statistics implements Serializable {
    * Get the estimated saving of this code in bytes when RAIDing is done
    * @return The saving in bytes
    */
-  public long getDoneSaving() {
+  public long getDoneSaving(Configuration conf) {
     try {
-      DFSClient dfs = new DFSClient(new Configuration());
+      DFSClient dfs = ((DistributedFileSystem)FileSystem.get(conf)).getClient();
       Counters raidedCounters = stateToSourceCounters.get(RaidState.RAIDED);
       Counters shouldRaidCounters =
           stateToSourceCounters.get(RaidState.NOT_RAIDED_BUT_SHOULD);

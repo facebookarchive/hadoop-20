@@ -17,8 +17,8 @@
 <%
     String jobid = request.getParameter("jobid");
     String logFile = request.getParameter("logFile");
-	String encodedLogFileName = JobHistory.JobInfo.encodeJobHistoryFilePath(logFile);
-	
+    String encodedLogFileName = JobHistory.JobInfo.encodeJobHistoryFilePath(logFile);
+    
     Path jobFile = new Path(encodedLogFileName);
     String jobUniqueString = jobid;
 	
@@ -43,6 +43,30 @@
 <b>Launched At: </b> <%=StringUtils.getFormattedTimeWithDiff(dateFormat, job.getLong(Keys.LAUNCH_TIME), job.getLong(Keys.SUBMIT_TIME)) %><br/>
 <b>Finished At: </b>  <%=StringUtils.getFormattedTimeWithDiff(dateFormat, job.getLong(Keys.FINISH_TIME), job.getLong(Keys.LAUNCH_TIME)) %><br/>
 <b>Status: </b> <%= ((job.get(Keys.JOB_STATUS) == "")?"Incomplete" :job.get(Keys.JOB_STATUS)) %><br/> 
+
+<%
+  String jobTrackerId = job.get(Keys.JOBTRACKERID);
+  
+  if (jobTrackerId != null && jobTrackerId.length() != 0) {
+    String taskLogUrl = null;
+    String[] jtId = jobTrackerId.split(":");
+    if (jtId.length > 2) {
+	    taskLogUrl = TaskLogServlet.getTaskLogUrl(jtId[0],
+	          						jtId[1],
+	          						jtId[2]);
+	    if (taskLogUrl != null) {
+	      out.print("<b>RemoteJobTrackerLog:</b>");
+	      String tailFourKBUrl = taskLogUrl + "&start=-4097";
+	      String tailEightKBUrl = taskLogUrl + "&start=-8193";
+	      String entireLogUrl = taskLogUrl + "&all=true";
+	      out.print("<a href=\"" + tailFourKBUrl + "\">Last 4KB</a>  ");
+	      out.print("<a href=\"" + tailEightKBUrl + "\">Last 8KB</a>  ");
+	      out.print("<a href=\"" + entireLogUrl + "\">All</a><br/>\n");
+	    }
+    }
+  }
+%>
+
 <%
     Map<String, JobHistory.Task> tasks = job.getAllTasks();
     int totalMaps = 0 ; 

@@ -25,15 +25,23 @@ import java.io.InputStream;
 import java.util.Arrays;
 import java.util.EnumMap;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.permission.PermissionStatus;
-import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
+import org.apache.hadoop.hdfs.protocol.LayoutVersion;
+import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.AddCloseOp;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.AppendOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.ClearNSQuotaOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.ConcatDeleteOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.DeleteOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.HardLinkOp;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.MergeOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.MkdirOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.RenameOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.SetGenstampOp;
@@ -43,15 +51,13 @@ import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.SetPermissionsOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.SetQuotaOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.SetReplicationOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.TimesOp;
-
-import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
-
 import org.apache.hadoop.hdfs.util.Holder;
-import org.mortbay.log.Log;
+import org.apache.hadoop.raid.RaidCodec;
 
 import com.google.common.base.Joiner;
 
 public class FSEditLogLoader {
+  public static final Log LOG = LogFactory.getLog(FSEditLogLoader.class);
   private final FSNamesystem fsNamesys;
   public static final long TXID_IGNORE = -1;
   private long lastAppliedTxId = -1;
@@ -61,16 +67,49 @@ public class FSEditLogLoader {
   }
   
   /**
+   * Allocate inode id for legacy edit log, or generate inode id for new edit log,
+   * and update lastInodeId in {@link FSDirectory}
+   * Also doing some sanity check
+   * 
+   * @param fsDir {@link FSDirectory}
+   * @param inodeIdFromOp inode id read from edit log
+   * @param logVersion current layout version
+   * @param lastInodeId the latest inode id in the system
+   * @return inode id
+   * @throws IOException When invalid inode id in layout that supports inode id.
+   *                      
+   */
+  private static long getAndUpdateLastInodeId(FSDirectory fsDir, 
+      long inodeIdFromOp, int logVersion) throws IOException {
+    long inodeId = inodeIdFromOp;
+    if (inodeId == INodeId.GRANDFATHER_INODE_ID) {
+      // This id is read from old edit log
+      if (LayoutVersion.supports(Feature.ADD_INODE_ID, logVersion)) {
+        throw new IOException("The layout version " + logVersion
+            + " supports inodeId but gave bogus inodeId");
+      }
+      inodeId = fsDir.allocateNewInodeId();
+    } else {
+      // need to reset lastInodeId. fsdir gets lastInodeId firstly from
+      // fsimage but editlog captures more recent inodeId allocations
+      if (inodeId > fsDir.getLastInodeId()) {
+        fsDir.resetLastInodeId(inodeId);
+      }
+    }
+    return inodeId;
+  }
+  
+  /**
    * Load an edit log, and apply the changes to the in-memory structure
    * This is where we apply edits that we've been writing to disk all
    * along.
    */
-  int loadFSEdits(EditLogInputStream edits, long lastAppliedTxId)
+  int loadFSEdits(EditLogInputStream edits, long lastAppliedTxId) 
   throws IOException {
     long startTime = now();
     this.lastAppliedTxId = lastAppliedTxId;
     int numEdits = loadFSEdits(edits, true);
-    FSImage.LOG.info("Edits file " + edits.getName() 
+    FSImage.LOG.info("Edits file " + edits.toString() 
         + " of size: " + edits.length() + ", # of edits: " + numEdits 
         + " loaded in: " + (now()-startTime)/1000 + " seconds.");
     return numEdits;
@@ -103,6 +142,7 @@ public class FSEditLogLoader {
     recentOpcodeOffsets[numEdits % recentOpcodeOffsets.length] =
         in.getPosition();
     incrOpCount(op.opCode, opCounts);
+    
     switch (op.opCode) {
     case OP_ADD:
     case OP_CLOSE: {
@@ -115,7 +155,9 @@ public class FSEditLogLoader {
       long blockSize = addCloseOp.blockSize;
       BlockInfo blocks[] = new BlockInfo[addCloseOp.blocks.length];
       for (int i = 0; i < addCloseOp.blocks.length; i++) {
+        // We already read&create BlockInfo in FSEditLogOp
         blocks[i] = new BlockInfo(addCloseOp.blocks[i], replication);
+        blocks[i].setChecksum(addCloseOp.blocks[i].getChecksum());
       }
 
       // Older versions of HDFS does not store the block size in inode.
@@ -145,8 +187,10 @@ public class FSEditLogLoader {
             " clientHolder " + addCloseOp.clientName +
             " clientMachine " + addCloseOp.clientMachine);
       }
-
-      INodeFile node = fsDir.updateINodefile(addCloseOp.path, permissions,
+      
+      long inodeId = getAndUpdateLastInodeId(fsDir, addCloseOp.inodeId, logVersion);
+      // updateINodeFile calls unprotectedAddFile if node doesn't exist
+      INodeFile node = fsDir.updateINodefile(inodeId, addCloseOp.path, permissions,
           blocks, replication, addCloseOp.mtime, addCloseOp.atime, blockSize,
           addCloseOp.clientName, addCloseOp.clientMachine);
       
@@ -165,6 +209,15 @@ public class FSEditLogLoader {
         }
         cons.setClientName(addCloseOp.clientName);
         cons.setClientMachine(addCloseOp.clientMachine);
+        // TODO: There is a chance that by clearing targets, we over count safe
+        // mode counts. Here is the case:
+        // The OP_ADD is triggered by a commitSynchronizedBlock() (which means
+        // only the generation stamp of the last block changed). Before block
+        // synchronization, a block is already reported by a data node after
+        // data node restarting so we've already incremented safe block count.
+        // Here we clear the targets without decrementing the safe block count,
+        // so that later the safe block count will be added again.
+        // We need to fix it.
         cons.clearTargets();
         fsNamesys.leaseManager.addLease(cons.getClientName(),
                                         addCloseOp.path, 
@@ -178,8 +231,52 @@ public class FSEditLogLoader {
           fsNamesys.leaseManager.removeLease(pendingFile.getClientName(),
               addCloseOp.path);
           fsDir.replaceNode(addCloseOp.path, node, newNode);
+          pendingFile.clearTargets();
         }
       }
+      break;
+    }
+    case OP_APPEND: {
+      AppendOp appendOp = (AppendOp)op;
+      INodeFile node = fsDir.getFileINode(appendOp.path);
+      
+      // node must exist and the file must be closed
+      if (node == null || node.isUnderConstruction()) {
+        logErrorAndFail("Append - can not append to "
+            + (node == null ? "non-existent" : "under construction") + " file");
+      }
+
+      // check if all blocks match
+      if (node.getBlocks().length != appendOp.blocks.length) {
+        logErrorAndFail("Append - the transaction has incorrect block information");
+      }
+      int index = 0;
+      for (Block b1 : node.getBlocks()) {
+        Block b2 = appendOp.blocks[index++];
+        // blocks should be exactly the same (id, gs, size)
+        if (!b1.equals(b2) || b1.getNumBytes() != b2.getNumBytes()) {
+          LOG.error("Append: existing block: " + b1 + ", block in edit log: "
+              + b2);
+          logErrorAndFail("Append: blocks are mismatched");
+        }
+      }
+          
+      INodeFileUnderConstruction cons = new INodeFileUnderConstruction(
+          node.getId(),
+          node.getLocalNameBytes(), 
+          node.getReplication(),
+          node.getModificationTime(),
+          node.getAccessTime(), 
+          node.getPreferredBlockSize(), 
+          appendOp.blocks,
+          node.getPermissionStatus(), 
+          appendOp.clientName,
+          appendOp.clientMachine, 
+          fsNamesys.getNode(appendOp.clientMachine));
+      fsNamesys.dir.replaceNode(appendOp.path, null, node, cons, true);
+      fsNamesys.leaseManager.addLease(cons.getClientName(),
+          appendOp.path, 
+          cons.getModificationTime());
       break;
     }
     case OP_SET_REPLICATION: {
@@ -194,6 +291,19 @@ public class FSEditLogLoader {
       ConcatDeleteOp concatDeleteOp = (ConcatDeleteOp)op;
       fsDir.unprotectedConcat(concatDeleteOp.trg, concatDeleteOp.srcs,
           concatDeleteOp.timestamp);
+      break;
+    }
+    case OP_MERGE: {
+      MergeOp mergeOp = (MergeOp)op;
+      RaidCodec codec = RaidCodec.getCodec(mergeOp.codecId);
+      if (codec == null) {
+        LOG.error("Codec " + mergeOp.codecId + " doesn't exist");
+        logErrorAndFail("Merge: codec doesn't exist");
+      }
+      INode[] sourceINodes = fsDir.getExistingPathINodes(mergeOp.source);
+      INode[] parityINodes = fsDir.getExistingPathINodes(mergeOp.parity);
+      fsDir.unprotectedMerge(parityINodes, sourceINodes, mergeOp.parity, mergeOp.source,
+          codec, mergeOp.checksums, mergeOp.timestamp);
       break;
     }
     case OP_HARDLINK: {
@@ -220,8 +330,9 @@ public class FSEditLogLoader {
       if (mkdirOp.permissions != null) {
         permissions = mkdirOp.permissions;
       }
-
-      fsDir.unprotectedMkdir(mkdirOp.path, permissions,
+      
+      long inodeId = getAndUpdateLastInodeId(fsDir, mkdirOp.inodeId, logVersion);
+      fsDir.unprotectedMkdir(inodeId, mkdirOp.path, permissions,
                              mkdirOp.timestamp);
       break;
     }
@@ -290,7 +401,7 @@ public class FSEditLogLoader {
       throws IOException {
     FSDirectory fsDir = fsNamesys.dir;
     int numEdits = 0;
-
+    
     EnumMap<FSEditLogOpCodes, Holder<Integer>> opCounts =
       new EnumMap<FSEditLogOpCodes, Holder<Integer>>(FSEditLogOpCodes.class);
 
@@ -304,35 +415,48 @@ public class FSEditLogLoader {
       try {
         FSEditLogOp op;
         FSEditLog.LOG.info("Planning to load: " + numEdits);
-        
-        while ((op = in.readOp()) != null) {
+         
+        while (true) {
+          try {
+            op = in.readOp();
+            if (op == null) {
+              break;
+            }
+          } catch (Throwable e) {
+            String errorMessage = "Failed to read txId " + lastAppliedTxId
+                + "skipping the bad section in the log";
+            checkFail(errorMessage);
+            in.resync();
+            FSImage.LOG.info("After resync, position is " + in.getPosition());
+            continue;
+          }
           if (logVersion <= FSConstants.STORED_TXIDS) {
             long diskTxid = op.txid;
             if (diskTxid != (lastAppliedTxId + 1)) {
-              if (fsNamesys.failOnTxIdMismatch()) {
-                throw new IOException("The transaction id in the edit log : "
-                    + diskTxid + " does not match the transaction id inferred"
-                    + " from FSIMAGE : " + (lastAppliedTxId + 1));
-              } else {
-                FSNamesystem.LOG.error("The transaction id in the edit log : "
-                    + diskTxid + " does not match the transaction id inferred"
-                    + " from FSIMAGE : " + (lastAppliedTxId + 1) +
-                    ", continuing with transaction id : " + diskTxid);
-                lastAppliedTxId = diskTxid - 1;
-              }
+              String errorMsg = "The transaction id in the edit log : "
+                  + diskTxid + " does not match the transaction id inferred"
+                  + " from FSIMAGE : " + (lastAppliedTxId + 1);
+              checkFail(errorMsg);
             }
           }
           
-          loadEditRecord(logVersion, 
-              in, 
-              recentOpcodeOffsets, 
-              opCounts, 
-              fsNamesys,
-              fsDir, 
-              numEdits, 
-              op);
-          lastAppliedTxId++;
-          numEdits++;
+          try {
+            loadEditRecord(logVersion, 
+                in, 
+                recentOpcodeOffsets, 
+                opCounts, 
+                fsNamesys,
+                fsDir, 
+                numEdits, 
+                op);
+            lastAppliedTxId = op.txid;
+            numEdits++;
+          } catch (Throwable t) {
+            String errorMsg = "Failed to load transaction " + op + ": " + t.getMessage();
+            checkFail(errorMsg);
+            // assume the transaction was loaded to avoid another error
+            lastAppliedTxId = op.txid;
+          }   
         }
       } finally {
         if(closeOnExit)
@@ -350,6 +474,19 @@ public class FSEditLogLoader {
     }
     dumpOpCounts(opCounts);
     return numEdits;
+  }
+  
+  /**
+   * When encountering an error while loading the transaction, we can
+   * skip the problematic transaction and continue, first prompting the user.
+   * This will only be possible when NN is started with appropriate option.
+   */
+  private void checkFail(String errorMsg) throws IOException {
+    if (fsNamesys.failOnTxIdMismatch()) {
+      FSEditLog.LOG.error(errorMsg);
+      throw new IOException(errorMsg);
+    }
+    MetaRecoveryContext.editLogLoaderPrompt(errorMsg);
   }
   
   public static String getErrorMessage(long[] recentOpcodeOffsets, long position) {
@@ -400,7 +537,7 @@ public class FSEditLogLoader {
    * @throws IOException if the stream cannot be read due to an IO error (eg
    *                     if the log does not exist)
    */
-  static EditLogValidation validateEditLog(EditLogInputStream in) {
+  public static EditLogValidation validateEditLog(EditLogInputStream in) {
     long lastPos = 0;
     long firstTxId = HdfsConstants.INVALID_TXID;
     long lastTxId = HdfsConstants.INVALID_TXID;
@@ -409,19 +546,27 @@ public class FSEditLogLoader {
       FSEditLogOp op = null;
       while (true) {
         lastPos = in.getPosition();
-        if ((op = in.readOp()) == null) {
-          break;
+        try {
+          if ((op = in.readOp()) == null) {
+            break;
+          }
+        } catch (Throwable t) {
+          FSImage.LOG.warn("Caught exception after reading " + numValid +
+              " ops from " + in + " while determining its valid length." +
+              "Position was " + lastPos, t);
+          in.resync();
+          FSImage.LOG.info("After resync, position is " + in.getPosition());
+          continue;
         }
         if (firstTxId == HdfsConstants.INVALID_TXID) {
-          firstTxId = op.txid;
+          firstTxId = op.getTransactionId();
         }
         if (lastTxId == HdfsConstants.INVALID_TXID
-            || op.txid == lastTxId + 1) {
-          lastTxId = op.txid;
+            || op.txid > lastTxId) {
+          lastTxId = op.getTransactionId();
         } else {
-          FSImage.LOG.error("Out of order txid found. Found " + op.txid 
+          FSImage.LOG.error("Out of order txid found. Found " + op.txid
                             + ", expected " + (lastTxId + 1));
-          break;
         }
         numValid++;
       }
@@ -431,34 +576,43 @@ public class FSEditLogLoader {
       FSImage.LOG.debug("Caught exception after reading " + numValid +
           " ops from " + in + " while determining its valid length.", t);
     }
-    return new EditLogValidation(lastPos, firstTxId, lastTxId);
+    return new EditLogValidation(lastPos, firstTxId, lastTxId, false);
   }
   
-  static class EditLogValidation {
+  static void logErrorAndFail(String errorMsg) throws IOException {
+    LOG.error(errorMsg);
+    throw new IOException(errorMsg);
+  }
+  
+  public static class EditLogValidation {
     private long validLength;
     private long startTxId;
     private long endTxId;
+    private boolean hasCorruptHeader;
      
-    EditLogValidation(long validLength, 
-                      long startTxId, long endTxId) {
+    public EditLogValidation(long validLength, long startTxId, long endTxId,
+        boolean hasCorruptHeader) {
       this.validLength = validLength;
       this.startTxId = startTxId;
       this.endTxId = endTxId;
+      this.hasCorruptHeader = hasCorruptHeader;
     }
     
     long getValidLength() { return validLength; }
     
     long getStartTxId() { return startTxId; }
     
-    long getEndTxId() { return endTxId; }
+    public long getEndTxId() { return endTxId; }
     
-    long getNumTransactions() { 
+    public long getNumTransactions() {
       if (endTxId == HdfsConstants.INVALID_TXID
           || startTxId == HdfsConstants.INVALID_TXID) {
         return 0;
       }
       return (endTxId - startTxId) + 1;
     }
+    
+    boolean hasCorruptHeader() { return hasCorruptHeader; }
   }
   
   /**
@@ -467,39 +621,44 @@ public class FSEditLogLoader {
   public static class PositionTrackingInputStream extends FilterInputStream {
     private long curPos = 0;
     private long markPos = -1;
-
+    
     public PositionTrackingInputStream(InputStream is) {
       super(is);
     }
-    
+
     public PositionTrackingInputStream(InputStream is, long position) {
       super(is);
       curPos = position;
     }
 
+    @Override
     public int read() throws IOException {
       int ret = super.read();
       if (ret != -1) curPos++;
       return ret;
     }
 
+    @Override
     public int read(byte[] data) throws IOException {
       int ret = super.read(data);
       if (ret > 0) curPos += ret;
       return ret;
     }
 
+    @Override
     public int read(byte[] data, int offset, int length) throws IOException {
       int ret = super.read(data, offset, length);
       if (ret > 0) curPos += ret;
       return ret;
     }
 
+    @Override
     public void mark(int limit) {
       super.mark(limit);
       markPos = curPos;
     }
 
+    @Override
     public void reset() throws IOException {
       if (markPos == -1) {
         throw new IOException("Not marked!");
@@ -511,6 +670,13 @@ public class FSEditLogLoader {
 
     public long getPos() {
       return curPos;
+    }
+
+    @Override
+    public long skip(long amt) throws IOException {
+      long ret = super.skip(amt);
+      curPos += ret;
+      return ret;
     }
   }
 }

@@ -34,6 +34,7 @@ import org.apache.hadoop.syscall.LinuxSystemCall;
 import org.apache.hadoop.util.ProcessTree;
 import org.apache.hadoop.util.ProcfsBasedProcessTree;
 import org.apache.hadoop.util.ResourceCalculatorPlugin;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Manages memory usage of tasks running under this TT. Kills any task-trees
@@ -48,6 +49,7 @@ class TaskMemoryManagerThread extends Thread {
   private TaskTracker taskTracker;
   private ResourceCalculatorPlugin resourceCalculator;
   private final long monitoringInterval;
+  private long sleepInterval;
 
   // The amout of memory are all in bytes
   private final long maxMemoryAllowedForAllTasks;
@@ -90,7 +92,7 @@ class TaskMemoryManagerThread extends Thread {
                           long monitoringInterval) {
     setName(this.getClass().getName());
 
-    processTreeInfoMap = new HashMap<TaskAttemptID, ProcessTreeInfo>();
+    processTreeInfoMap = new ConcurrentHashMap<TaskAttemptID, ProcessTreeInfo>();
     tasksToBeAdded = new HashMap<TaskAttemptID, ProcessTreeInfo>();
     tasksToBeRemoved = new ArrayList<TaskAttemptID>();
 
@@ -102,19 +104,45 @@ class TaskMemoryManagerThread extends Thread {
 
   public void addTask(TaskAttemptID tid, long memLimit) {
     synchronized (tasksToBeAdded) {
-      LOG.debug("Tracking ProcessTree " + tid + " for the first time");
+      LOG.debug("Add " + tid);
       ProcessTreeInfo ptInfo = new ProcessTreeInfo(tid, null, null, memLimit);
       tasksToBeAdded.put(tid, ptInfo);
     }
   }
 
+  public List<ProcessTreeInfo> getTasks() {
+    List<ProcessTreeInfo> taskList =
+      new ArrayList<ProcessTreeInfo>();
+    synchronized (tasksToBeAdded) {
+      taskList.addAll(tasksToBeAdded.values());
+      tasksToBeAdded.clear();
+    }
+    taskList.addAll(processTreeInfoMap.values());
+    synchronized (tasksToBeRemoved) {
+      for (TaskAttemptID tid : tasksToBeRemoved) {
+        taskList.remove(tid);
+      }
+      tasksToBeRemoved.clear();
+    }
+    return taskList;
+  }
+
+  public void setSleepInterval(long sleepInterval) {
+    this.sleepInterval = sleepInterval;
+  }
+
+  public void resetSleepInterval() {
+    this.sleepInterval = this.monitoringInterval;
+  }
+
   public void removeTask(TaskAttemptID tid) {
     synchronized (tasksToBeRemoved) {
+      LOG.debug("Remove " + tid);
       tasksToBeRemoved.add(tid);
     }
   }
 
-  private static class ProcessTreeInfo {
+  public static class ProcessTreeInfo {
     private final TaskAttemptID tid;
     private String pid;
     private ProcfsBasedProcessTree pTree;
@@ -188,6 +216,8 @@ class TaskMemoryManagerThread extends Thread {
 
         long memoryStillInUsage = 0;
         long rssMemoryStillInUsage = 0;
+        taskTracker.setTaskTrackerRSSMem(resourceCalculator.getProcResourceValues().getPhysicalMemorySize());
+        
         // Now, check memory usage and kill any overflowing tasks
         for (Iterator<Map.Entry<TaskAttemptID, ProcessTreeInfo>> it = processTreeInfoMap
             .entrySet().iterator(); it.hasNext();) {
@@ -209,7 +239,7 @@ class TaskMemoryManagerThread extends Thread {
 
                 // create process tree object
                 long sleeptimeBeforeSigkill = taskTracker.getJobConf().getLong(
-                    "mapred.tasktracker.tasks.sleeptime-before-sigkill",
+                    JvmManager.SLEEPTIME_BEFORE_SIGKILL_KEY,
                     ProcessTree.DEFAULT_SLEEPTIME_BEFORE_SIGKILL);
 
                 ProcfsBasedProcessTree pt = new ProcfsBasedProcessTree(
@@ -317,9 +347,9 @@ class TaskMemoryManagerThread extends Thread {
         }
 
         // Sleep for some time before beginning next cycle
-        LOG.debug(this.getClass() + " : Sleeping for " + monitoringInterval
+        LOG.debug(this.getClass() + " : Sleeping for " + sleepInterval
             + " ms");
-        Thread.sleep(monitoringInterval);
+        Thread.sleep(sleepInterval);
       } catch (InterruptedException iex) {
         if (running) {
           LOG.error("Class " + this.getClass() + " was interrupted", iex);

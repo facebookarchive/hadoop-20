@@ -28,7 +28,6 @@ import java.util.Map;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -229,7 +228,7 @@ abstract public class Shell {
     for (String s : this.getExecString()) { 
       command += s + " "; 
     } 
-    LOG.debug("Running shell command : " + command); 
+    LOG.debug("Running shell command : " + command);
     if (isDisabled()) {
       LOG.error("Trying to execute a shell call while it is disabled.");
       // Print stack trace to the log

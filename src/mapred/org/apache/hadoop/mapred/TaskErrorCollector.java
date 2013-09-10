@@ -135,7 +135,7 @@ public class TaskErrorCollector implements Updater {
 
   private void createMetrics() {
     for (TaskError error : knownErrors.values()) {
-      System.out.println("metricsKey:" + error.metricsKey);
+      LOG.info("metricsKey:" + error.metricsKey);
       errorCountsMetrics.put(error, new MetricsTimeVaryingLong(
           error.metricsKey, registry, error.description));
     }

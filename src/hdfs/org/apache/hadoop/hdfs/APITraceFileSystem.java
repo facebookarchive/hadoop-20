@@ -668,7 +668,8 @@ public class APITraceFileSystem extends FilterFileSystem {
 
     public TraceFSDataOutputStream(FSDataOutputStream out,
                                    StreamTracer streamTracer) throws IOException {
-      super(new TraceFSOutputStream(out, streamTracer));
+      super(new TraceFSOutputStream(out, streamTracer),
+            null, out.getPos());
       this.streamTracer = streamTracer;
     }
 

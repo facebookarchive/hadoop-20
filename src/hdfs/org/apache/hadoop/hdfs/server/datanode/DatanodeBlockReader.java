@@ -19,14 +19,18 @@ package org.apache.hadoop.hdfs.server.datanode;
 
 import java.io.BufferedInputStream;
 import java.io.DataInputStream;
+import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.channels.FileChannel;
 
 import org.apache.commons.logging.Log;
+import org.apache.hadoop.fs.FSDataNodeReadProfilingData;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.datanode.BlockSender.InputStreamFactory;
+import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.util.DataChecksum;
 
 /**
@@ -43,6 +47,7 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
   protected int namespaceId;
   protected Block block;
   protected boolean isFinalized;
+  protected FSDataNodeReadProfilingData dnData;
 
   protected boolean ignoreChecksum;
   protected boolean verifyChecksum; // if true, check is verified while reading
@@ -71,6 +76,9 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
    */
   public abstract DataChecksum getChecksumToSend(long blockLength) throws IOException;
 
+  public abstract void fadviseStream(int advise, long offset, long len)
+      throws IOException;
+
   /** 
    * Initialize input file stream(s) of local files for the block.  
    *    
@@ -78,7 +86,7 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
    * @param blockLength 
    * @throws IOException    
    */
-  public abstract void initializeStream(long offset, long blockLength)
+  public abstract void initialize(long offset, long blockLength)
       throws IOException;
 
   /**
@@ -127,8 +135,10 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
    * @throws IOException
    */
   public abstract void sendChunks(OutputStream out, byte[] buf, long offset,
-      int checksumOff, int numChunks, int len, BlockCrcUpdater crcUpdater)
-      throws IOException;
+      int checksumOff, int numChunks, int len, BlockCrcUpdater crcUpdater,
+      int packetVersion) throws IOException;
+  
+  public abstract int getPreferredPacketVersion();
 
   /**   
    * @return number of bytes per data chunk for checksum    
@@ -238,5 +248,14 @@ abstract class DatanodeBlockReader implements java.io.Closeable {
     public FSDatasetInterface getDataset() {
       return this.data;
     }
+
+    @Override
+    public BlockDataFile.Reader getBlockDataFileReader() throws IOException {
+      return replica.getBlockDataFile().getReader(datanode);
+    }
+  }
+
+  public void enableReadProfiling(FSDataNodeReadProfilingData dnData) {
+    this.dnData = dnData;
   }
 }

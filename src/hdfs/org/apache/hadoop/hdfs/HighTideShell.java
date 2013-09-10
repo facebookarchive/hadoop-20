@@ -251,6 +251,7 @@ public class HighTideShell extends Configured implements Tool {
    * main() has some simple utility methods
    */
   public static void main(String argv[]) throws Exception {
+    DnsMonitorSecurityManager.setTheManager();
     HighTideShell shell = null;
     try {
       shell = new HighTideShell(new Configuration());

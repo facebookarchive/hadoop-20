@@ -25,7 +25,6 @@ import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
 import org.apache.hadoop.metrics.util.MetricsBase;
-import org.apache.hadoop.metrics.util.MetricsIntValue;
 import org.apache.hadoop.metrics.util.MetricsRegistry;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
 
@@ -76,21 +75,19 @@ public class RpcMetrics implements Updater {
           new MetricsTimeVaryingRate("RpcQueueTime", registry);
   public MetricsTimeVaryingRate rpcProcessingTime =
           new MetricsTimeVaryingRate("RpcProcessingTime", registry);
-  public MetricsIntValue numOpenConnections = 
-          new MetricsIntValue("NumOpenConnections", registry);
-  public MetricsIntValue callQueueLen = 
-          new MetricsIntValue("callQueueLen", registry);
+  public MetricsTimeVaryingRate rpcResponseSize =
+          new MetricsTimeVaryingRate("RpcResponseSize", registry);
+  
+  public MetricsTimeVaryingRate numOpenConnections = 
+          new MetricsTimeVaryingRate("NumOpenConnections", registry);
+  public MetricsTimeVaryingRate callQueueLen = 
+          new MetricsTimeVaryingRate("callQueueLen", registry);
   
   /**
    * Push the metrics to the monitoring subsystem on doUpdate() call.
    */
   public void doUpdates(MetricsContext context) {
-    
     synchronized (this) {
-      // ToFix - fix server to use the following two metrics directly so
-      // the metrics do not have be copied here.
-      numOpenConnections.set(myServer.getNumOpenConnections());
-      callQueueLen.set(myServer.getCallQueueLen());
       for (MetricsBase m : registry.getMetricsList()) {
         m.pushMetric(metricsRecord);
       }

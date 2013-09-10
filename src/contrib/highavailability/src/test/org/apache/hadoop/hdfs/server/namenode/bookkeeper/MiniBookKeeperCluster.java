@@ -188,7 +188,7 @@ public class MiniBookKeeperCluster {
               + "waiting for " + numBookiesExpected);
           LOG.debug("Servers currently up: " + Joiner.on(",").join(children));
         }
-        if (mostRecentSize == numBookiesExpected) {
+        if (mostRecentSize >= numBookiesExpected) {
           LOG.info("All " + numBookiesExpected + " bookies are up: " +
               Joiner.on(",").join(children));
           break;
@@ -250,6 +250,7 @@ public class MiniBookKeeperCluster {
       bookieConf.setZkServers(zkConnect);
       bookieConf.setJournalDirName(tmpDir.getPath());
       bookieConf.setLedgerDirNames(new String[] { tmpDir.getPath() });
+      bookieConf.setLogger(LogFactory.getLog(this.getClass().toString()));
       bookieRef = new AtomicReference<BookieServer>(null);
     }
 

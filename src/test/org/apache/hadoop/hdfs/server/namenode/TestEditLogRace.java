@@ -93,7 +93,7 @@ public class TestEditLogRace {
    * This value needs to be significantly longer than the average
    * time for an fsync() or enterSafeMode().
    */
-  private static final int BLOCK_TIME = 10;
+  private static final int BLOCK_TIME = 3;
   
   //
   // an object that does a bunch of transactions
@@ -459,8 +459,8 @@ public class TestEditLogRace {
       cluster.waitActive();
       final FSNamesystem namesystem = cluster.getNameNode().getNamesystem();
       FSImage fsimage = namesystem.getFSImage();
-      FSEditLog editLog = spy(fsimage.getEditLog());
-      fsimage.editLog = editLog;
+      FSEditLog editLog = FSImageAdapter.injectEditLogSpy(namesystem);
+      
       
       final AtomicReference<Throwable> deferredException =
           new AtomicReference<Throwable>();
@@ -486,13 +486,13 @@ public class TestEditLogRace {
         @Override
         public Void answer(InvocationOnMock invocation) throws Throwable {
           LOG.info("logSync called");
-          if (Thread.currentThread() == doAnEditThread) {
-            LOG.info("edit thread: Telling main thread we made it just before logSync...");
-            waitToEnterSync.countDown();
-            LOG.info("edit thread: sleeping for " + BLOCK_TIME + "secs");
-            Thread.sleep(BLOCK_TIME*1000);
-            LOG.info("Going through to logSync. This will allow the main thread to continue.");
-          }
+
+          LOG.info("edit thread: Telling main thread we made it just before logSync...");
+          waitToEnterSync.countDown();
+          LOG.info("edit thread: sleeping for " + BLOCK_TIME + "secs");
+          Thread.sleep(BLOCK_TIME*1000);
+          LOG.info("Going through to logSync. This will allow the main thread to continue.");
+
           invocation.callRealMethod();
           LOG.info("logSync complete");
           return null;

@@ -27,8 +27,10 @@ import org.apache.hadoop.util.LinuxResourceCalculatorPlugin;
 import org.apache.hadoop.util.ResourceCalculatorPlugin;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.hadoop.mapreduce.server.jobtracker.TaskTracker;
+import org.junit.Test;
 
-import junit.framework.TestCase;
+import static org.junit.Assert.*;
+
 
 /**
  * This test class tests the functionality related to configuring, reporting
@@ -40,7 +42,7 @@ import junit.framework.TestCase;
  * the tasktracker in 
  * {@link org.apache.hadoop.mapred.TaskScheduler#assignTasks(TaskTrackerStatus)}.
  */
-public class TestTTResourceReporting extends TestCase {
+public class TestTTResourceReporting {
 
   static final Log LOG = LogFactory.getLog(TestTTResourceReporting.class);
   
@@ -215,6 +217,7 @@ public class TestTTResourceReporting extends TestCase {
    * 
    * @throws Exception
    */
+  @Test(timeout=60000)
   public void testDefaultResourceValues()
       throws Exception {
     JobConf conf = new JobConf();
@@ -240,6 +243,7 @@ public class TestTTResourceReporting extends TestCase {
    * 
    * @throws Exception
    */
+  @Test(timeout=60000)
   public void testConfiguredResourceValues()
       throws Exception {
     JobConf conf = new JobConf();
@@ -254,7 +258,7 @@ public class TestTTResourceReporting extends TestCase {
     conf.setInt("numProcessors", 8);
     conf.setFloat("cpuUsage", 15.5F);
     conf.setLong("procCumulativeCpuTime", 1000L);
-    conf.setLong("procVirtualMemorySize", 2 * 1024 * 1024 * 1024L);
+    conf.setLong("procVirtualMemorySize", 1 * 1024 * 1024 * 1024L);
     conf.setLong("procPhysicalMemorySize", 1024 * 1024 * 1024L);
 
     conf.setClass(
@@ -274,14 +278,14 @@ public class TestTTResourceReporting extends TestCase {
     try {
       setUpCluster(conf);
       JobConf jobConf = miniMRCluster.createJobConf();
-      jobConf.setMemoryForMapTask(1 * 1024L);
-      jobConf.setMemoryForReduceTask(2 * 1024L);
+      jobConf.setMemoryForMapTask(4 * 1024L);
+      jobConf.setMemoryForReduceTask(4 * 1024L);
       jobConf.setClass(
         org.apache.hadoop.mapred.TaskTracker.MAPRED_TASKTRACKER_MEMORY_CALCULATOR_PLUGIN_PROPERTY,
         DummyResourceCalculatorPlugin.class, ResourceCalculatorPlugin.class);
       jobConf.setLong(DummyResourceCalculatorPlugin.PROC_CUMULATIVE_CPU_TIME, 1000L);
       jobConf.setLong(DummyResourceCalculatorPlugin.PROC_VMEM_TESTING_PROPERTY,
-                      2 * 1024 * 1024 * 1024L);
+                      1 * 1024 * 1024 * 1024L);
       jobConf.setLong(DummyResourceCalculatorPlugin.PROC_PMEM_TESTING_PROPERTY,
                       1024 * 1024 * 1024L);
       runSleepJob(jobConf);
@@ -297,6 +301,7 @@ public class TestTTResourceReporting extends TestCase {
    * 
    * @throws Exception
    */
+  @Test(timeout=60000)
   public void testResourceValuesOnLinux()
       throws Exception {
     if (!System.getProperty("os.name").startsWith("Linux")) {

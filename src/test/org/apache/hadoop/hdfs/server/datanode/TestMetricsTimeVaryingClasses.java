@@ -77,11 +77,35 @@ public class TestMetricsTimeVaryingClasses extends TestCase {
 
     //bytesWritten uses MetricsTimeVaryingLong
     assertEquals(LONG_FILE_LEN, metrics.bytesWritten.getCurrentIntervalValue());
-    //bytesWrittenLatency uses MetricsTimeVaryingRate
-    assertTrue(metrics.bytesWrittenLatency.getMaxTime()>0);
-    assertEquals(LONG_FILE_LEN, metrics.bytesWritten.getCurrentIntervalValue());
    
     //writesFromLocalClient uses MetricsTimeVaryingInt
     assertTrue(metrics.writesFromLocalClient.getCurrentIntervalValue()>0);
+
+    metrics.doUpdates(null);
+    //bytesWrittenLatency uses MetricsTimeVaryingRate
+    assertTrue(metrics.bytesWrittenLatency.getMaxTime()>0);
+  }
+
+  public void testMetricsTimeVaryingRateClass() throws Exception {
+    metrics.bytesWrittenRate.resetMinMax();
+
+    long LEN = 1024 * 42;
+    DFSTestUtil.createFile(fileSystem, new Path("/tmp.txt"), LEN, (short) 1, 1L);
+
+    // check we have 42K written in current interval
+    assertEquals(42, metrics.bytesWrittenRate.getCurrentIntervalNumOps());
+    assertEquals(0, metrics.bytesWrittenRate.getPreviousIntervalNumOps());
+
+    metrics.doUpdates(null);
+
+    // check we have 42K written in previous interval (and none in current)
+    assertEquals(0, metrics.bytesWrittenRate.getCurrentIntervalNumOps());
+    assertEquals(42, metrics.bytesWrittenRate.getPreviousIntervalNumOps());
+
+    DFSTestUtil.createFile(fileSystem, new Path("/tmp.txt"), LEN, (short) 1, 1L);
+
+    // check we have 42K written in both previous and current intervals
+    assertEquals(42, metrics.bytesWrittenRate.getCurrentIntervalNumOps());
+    assertEquals(42, metrics.bytesWrittenRate.getPreviousIntervalNumOps());
   }
 }

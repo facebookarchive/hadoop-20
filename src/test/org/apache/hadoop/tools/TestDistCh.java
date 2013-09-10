@@ -47,7 +47,7 @@ public class TestDistCh extends junit.framework.TestCase {
   {
     ((Log4JLogger)LogFactory.getLog("org.apache.hadoop.hdfs.StateChange")
         ).getLogger().setLevel(Level.OFF);
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.OFF);
+    DataNode.LOG.getLogger().setLevel(Level.OFF);
     ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.OFF);
     ((Log4JLogger)TaskTracker.LOG).getLogger().setLevel(Level.OFF);
   }

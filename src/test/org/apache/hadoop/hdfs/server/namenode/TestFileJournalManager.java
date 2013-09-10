@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import static org.apache.hadoop.hdfs.server.namenode.FSEditLogTestUtil.getJournalInputStream;
+import static org.apache.hadoop.hdfs.server.namenode.FSEditLogTestUtil.getNumberOfTransactions;
 import static org.junit.Assert.*;
 
 import java.net.URI;
@@ -66,46 +68,10 @@ public class TestFileJournalManager {
     long numJournals = 0;
     for (StorageDirectory sd : storage.dirIterable(NameNodeDirType.EDITS)) {
       FileJournalManager jm = new FileJournalManager(sd);
-      assertEquals(6*TXNS_PER_ROLL, jm.getNumberOfTransactions(0));
+      assertEquals(6*TXNS_PER_ROLL, getNumberOfTransactions(jm, 0, true, false));
       numJournals++;
     }
     assertEquals(3, numJournals);
-  }
-  
-  /** 
-   * Checks the JournalManager.isSegmentInProgress()
-   */
-  @Test
-  public void testInprogressSegment() throws IOException {
-    File f = new File(TestEditLog.TEST_DIR + "/testInprogressSegment");
-    // abort after the 5th roll 
-    NNStorage storage = setupEdits(Collections.<URI>singletonList(f.toURI()),
-                                   5, new AbortSpec(5, 0));
-    StorageDirectory sd = storage.dirIterator(NameNodeDirType.EDITS).next();
-
-    FileJournalManager jm = new FileJournalManager(sd);
-    assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, 
-                 jm.getNumberOfTransactions(0));
-    
-    boolean isOneInProgress = false;
-    boolean isOneNotInProgress = false;
-    
-    long lastFirstTxId = -1;
-    for (RemoteEditLog rel : jm.getEditLogManifest(0).getLogs()) {
-      // assert that the logs are sorted
-      assertTrue(rel.getStartTxId() > lastFirstTxId);
-      lastFirstTxId = rel.getStartTxId();
-      
-      if (rel.inProgress()) {
-        isOneInProgress = true;
-        assertTrue(jm.isSegmentInProgress(rel.getStartTxId()));
-      } else {
-        isOneNotInProgress = true;
-        assertFalse(jm.isSegmentInProgress(rel.getStartTxId()));
-      }
-    }
-    assertTrue(isOneInProgress);
-    assertTrue(isOneNotInProgress);
   }
 
   /**
@@ -123,7 +89,7 @@ public class TestFileJournalManager {
 
     FileJournalManager jm = new FileJournalManager(sd);
     assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, 
-                 jm.getNumberOfTransactions(0));
+        getNumberOfTransactions(jm, 0, true, false));
   }
 
   /**
@@ -145,15 +111,16 @@ public class TestFileJournalManager {
     Iterator<StorageDirectory> dirs = storage.dirIterator(NameNodeDirType.EDITS);
     StorageDirectory sd = dirs.next();
     FileJournalManager jm = new FileJournalManager(sd);
-    assertEquals(6*TXNS_PER_ROLL, jm.getNumberOfTransactions(0));
+    assertEquals(6*TXNS_PER_ROLL, getNumberOfTransactions(jm, 0, true, false));
     
     sd = dirs.next();
     jm = new FileJournalManager(sd);
-    assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, jm.getNumberOfTransactions(0));
+    assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, getNumberOfTransactions(jm, 0,
+        true, false));
 
     sd = dirs.next();
     jm = new FileJournalManager(sd);
-    assertEquals(6*TXNS_PER_ROLL, jm.getNumberOfTransactions(0));
+    assertEquals(6*TXNS_PER_ROLL, getNumberOfTransactions(jm, 0, true, false));
   }
 
   /** 
@@ -177,15 +144,18 @@ public class TestFileJournalManager {
     Iterator<StorageDirectory> dirs = storage.dirIterator(NameNodeDirType.EDITS);
     StorageDirectory sd = dirs.next();
     FileJournalManager jm = new FileJournalManager(sd);
-    assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, jm.getNumberOfTransactions(0));
+    assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, getNumberOfTransactions(jm, 0,
+        true, false));
     
     sd = dirs.next();
     jm = new FileJournalManager(sd);
-    assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, jm.getNumberOfTransactions(0));
+    assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, getNumberOfTransactions(jm, 0,
+        true, false));
 
     sd = dirs.next();
     jm = new FileJournalManager(sd);
-    assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, jm.getNumberOfTransactions(0));
+    assertEquals(5*TXNS_PER_ROLL + TXNS_PER_FAIL, getNumberOfTransactions(jm, 0,
+        true, false));
   }
 
   /** 
@@ -216,24 +186,58 @@ public class TestFileJournalManager {
 
     FileJournalManager jm = new FileJournalManager(sd);
     long expectedTotalTxnCount = TXNS_PER_ROLL*10 + TXNS_PER_FAIL;
-    assertEquals(expectedTotalTxnCount, jm.getNumberOfTransactions(0));
+    assertEquals(expectedTotalTxnCount, getNumberOfTransactions(jm, 0,
+        true, false));
 
     long skippedTxns = (3*TXNS_PER_ROLL); // skip first 3 files
     long startingTxId = skippedTxns; 
 
-    long numTransactionsToLoad = jm.getNumberOfTransactions(startingTxId);
-    long numLoaded = 0;
-    while (numLoaded < numTransactionsToLoad) {
-      EditLogInputStream editIn = jm.getInputStream(startingTxId);
-      FSEditLogLoader.EditLogValidation val = FSEditLogLoader.validateEditLog(editIn);
-      long count = val.getNumTransactions();
-
-      editIn.close();
-      startingTxId += count;
-      numLoaded += count;
+    long numLoadable = getNumberOfTransactions(jm, startingTxId,
+        true, false);
+    assertEquals(expectedTotalTxnCount - skippedTxns, numLoadable);
+  }
+  
+  /**
+   * Make sure that we starting reading the correct op when we request a stream
+   * with a txid in the middle of an edit log file.
+   */
+  @Test
+  public void testReadFromMiddleOfEditLog() throws Exception {
+    File f = new File(TestEditLog.TEST_DIR + "/filejournaltest2");
+    NNStorage storage = setupEdits(Collections.<URI>singletonList(f.toURI()), 
+                                   10);
+    StorageDirectory sd = storage.dirIterator(NameNodeDirType.EDITS).next();
+    
+    FileJournalManager jm = new FileJournalManager(sd);
+    
+    EditLogInputStream elis = getJournalInputStream(jm, 5, true);
+    FSEditLogOp op = elis.readOp();
+    assertEquals("read unexpected op", op.getTransactionId(), 5);
+  }
+  
+  /**
+   * Make sure that in-progress streams aren't counted if we don't ask for
+   * them.
+   */
+  @Test
+  public void testExcludeInProgressStreams() throws IOException {
+    File f = new File(TestEditLog.TEST_DIR + "/filejournaltest2");
+    
+    // Don't close the edit log once the files have been set up.
+    NNStorage storage = setupEdits(Collections.<URI>singletonList(f.toURI()), 
+                                   10, false);
+    StorageDirectory sd = storage.dirIterator(NameNodeDirType.EDITS).next();
+    
+    FileJournalManager jm = new FileJournalManager(sd);
+    
+    // If we exclude the in-progess stream, we should only have 100 tx.
+    assertEquals(100, getNumberOfTransactions(jm, 0, false, false));
+    
+    EditLogInputStream elis = getJournalInputStream(jm, 90, false);
+    FSEditLogOp lastReadOp = null;
+    while ((lastReadOp = elis.readOp()) != null) {
+      assertTrue(lastReadOp.getTransactionId() <= 100);
     }
-
-    assertEquals(expectedTotalTxnCount - skippedTxns, numLoaded); 
   }
 
   /**
@@ -242,7 +246,6 @@ public class TestFileJournalManager {
    * This should fail as edit logs must currently be treated as indevisable 
    * units.
    */
-  @Test(expected=IOException.class)
   public void testAskForTransactionsMidfile() throws IOException {
     File f = new File(TestEditLog.TEST_DIR + "/filejournaltest2");
     NNStorage storage = setupEdits(Collections.<URI>singletonList(f.toURI()), 
@@ -250,7 +253,12 @@ public class TestFileJournalManager {
     StorageDirectory sd = storage.dirIterator(NameNodeDirType.EDITS).next();
     
     FileJournalManager jm = new FileJournalManager(sd);
-    jm.getNumberOfTransactions(2);    
+    // 10 rolls, so 11 rolled files, 110 txids total.
+    final int TOTAL_TXIDS = 10 * 11;
+    for (int txid = 0; txid <= TOTAL_TXIDS; txid++) {
+      assertEquals((TOTAL_TXIDS - txid), getNumberOfTransactions(jm, txid,
+          true, false));
+    }  
   }
 
   /** 
@@ -281,45 +289,13 @@ public class TestFileJournalManager {
     assertTrue(files[0].delete());
     
     FileJournalManager jm = new FileJournalManager(sd);
-    assertEquals(startGapTxId, jm.getNumberOfTransactions(0));
-
-    try {
-      jm.getNumberOfTransactions(startGapTxId);
-      fail("Should have thrown an exception by now");
-    } catch (IOException ioe) {
-      assertTrue(true);
-    }
+    assertEquals(startGapTxId, getNumberOfTransactions(jm, 0, true, true));
+    
+    assertEquals(0, getNumberOfTransactions(jm, startGapTxId, true, true));
 
     // rolled 10 times so there should be 11 files.
-    assertEquals(11*TXNS_PER_ROLL - endGapTxId - 1, //110 - 39 - 1 
-                 jm.getNumberOfTransactions(endGapTxId+1));
-  }
-
-  /** 
-   * Test that we can load an edits directory with a corrupt inprogress file.
-   * The corrupt inprogress file should be moved to the side.
-   */
-  @Test
-  public void testManyLogsWithCorruptInprogress() throws IOException {
-    File f = new File(TestEditLog.TEST_DIR + "/filejournaltest5");
-    NNStorage storage = setupEdits(Collections.<URI>singletonList(f.toURI()), 10, new AbortSpec(10, 0));
-    StorageDirectory sd = storage.dirIterator(NameNodeDirType.EDITS).next();
-
-    File[] files = new File(f, "current").listFiles(new FilenameFilter() {
-        public boolean accept(File dir, String name) {
-          if (name.startsWith("edits_inprogress")) {
-            return true;
-          }
-          return false;
-        }
-      });
-    assertEquals(files.length, 1);
-    
-    corruptAfterStartSegment(files[0]);
-
-    FileJournalManager jm = new FileJournalManager(sd);
-    assertEquals(10*TXNS_PER_ROLL+1, 
-                 jm.getNumberOfTransactions(0)); 
+    assertEquals(11*TXNS_PER_ROLL - endGapTxId - 1, 
+                 getNumberOfTransactions(jm, endGapTxId + 1, true, true));
   }
 
   @Test
@@ -332,9 +308,9 @@ public class TestFileJournalManager {
         NNStorage.getFinalizedEditsFileName(1001, 1100));
         
     FileJournalManager fjm = new FileJournalManager(sd);
-    assertEquals("[1,100,true],[101,200,true],[201,201,false],[1001,1100,true]", getLogsAsString(fjm, 1));
-    assertEquals("[101,200,true],[201,201,false],[1001,1100,true]", getLogsAsString(fjm, 101));
-    assertEquals("[201,201,false],[1001,1100,true]", getLogsAsString(fjm, 201));
+    assertEquals("[1,100,true],[101,200,true],[201,-1,false],[1001,1100,true]", getLogsAsString(fjm, 1));
+    assertEquals("[101,200,true],[201,-1,false],[1001,1100,true]", getLogsAsString(fjm, 101));
+    assertEquals("[201,-1,false],[1001,1100,true]", getLogsAsString(fjm, 201));
     try {
       assertEquals("[]", getLogsAsString(fjm, 150));
       fail("Did not throw when asking for a txn in the middle of a log");
@@ -350,4 +326,5 @@ public class TestFileJournalManager {
       FileJournalManager fjm, long firstTxId) throws IOException {
     return Joiner.on(",").join(fjm.getEditLogManifest(firstTxId).getLogs());
   }
+
 }

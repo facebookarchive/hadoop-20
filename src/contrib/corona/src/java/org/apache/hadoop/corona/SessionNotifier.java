@@ -126,9 +126,13 @@ public class SessionNotifier implements Configurable {
     coronaSerializer.readStartObjectToken("sessionsToCtx");
     for (int i = 0; i < totalSessionsToCtx; i++) {
       String handle = coronaSerializer.readValueAs(String.class);
-      SessionNotificationCtx sessionNotificationCtx =
-        new SessionNotificationCtx(sessionManager, coronaSerializer);
-      sessionsToCtxFromDisk.put(handle, sessionNotificationCtx);
+      try {
+        SessionNotificationCtx sessionNotificationCtx =
+          new SessionNotificationCtx(sessionManager, coronaSerializer);
+        sessionsToCtxFromDisk.put(handle, sessionNotificationCtx);
+       } catch (IOException e) {
+         LOG.warn("Unable to serialize SessionNotificationCtx for " + handle);
+       }
     }
     coronaSerializer.readEndObjectToken("sessionsToCtx");
 
@@ -274,6 +278,7 @@ public class SessionNotifier implements Configurable {
         Set<String> handles = deletedSessions.keySet();
         for (String handle: handles) {
           SessionNotificationCtx ctx = sessionsToCtx.remove(handle);
+          LOG.info("Close session " + handle);
           // close the session notifier to clear sockets
           if (ctx != null) {
             ctx.close();

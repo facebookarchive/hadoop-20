@@ -15,7 +15,3 @@ Cluster Manager: There is only one Cluster Manager per cluster. It is responsibl
 Task Trackers: This is same as Hadoop Classic. All TT's communicate with the Cluster Manager to report available compute resources. They also communicate with the Job Trackers to actually run Map-Reduce Tasks.
 Corona Job Tracker: The job tracking functionality is implemented by this. It can run in two different modes: as a part of the client running the job, or as a task on one of the Task Trackers in the cluster. The first approach gives small jobs better latencies, the second approach is better for larger jobs to minimize the amount of heartbeat traffic going in and out of the cluster.
 Proxy Job Tracker: The job details page for a job is served by the Corona Job Tracker while it runs. When the job finishes the Corona Job Tracker shuts down so we need another server to show the job details. To make this seamless, the Job URL always points to a Proxy Job Tracker. While the job is running, the proxy redirects to the Corona Job Tracker. When the job is done, a file is written to HDFS, and the Proxy Job Tracker reads this file to get the job details. Additionally the Proxy Job Tracker also stores and reports all of the job metrics aggregated in the cluster.
-
-
-For instructions on starting a Corona cluster, see
-https://github.com/facebook/hadoop-20/wiki/Corona-Single-Node-Setup.

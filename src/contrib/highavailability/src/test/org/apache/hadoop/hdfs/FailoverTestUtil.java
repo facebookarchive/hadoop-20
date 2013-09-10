@@ -24,6 +24,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.util.InjectionEventI;
@@ -44,13 +45,17 @@ public class FailoverTestUtil {
   protected static Log LOG = LogFactory.getLog(TestAvatarSyncLastTxid.class);
 
   public void setUp(String name) throws Exception {
+  	setUp(name, true);
+  }
+  
+  public void setUp(String name, boolean enableQJM) throws Exception {
     LOG.info("------------------- test: " + name + " START ----------------");
     MiniAvatarCluster.createAndStartZooKeeper();
     conf = new Configuration();
     conf.setBoolean("fs.checkpoint.enabled", true);
     conf.setBoolean("fs.ha.retrywrites", true);
     conf.setInt("dfs.block.size", 1024);
-    cluster = new MiniAvatarCluster(conf, 3, true, null, null);
+    cluster = new MiniAvatarCluster.Builder(conf).numDataNodes(3).enableQJM(enableQJM).build();
     fs = cluster.getFileSystem();
     zkClient = new AvatarZooKeeperClient(conf, null);
   }
@@ -58,7 +63,9 @@ public class FailoverTestUtil {
   @After
   public void tearDown() throws Exception {
     zkClient.shutdown();
-    cluster.shutDown();
+    if (cluster != null) {
+      cluster.shutDown();
+    }
     MiniAvatarCluster.clearZooKeeperData();
     MiniAvatarCluster.shutDownZooKeeper();
     InjectionHandler.clear();
@@ -82,15 +89,15 @@ public class FailoverTestUtil {
 
   protected ZookeeperTxId getLastTxid() throws Exception {
     AvatarNode primaryAvatar = cluster.getPrimaryAvatar(0).avatar;
-    String address = AvatarNode.getClusterAddress(primaryAvatar
-        .getStartupConf());
+    String address = primaryAvatar
+        .getStartupConf().get(NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY);
     return zkClient.getPrimaryLastTxId(address, false);
   }
 
   protected long getSessionId() throws Exception {
     AvatarNode primaryAvatar = cluster.getPrimaryAvatar(0).avatar;
-    String address = AvatarNode.getClusterAddress(primaryAvatar
-        .getStartupConf());
+    String address = primaryAvatar
+        .getStartupConf().get(NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY);
     return zkClient.getPrimarySsId(address, false);
   }
 

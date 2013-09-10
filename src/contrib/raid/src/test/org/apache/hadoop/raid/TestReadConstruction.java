@@ -172,8 +172,8 @@ public class TestReadConstruction extends TestCase {
     return true;
   }
   
-  public void testReadCorruptPartialSuccess() throws Exception {
-    // test the "rs"
+  public void testReadCorruptPartialSuccessRS() throws Exception {
+    LOG.info("testReadCorruptPartialSuccessRS started");
     try {
       mySetup();
       int blockNum = 10;
@@ -186,16 +186,19 @@ public class TestReadConstruction extends TestCase {
       if (null != dfs) {
         dfs.shutdown();
       }
+      LOG.info("testReadCorruptPartialSuccessRS completed");
     }
-    
-    // test the "xor"
+  }
+  
+  public void testReadCorruptPartialSuccessXOR() throws Exception {
+    LOG.info("testReadCorruptPartialSuccessXOR started");
     try {
       mySetup();
       int blockNum = 10;
       for (int i=0; i<blockNum; i++) {
         int[] corruptBlockIdxs = new int[]{i};
         LOG.info("Corrupt Block " + i + 
-            " in testReadCorruptParitalSuccess for xor.");
+            " in testReadCorruptPartialSuccessXOR.");
         assertTrue(doThePartialTest(Codec.getCodec("xor"), 
                   blockNum, corruptBlockIdxs));
       }
@@ -203,12 +206,12 @@ public class TestReadConstruction extends TestCase {
       if (null != dfs) {
         dfs.shutdown();
       }
+      LOG.info("testReadCorruptPartialSuccessXOR completed");
     }
   }
   
-  public void testReadCorruptPartialFail() throws Exception {
-    
-    // test the "rs"
+  public void testReadCorruptPartialFailRS() throws Exception {
+    LOG.info("testReadCorruptPartialFailRS started");
     try {
       mySetup();
       int blockNum = 10;
@@ -224,9 +227,12 @@ public class TestReadConstruction extends TestCase {
       if (null != dfs) {
         dfs.shutdown();
       }
+      LOG.info("testReadCorruptPartialFailRS completed");
     }
-    
-    // test the "xor"
+  }
+  
+  public void testReadCorruptPartialFailXOR() throws Exception {
+    LOG.info("testReadCorruptPartialFailXOR started");
     try {
       mySetup();
       int blockNum = 10;
@@ -242,6 +248,7 @@ public class TestReadConstruction extends TestCase {
       if (null != dfs) {
         dfs.shutdown();
       }
+      LOG.info("testReadCorruptPartialFailXOR completed");
     }
   }
   

@@ -28,6 +28,13 @@ import java.util.List;
  */
 class CompositeTaskTrackerInstrumentation extends TaskTrackerInstrumentation {
   
+  @Override
+  public void diskOutOfSpaceTask(TaskAttemptID t) {
+    for (TaskTrackerInstrumentation tti: instrumentations) {
+      tti.diskOutOfSpaceTask(t);
+    }
+  }
+
   private final List<TaskTrackerInstrumentation> instrumentations;
 
   public CompositeTaskTrackerInstrumentation(TaskTracker tt,

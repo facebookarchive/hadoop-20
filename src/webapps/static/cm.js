@@ -70,6 +70,27 @@ $(document).ready(function() {
       return split( term ).pop();
    }
 
+   jQuery.fn.dataTableExt.aTypes.push(
+     function(sData) {
+       var reg = /^[0-9.]+ (K|M|G)?B$/;
+       if (reg.test(sData)) {
+         return "memory_usage";
+       }
+
+       return null;
+     }
+   );
+
+
+   jQuery.fn.dataTableExt.oSort['memory_usage-asc'] = function(x,y) {
+     return cmpMemUsage(x, y, 1);
+   };
+
+   jQuery.fn.dataTableExt.oSort['memory_usage-desc'] = function(x,y) {
+     return cmpMemUsage(x, y, -1);
+   };
+
+
    $( "#poolInfoInput" )
       .bind( "keydown", function( event ) {
          if ( event.keyCode === $.ui.keyCode.TAB &&
@@ -101,7 +122,7 @@ $(document).ready(function() {
          }
      });
 
-   // Buttons
+  // Buttons
   $("button").button();
 
   //pretty up the toolbar
@@ -166,6 +187,9 @@ $(document).ready(function() {
         aoData.push({
             "name" : "poolInfos",
             "value": getParameterByName("poolInfos")});
+        aoData.push({
+            "name": "killSessionsToken",
+            "value": getParameterByName("killSessionsToken")});
     },
     "sAjaxSource": "/active_json.jsp",
   });
@@ -283,5 +307,42 @@ function getParameterByName(name) {
     var match = RegExp('[?&]' + name + '=([^&]*)')
         .exec(window.location.search);
     return match && decodeURIComponent(match[1].replace(/\+/g, ' '));
+}
+
+function memUnitToNum(unit) {
+  if (unit === "K") {
+    return 1024;
+  } else if (unit === "M") {
+    return 1024*1024;
+  } else if (unit === "G") {
+    return 1024*1024*1024;
+  }
+
+  return 0;
+}
+
+function cmpMemUsage(x, y, asc) {
+  var memRegExp = "([0-9.]+) (K|M|G)?"
+
+  var match1 = x.match(memRegExp);
+  var match2 = y.match(memRegExp);
+
+  if (match1[2] !== match2[2]) {
+    unit1 = memUnitToNum(match1[2]);
+    unit2 = memUnitToNum(match2[2]);
+
+    return (unit1 < unit2 ? -asc: asc);
+  }
+
+  var num1 = Number(match1[1]);
+  var num2 = Number(match2[1]);
+
+  if (num1 < num2) {
+    return -asc;
+  } else if (num1 == num2) {
+    return 0;
+  } else {
+    return asc;
+  }
 }
 

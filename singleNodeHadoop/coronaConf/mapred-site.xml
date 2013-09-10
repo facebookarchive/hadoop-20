@@ -17,6 +17,17 @@
 </property>  
 
 <property>                                                                  
+  <name>mapred.input.dir.cleanup</name>                               
+  <value>true</value>     
+</property>  
+
+<property>                                                                  
+  <name>mapred.input.dir.cleanup.threshold</name>                               
+  <value>1000</value>     
+</property>  
+
+
+<property>                                                                  
   <name>cm.pools.config.file</name>                               
   <value>coronapools.xml</value>     
   <description>Pools config file.</description>      
@@ -161,4 +172,100 @@
   <value>true</value>
 </property>
 
+<property>
+  <name>mapred.jobtracker.cgroup.mem.root</name>
+  <value>/cgroup/memory/jobtrackers</value>
+</property>
+
+<property>
+  <name>mapred.jobtracker.cgroup.mem</name>
+  <value>false</value>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.mem.root</name>
+  <value>/cgroup/memory/tasktrackers</value>
+  <description>The virtual file system for memory CGroup</description>
+</property>
+
+<property>
+  <name>mapred.container.cgroup.mem.root</name>
+  <value>/cgroup/memory/task_container</value>
+</property>
+
+
+<property>
+  <name>mapred.tasktracker.cgroup.mem</name>
+  <value>false</value>
+  <description>If a tasktracker shall set up memory CGroup</description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.mem.tasklimit</name>
+  <value>false</value>
+  <description>If we shall setup CGroup memory limit for individual tasks
+  </description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memwatcher</name>
+  <value>false</value>
+  <description>If a tasktracker shall set up memory CGroup watcher</description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.interval</name>
+  <value>2000</value>
+  <description>Sleep interval for CGroupMemoryWatcher</description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.mininterval</name>
+  <value>200</value>
+  <description>Min sleep interval for CGroupMemoryWatcher</description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.oldtask.threshold</name>
+  <value>864000000</value>
+  <description>If a task has been in the CGroup longer than this,
+    it will be removed
+  </description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.low.threshold</name>
+  <value>536870912</value>
+  <description>The threshold that a tasktracker group will be treated
+    as close to OOM
+  </description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.task.threshold</name>
+  <value>65536</value>
+  <description>
+  </description>The threshold that a task will be treated as close to OOM
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.historysize</name>
+  <value>50</value>
+  <description>
+  </description>Number of recent killed tasks to keep for the tasktracker page
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.cpu</name>
+  <value>false</value>
+  <description>If a tasktracker shall setup CPU CGroup
+  </description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.cpu.root</name>
+  <value>/cgroup/cpu/tasktrackers</value>
+  <description>The virtual file system for CPU CGroup
+  </description>
+</property>
 </configuration>

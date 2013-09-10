@@ -271,6 +271,12 @@ public class SchedulerForType extends Thread {
         sessionIdToGranted.entrySet()) {
       LOG.info("Assigning " + entry.getValue().size() + " " +
           type + " requests to Session: " + entry.getKey());
+      try {
+        Session session = sessionManager.getSession(entry.getKey());
+        session.setResourceGrant(entry.getValue());
+      } catch (InvalidSessionHandle e) {
+        LOG.warn("Trying to add call for invalid session: " + entry.getKey());
+      }
       if (LOG.isDebugEnabled()) {
         LOG.debug(Arrays.toString(entry.getValue().toArray()));
       }

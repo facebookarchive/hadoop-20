@@ -29,18 +29,21 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.server.common.StorageErrorReporter;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.util.DataTransferThrottler;
+import org.apache.hadoop.util.FlushableLogger;
 import org.apache.hadoop.util.InjectionHandler;
 
 
 /**
  * This class provides fetching a specified file from the NameNode.
  */
-class TransferFsImage implements FSConstants{
+public class TransferFsImage implements FSConstants{
   
   // Image transfer timeout
   public static final String DFS_IMAGE_TRANSFER_TIMEOUT_KEY = "dfs.image.transfer.timeout";
@@ -50,14 +53,19 @@ class TransferFsImage implements FSConstants{
   public final static String MD5_HEADER = "X-MD5-Digest";
 
   private static final Log LOG = LogFactory.getLog(TransferFsImage.class);
+  // immediate flush logger
+  private static final Log FLOG = FlushableLogger.getLogger(LOG);
+
+  private static final int BUFFER_SIZE = new Configuration().getInt(
+      "image.transfer.buffer.size", 4 * 1024 * 1024);
 
   /**
    * Download image to local storage with throttling.
    */
   static MD5Hash downloadImageToStorage(String fsName, long imageTxId,
-      NNStorage dstStorage, boolean needDigest) throws IOException {
+      FSImage fsImage, boolean needDigest) throws IOException {
     // by default do not disable throttling
-    return downloadImageToStorage(fsName, imageTxId, dstStorage, needDigest,
+    return downloadImageToStorage(fsName, imageTxId, fsImage, needDigest,
         false);
   }
   
@@ -66,22 +74,20 @@ class TransferFsImage implements FSConstants{
    * Throttling can be disabled.
    */
   static MD5Hash downloadImageToStorage(String fsName, long imageTxId,
-      NNStorage dstStorage, boolean needDigest, boolean disableThrottle)
+      FSImage dstImage, boolean needDigest, boolean disableThrottle)
       throws IOException {
 
     String fileid = GetImageServlet.getParamStringForImage(
-        imageTxId, dstStorage, disableThrottle);
+        imageTxId, dstImage.storage, disableThrottle);
     
-    String fileName = NNStorage.getCheckpointImageFileName(imageTxId);
-
-    File[] dstFiles = dstStorage.getFiles(NameNodeDirType.IMAGE, fileName);
-    if (dstFiles.length == 0) {
+    List<OutputStream> outputStreams = dstImage.getCheckpointImageOutputStreams(imageTxId);
+    
+    if (outputStreams.size() == 0) {
       throw new IOException("No targets in destination storage!");
     }
     
-    MD5Hash hash = getFileClient(fsName, fileid, dstFiles, dstStorage, needDigest);
-    LOG.info("Downloaded file " + dstFiles[0].getName() + " size " +
-        dstFiles[0].length() + " bytes.");
+    MD5Hash hash = getFileClient(fsName, fileid, outputStreams, dstImage.storage, needDigest);
+    LOG.info("Downloaded image files for txid: " + imageTxId);
     return hash;
   }
   
@@ -112,8 +118,9 @@ class TransferFsImage implements FSConstants{
         LOG.debug("Dest file: " + f);
       }
     }
-
-    getFileClient(fsName, fileid, dstFiles, dstStorage, false);
+    List<OutputStream> outputStreams = ImageSet.convertFilesToStreams(dstFiles,
+        dstStorage, fsName + fileid);
+    getFileClient(fsName, fileid, outputStreams, dstStorage, false);
     LOG.info("Downloaded file " + dstFiles[0].getName() + " size " +
         dstFiles[0].length() + " bytes.");
   }
@@ -148,13 +155,13 @@ class TransferFsImage implements FSConstants{
    * A server-side method to respond to a getfile http request
    * Copies the contents of the local file into the output stream.
    */
-  static void getFileServer(OutputStream outstream, File localfile,
-      DataTransferThrottler throttler) 
+  public static void getFileServer(OutputStream outstream, File localfile,
+      DataTransferThrottler throttler)
     throws IOException {
     byte buf[] = new byte[BUFFER_SIZE];
-    FileInputStream infile = null;
+    InputStream infile = null;
     try {
-      infile = new FileInputStream(localfile);
+      infile = new BufferedInputStream(new FileInputStream(localfile), BUFFER_SIZE);
       if (InjectionHandler.falseCondition(InjectionEvent.TRANSFERFSIMAGE_GETFILESERVER0)
           && localfile.getAbsolutePath().contains("secondary")) {
         // throw exception only when the secondary sends its image
@@ -197,14 +204,79 @@ class TransferFsImage implements FSConstants{
   }
   
   /**
+   * A server-side method to respond to a getfile http request
+   * Copies the contents of the local file into the output stream,
+   * starting at the given position, sending lengthToSend bytes.
+   */
+  public static void getFileServerForPartialFiles(OutputStream outstream,
+      String filename, InputStream infile, DataTransferThrottler throttler,
+      long startPosition, long lengthToSend) throws IOException {
+    byte buf[] = new byte[BUFFER_SIZE];
+    try {
+      int num = 1;
+      while (num > 0) {
+        num = infile.read(buf, 0,
+            Math.min(BUFFER_SIZE,
+                (int) Math.min(lengthToSend, Integer.MAX_VALUE)));
+        lengthToSend -= num;
+        if (num <= 0) {
+          break;
+        }
+        try {
+          outstream.write(buf, 0, num);
+        } catch (Exception e) {
+          // silently ignore. connection might have been closed
+          break;
+        }
+        if (throttler != null) {
+          throttler.throttle(num);
+        }
+      }
+      if (lengthToSend > 0) {
+        LOG.warn("Could not serve requested number of bytes. Left with "
+            + lengthToSend + " bytes for file: " + filename);
+      }
+    } finally {
+      if (infile != null) {
+        infile.close();
+      }
+    }
+  }
+  
+  /**
    * Get connection and read timeout.
    */
-  private static int getHttpTimeout(NNStorage storage) {
+  private static int getHttpTimeout(Storage st) {
+    if (!(st instanceof NNStorage))
+      return DFS_IMAGE_TRANSFER_TIMEOUT_DEFAULT; 
+    NNStorage storage = (NNStorage) st;
     if (storage == null || storage.getConf() == null) {
       return DFS_IMAGE_TRANSFER_TIMEOUT_DEFAULT;
     }
     return storage.getConf().getInt(DFS_IMAGE_TRANSFER_TIMEOUT_KEY,
         DFS_IMAGE_TRANSFER_TIMEOUT_DEFAULT);
+  }
+  
+  /**
+   * Client-side Method to fetch file from a server
+   * Copies the response from the URL to a list of local files.
+   * @param dstStorage if an error occurs writing to one of the files,
+   *                   this storage object will be notified. 
+   * @Return a digest of the received file if getChecksum is true
+   */
+  static MD5Hash getFileClient(String nnHostPort,
+      String queryString, List<OutputStream> outputStreams,
+      Storage dstStorage, boolean getChecksum) throws IOException {
+
+    String proto = "http://";
+    StringBuilder str = new StringBuilder(proto+nnHostPort+"/getimage?");
+    str.append(queryString);
+    LOG.info("Opening connection to " + str);
+    //
+    // open connection to remote server
+    //
+    URL url = new URL(str.toString());
+    return doGetUrl(url, outputStreams, dstStorage, getChecksum);
   }
 
   /**
@@ -214,19 +286,11 @@ class TransferFsImage implements FSConstants{
    *                   this storage object will be notified. 
    * @Return a digest of the received file if getChecksum is true
    */
-  static MD5Hash getFileClient(String nnHostPort,
-      String queryString, File[] localPaths,
-      NNStorage dstStorage, boolean getChecksum) throws IOException {
+  public static MD5Hash doGetUrl(URL url, List<OutputStream> outputStreams,
+      Storage dstStorage, boolean getChecksum) throws IOException {
     byte[] buf = new byte[BUFFER_SIZE];
-    String proto = "http://";
-    StringBuilder str = new StringBuilder(proto+nnHostPort+"/getimage?");
-    str.append(queryString);
-
-    //
-    // open connection to remote server
-    //
-    URL url = new URL(str.toString());
-    String urlStr = url.toString();
+    String str = url.toString();
+    
     HttpURLConnection connection = (HttpURLConnection) url.openConnection();
     
     int timeout = getHttpTimeout(dstStorage);
@@ -257,41 +321,19 @@ class TransferFsImage implements FSConstants{
       stream = new DigestInputStream(stream, digester);
     }
     boolean finishedReceiving = false;
-
-    List<FileOutputStream> outputStreams = new ArrayList<FileOutputStream>();
     MD5Hash computedDigest = null;
-
+    
     try {
-      if (localPaths != null) {
-        for (File f : localPaths) {
-          try {
-            if (f.exists()) {
-              LOG.warn("Overwriting existing file " + f
-                  + " with file downloaded from " + str);
-            }
-            outputStreams.add(new FileOutputStream(f));
-          } catch (IOException ioe) {
-            LOG.warn("Unable to download file " + f, ioe);
-            dstStorage.reportErrorOnFile(f);
-          }
-        }
-        
-        if (outputStreams.isEmpty()) {
-          throw new IOException(
-              "Unable to download to any storage directory");
-        }
-      }
-      
       int num = 1;
       int lastPrintedProgress = 0;
       while (num > 0) {
         num = stream.read(buf);
         if (num > 0) {
           received += num;
-          for (FileOutputStream fos : outputStreams) {
+          for (OutputStream fos : outputStreams) {
             fos.write(buf, 0, num);
           }
-          lastPrintedProgress = printProgress(urlStr, received, advertisedSize,
+          lastPrintedProgress = printProgress(str, received, advertisedSize,
               lastPrintedProgress);
         }
       }
@@ -300,9 +342,12 @@ class TransferFsImage implements FSConstants{
       finishedReceiving = true;
     } finally {
       stream.close();
-      for (FileOutputStream fos : outputStreams) {
-        fos.getChannel().force(true);
-        fos.close();
+      if (outputStreams != null) {
+        for (OutputStream os : outputStreams) {
+          if (os instanceof FileOutputStream)
+            ((FileOutputStream)os).getChannel().force(true);
+          os.close();
+        }
       }
       if (finishedReceiving && received != advertisedSize) {
         // only throw this exception if we think we read all of it on our end
@@ -336,11 +381,11 @@ class TransferFsImage implements FSConstants{
       return 0;
     int currentPercent = (int) ((received * 100) / advertisedSize);
     if (currentPercent != lastPrinted)
-      LOG.info("Downloading: " + str + ", completed: " + currentPercent);
+      FLOG.info("Downloading: " + str + ", completed: " + currentPercent);
     return currentPercent;
   }
 
-  private static MD5Hash parseMD5Header(HttpURLConnection connection) {
+  public static MD5Hash parseMD5Header(HttpURLConnection connection) {
     String header = connection.getHeaderField(MD5_HEADER);
     MD5Hash hash = (header != null) ? new MD5Hash(header) : null;
     return hash;

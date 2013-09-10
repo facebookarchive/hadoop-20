@@ -180,9 +180,9 @@ public class TestDirectoryParityRegenerator extends TestCase {
       TestRaidDfs.waitForDirRaided(LOG, dfs, dirPath, destPath, 
           (short)1, 240000);
       TestBlockFixer.verifyMetrics(dfs, cnode, LOGTYPES.MODIFICATION_TIME_CHANGE,
-          LOGRESULTS.NONE, 1L);
+          LOGRESULTS.NONE, 1L, true);
       TestBlockFixer.verifyMetrics(dfs, cnode, LOGTYPES.MODIFICATION_TIME_CHANGE,
-          LOGRESULTS.NONE, codec.id, 1L);
+          LOGRESULTS.NONE, codec.id, 1L, true);
     } catch (Exception e) {
       throw e;
     } finally {
@@ -231,7 +231,7 @@ public class TestDirectoryParityRegenerator extends TestCase {
   public static class FakeBlockIntegerityMonitor extends BlockIntegrityMonitor 
                                             implements Runnable {
 
-    public FakeBlockIntegerityMonitor(Configuration conf) {
+    public FakeBlockIntegerityMonitor(Configuration conf) throws Exception {
       super(conf);
     }
 

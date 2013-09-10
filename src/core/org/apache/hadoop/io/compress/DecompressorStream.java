@@ -21,7 +21,12 @@ package org.apache.hadoop.io.compress;
 import java.io.IOException;
 import java.io.InputStream;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
+
 public class DecompressorStream extends CompressionInputStream {
+  public static final Log LOG = LogFactory.getLog(DecompressorStream.class);
   protected Decompressor decompressor = null;
   protected byte[] buffer;
   protected boolean eof = false;
@@ -68,7 +73,13 @@ public class DecompressorStream extends CompressionInputStream {
       return 0;
     }
 
-    return decompress(b, off, len);
+    int retValue = decompress(b, off, len);
+    if (retValue < 0 && LOG.isDebugEnabled()) {
+      LOG.debug("DecompressorStream.read() returns " + retValue
+          + " when reading " + len + " bytes. inputstream "
+          + ((in != null) ? ("available: " + in.available()) : "null"));
+    }
+    return retValue;
   }
 
   protected int decompress(byte[] b, int off, int len) throws IOException {
@@ -76,6 +87,11 @@ public class DecompressorStream extends CompressionInputStream {
     
     while ((n = decompressor.decompress(b, off, len)) == 0) {
       if (decompressor.finished() || decompressor.needsDictionary()) {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("decompressor returning -1 finished? "
+              + decompressor.finished() + " needDictionary()? "
+              + decompressor.needsDictionary());
+        }
         eof = true;
         return -1;
       }

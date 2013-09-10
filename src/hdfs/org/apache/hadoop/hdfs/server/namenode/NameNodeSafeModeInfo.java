@@ -7,6 +7,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.util.Daemon;
+import org.apache.hadoop.util.FlushableLogger;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -63,6 +64,7 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
   private final NameNode nameNode;
   private Daemon smmthread = null; // SafeModeMonitor thread
   private final static Log LOG = LogFactory.getLog(NameNodeSafeModeInfo.class);
+  private final static Log FLOG = FlushableLogger.getLogger(LOG);
 
   NameNodeSafeModeInfo(FSNamesystem namesystem) {
     this(new Configuration(), namesystem);
@@ -85,8 +87,10 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
     this.namesystem = namesystem;
     this.nameNode = namesystem.getNameNode();
     
+    // start initial block report executor
+    this.namesystem.setupInitialBlockReportExecutor(false);
     // set fields of fsnamesystem to trigger replication queues initialization
-    this.namesystem.initializedReplQueues = false;
+    this.namesystem.setInitializedReplicationQueues(false);
     this.namesystem.blocksSafe = 0;
   }
 
@@ -124,10 +128,8 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
   }
 
   protected void startPostSafeModeProcessing() {
-    // if not done yet, initialize replication queues
-    if (!namesystem.isPopulatingReplQueues()) {
-      initializeReplQueues();
-    }
+    // initialize replication queues
+    initializeReplQueues();
     long timeInSafemode = FSNamesystem.now() - namesystem.systemStart;
     NameNode.stateChangeLog.info("STATE* Leaving safe mode after "
         + timeInSafemode / 1000 + " secs.");
@@ -287,7 +289,7 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
         return leaveMsg + ".";
       }
       String initReplicationQueues = namesystem.isPopulatingReplQueues() 
-          ? " Replication queues have been initialized manually. "
+          ? " Replication queues have been initialized. "
           : "";
       String safeBlockRatioMsg = String.format(
         initReplicationQueues 
@@ -315,11 +317,11 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
    * Print status every 20 seconds.
    */
   private void reportStatus(String msg, boolean rightNow) {
-    long curTime = namesystem.now();
+    long curTime = FSNamesystem.now();
     if (!rightNow && (curTime - lastStatusReport < 20 * 1000)) {
       return;
     }
-    NameNode.stateChangeLog.info(msg + " \n" + getTurnOffTip());
+    FLOG.info(msg + " \n" + getTurnOffTip());
     lastStatusReport = curTime;
   }
 

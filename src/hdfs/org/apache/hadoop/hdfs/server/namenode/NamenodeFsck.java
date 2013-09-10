@@ -159,7 +159,6 @@ public class NamenodeFsck {
    * @throws Exception
    */
   public void fsck() throws IOException {
-    NameNode.getNameNodeMetrics().numFsckOperations.inc();
     InjectionHandler.processEvent(InjectionEvent.NAMENODE_FSCK_START);
     
     try {
@@ -470,7 +469,7 @@ public class NamenodeFsck {
   
   private void lostFoundMove(FileStatus file, LocatedBlocks blocks)
     throws IOException {
-    final DFSClient dfs = new DFSClient(NameNode.getAddress(conf), conf);
+    final DFSClient dfs = new DFSClient(NameNode.getClientProtocolAddress(conf), conf);
     try {
     if (!lfInited) {
       lostFoundInit(dfs);

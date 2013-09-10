@@ -60,6 +60,8 @@ import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.io.DataOutputBuffer;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.util.InjectionEventCore;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.ReflectionUtils;
 
 /** A client for an IPC service.  IPC calls take a single {@link Writable} as a
@@ -72,12 +74,18 @@ public class Client {
   
   public static final Log LOG =
     LogFactory.getLog(Client.class);
+  public static final Log CLIENT_TRACE_LOG = LogFactory.getLog(Client.class
+      .getName() + ".clienttrace");
+
   private Hashtable<ConnectionId, Connection> connections =
     new Hashtable<ConnectionId, Connection>();
 
   private Class<? extends Writable> valueClass;   // class of call values
   private int counter;                            // counter for call ids
   private AtomicBoolean running = new AtomicBoolean(true); // if client runs
+  private Object totalCallCounterLock = new Object();
+  private long totalCallSent = 0;
+  private long totalCallReceived = 0;
   final private Configuration conf;
   final private int maxIdleTime; //connections will be culled if it was idle for 
                            //maxIdleTime msecs
@@ -92,6 +100,10 @@ public class Client {
   final private static String PING_INTERVAL_NAME = "ipc.ping.interval";
   final static int DEFAULT_PING_INTERVAL = 60000; // 1 min
   final static int PING_CALL_ID = -1;
+  public static final String CONNECT_TIMEOUT_KEY = "ipc.client.connect.timeout";
+  public static final int CONNECT_TIMEOUT_DEFAULT = 20000;
+  public static final String CONNECT_MAX_RETRIES_KEY = "ipc.client.connect.max.retries";
+  public static final int CONNECT_MAX_RETRIES_DEFAULT = 10;
   
   /**
    * set the ping interval value in configuration
@@ -298,8 +310,18 @@ public class Client {
        */
       private void handleTimeout(SocketTimeoutException e) throws IOException {
         if (shouldCloseConnection.get() || !running.get() || rpcTimeout > 0) {
+          if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+            CLIENT_TRACE_LOG
+                .debug("Socket Timeout and failing the connection to "
+                    + getRemoteAddress());
+          }
           throw e;
         } else {
+          if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+            CLIENT_TRACE_LOG.debug("Socket Timeout and sending ping to "
+                + getRemoteAddress());
+          }
+
           sendPing();
         }
       }
@@ -354,18 +376,28 @@ public class Client {
           }
           return;
         } else {
+          // we can fast return here
+          if (socket != null || shouldCloseConnection.get()) {
+            return;
+          }
           // No one is doing the setting. Set the setupID and
           // initialize the streams.
           currentSetupId.set(System.currentTimeMillis());
         }
       }
-
+      if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+        CLIENT_TRACE_LOG.debug("Setting up IO Stream to " + getRemoteAddress());
+      }
       try {
         setupIOstreamsWithInternal();
       } finally {
         synchronized(currentSetupId) {
           currentSetupId.set(0L);
           currentSetupId.notifyAll();
+        }
+        if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+          CLIENT_TRACE_LOG.debug("Finished setting up IO Stream to "
+              + getRemoteAddress());
         }
       }
     }
@@ -388,6 +420,11 @@ public class Client {
           try {
             this.socket = socketFactory.createSocket();
             this.socket.setTcpNoDelay(tcpNoDelay);
+            
+            InjectionHandler.processEvent(
+                InjectionEventCore.RPC_CLIENT_SETUP_IO_STREAM_FAILURE,
+                connections);
+            
             // connection time out is 20s by default
             NetUtils.connect(this.socket, remoteId.getAddress(), connectTimeout);
             if (rpcTimeout > 0) {
@@ -416,8 +453,10 @@ public class Client {
         // start the receiver thread after the socket connection has been set up
         start();
       } catch (IOException e) {
+        InjectionHandler.processEvent(
+            InjectionEventCore.RPC_CLIENT_CONNECTION_FAILURE, e);
         markClosed(e);
-        close();
+        close(true);
       }
     }
 
@@ -460,9 +499,10 @@ public class Client {
       } catch (InterruptedException ignored) {
         throw new InterruptedIOException();
       }
-      
-      LOG.info("Retrying connect to server: " + server + 
-          ". Already tried " + curRetries + " time(s).");
+      if (CLIENT_TRACE_LOG.isInfoEnabled()) {
+        CLIENT_TRACE_LOG.info("Retrying connect to server: " + server
+            + ". Already tried " + curRetries + " time(s).");
+      }
     }
 
     /* Write the header for each connection
@@ -503,13 +543,25 @@ public class Client {
       if (!calls.isEmpty() && !shouldCloseConnection.get() && running.get()) {
         return true;
       } else if (shouldCloseConnection.get()) {
+        if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+          CLIENT_TRACE_LOG.debug("Closing connection due to failure to "
+              + this.server);
+        }
         return false;
       } else if (calls.isEmpty()) { // idle connection closed or stopped
+        if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+          CLIENT_TRACE_LOG.debug("Closing idle connection to " + getRemoteAddress());
+        }
         markClosed(null);
         return false;
       } else { // get stopped but there are still pending requests 
-        markClosed((IOException)new IOException().initCause(
-            new InterruptedException()));
+        if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+          CLIENT_TRACE_LOG
+              .debug("Get stopped but there are still pending requests to "
+                  + this.server);
+        }
+        markClosed((InterruptedIOException) new InterruptedIOException()
+            .initCause(new InterruptedException()));
         return false;
       }
     }
@@ -537,66 +589,97 @@ public class Client {
         LOG.debug(getName() + ": starting, having connections " 
             + connections.size());
 
-      while (waitForWork()) {//wait here for work - read or close connection
-        receiveResponse();
+      boolean hasException = true;
+      try {
+        while (waitForWork()) {// wait here for work - read or close connection
+          receiveResponse();
+        }
+        hasException = false;
+      } finally {
+        close(hasException);
       }
-      
-      close();
       
       if (LOG.isDebugEnabled())
         LOG.debug(getName() + ": stopped, remaining connections "
             + connections.size());
+    }
+    
+    private void sendParamInternal(Call call, CountDownLatch latch,
+        boolean fastProtocol) {
+      DataOutputBuffer d = null;
+      
+      try {
+        if (shouldCloseConnection.get()) {
+          return;
+        }
+        synchronized (Connection.this.out) {
+          if (!fastProtocol && LOG.isDebugEnabled())
+            LOG.debug(getName() + " sending #" + call.id);
+
+          //for serializing the
+          //data to be written
+          d = new DataOutputBuffer();
+          d.writeInt(call.id);
+          call.param.write(d);
+          byte[] data = d.getData();
+          int dataLength = d.getLength();
+          out.writeInt(dataLength);      //first put the data length
+          out.write(data, 0, dataLength);//write the data
+          out.flush();
+        }
+        if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+          synchronized (totalCallCounterLock) {
+            if (++totalCallSent % 100 == 0) {
+              CLIENT_TRACE_LOG.debug("Sent " + totalCallSent
+                  + " calls. Total calls received: " + totalCallReceived);
+            }
+          }
+        }
+      } catch (IOException e) {
+        markClosed(e);
+      } finally {
+        if (latch != null) {
+          latch.countDown();
+        }
+        //the buffer is just an in-memory buffer, but it is still polite to
+        // close early
+        IOUtils.closeStream(d);
+      }
     }
 
     /** Initiates a call by sending the parameter to the remote server.
      * Note: this is not called from the Connection thread, but by other
      * threads.
      */
-    public void sendParam(final Call call) throws InterruptedException {
+    public void sendParam(final Call call, boolean fastProtocol)
+        throws InterruptedException {
       if (shouldCloseConnection.get()) {
         return;
       }
-
-      final CountDownLatch latch = new CountDownLatch(1);
-      executor.submit(new Runnable() {
-        @Override
-        public void run() {
-          DataOutputBuffer d = null;
-
-          try {
-            if (shouldCloseConnection.get()) {
-              return;
-            }
-            synchronized (Connection.this.out) {
-              if (LOG.isDebugEnabled())
-                LOG.debug(getName() + " sending #" + call.id);
-
-              //for serializing the
-              //data to be written
-              d = new DataOutputBuffer();
-              d.writeInt(call.id);
-              call.param.write(d);
-              byte[] data = d.getData();
-              int dataLength = d.getLength();
-              out.writeInt(dataLength);      //first put the data length
-              out.write(data, 0, dataLength);//write the data
-              out.flush();
-            }
-          } catch (IOException e) {
-            markClosed(e);
-          } finally {
-            latch.countDown();
-            //the buffer is just an in-memory buffer, but it is still polite to
-            // close early
-            IOUtils.closeStream(d);
+     
+      if (fastProtocol) {
+        // send directly by this thread
+        sendParamInternal(call, null, true);
+      } else {
+        final CountDownLatch latch = new CountDownLatch(1);
+        executor.submit(new Runnable() {
+          @Override
+          public void run() {
+            sendParamInternal(call, latch, false);
           }
-        }
-      });
+        });
 
-      if (!latch.await(pingInterval, TimeUnit.MILLISECONDS)) {
-        markClosed(new IOException(
-          String.format("timeout waiting for sendParam, %d ms", pingInterval)
-        ));
+        if (!latch.await(pingInterval, TimeUnit.MILLISECONDS)) {
+          if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+            CLIENT_TRACE_LOG.debug(String
+                .format("timeout waiting for sendParam, " + pingInterval
+                    + " ms to " + getRemoteAddress()));
+          }
+
+          markClosed(new IOException(
+            String.format("timeout waiting for sendParam, %d ms", pingInterval)
+          ));
+        }
       }
     }
 
@@ -634,8 +717,23 @@ public class Client {
         }
       } catch (IOException e) {
         markClosed(e);
+        if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+          CLIENT_TRACE_LOG.debug("IOException when receiving response", e);
+        }
       } catch (Throwable te) {
         markClosed((IOException)new IOException().initCause(te));
+        if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+          CLIENT_TRACE_LOG.debug("Throwable when receiving response", te);
+        }
+      } finally {
+        if (CLIENT_TRACE_LOG.isDebugEnabled()) {
+          synchronized (totalCallCounterLock) {
+            if (++totalCallReceived % 100 == 0) {
+              CLIENT_TRACE_LOG.debug("Received " + totalCallReceived
+                  + " calls. Total calls sent: " + totalCallSent);
+            }
+          }
+        }        
       }
     }
     
@@ -648,42 +746,44 @@ public class Client {
     }
     
     /** Close the connection. */
-    private synchronized void close() {
-      if (!shouldCloseConnection.get()) {
+    private synchronized void close(boolean falseClose) {
+      if (!falseClose && !shouldCloseConnection.get()) {
         LOG.error("The connection is not in the closed state");
         return;
       }
 
-      // release the resources
-      // first thing to do;take the connection out of the connection list
-      synchronized (connections) {
-        if (connections.get(remoteId) == this) {
-          connections.remove(remoteId);
-          connections.notifyAll();
+      try {
+        // release the resources
+        // first thing to do;take the connection out of the connection list
+        synchronized (connections) {
+          if (connections.get(remoteId) == this) {
+            connections.remove(remoteId);
+            connections.notifyAll();
+          }
         }
-      }
 
-      // close the streams and therefore the socket
-      IOUtils.closeStream(out);
-      IOUtils.closeStream(in);
+        // close the streams and therefore the socket
+        IOUtils.closeStream(out);
+        IOUtils.closeStream(in);
 
-      // clean up all calls
-      if (closeException == null) {
-        if (!calls.isEmpty()) {
-          LOG.warn(
+        // clean up all calls
+        if (closeException == null) {
+          if (!calls.isEmpty()) {
+            LOG.warn(
               "A connection is closed for no cause and calls are not empty");
 
-          // clean up calls anyway
-          closeException = new IOException("Unexpected closed connection");
-          cleanupCalls();
+            // clean up calls anyway
+            closeException = new IOException("Unexpected closed connection");
+            cleanupCalls();
+          }
+        } else {
+          // log the info
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("closing ipc connection to " + server + ": " +
+                closeException.getMessage(),closeException);
+          }
         }
-      } else {
-        // log the info
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("closing ipc connection to " + server + ": " +
-              closeException.getMessage(),closeException);
-        }
-
+      } finally {
         // cleanup calls
         cleanupCalls();
       }
@@ -693,11 +793,13 @@ public class Client {
     
     /* Cleanup all calls and mark them as done */
     private void cleanupCalls() {
-      Iterator<Entry<Integer, Call>> itor = calls.entrySet().iterator() ;
-      while (itor.hasNext()) {
-        Call c = itor.next().getValue(); 
-        c.setException(closeException); // local exception
-        itor.remove();         
+      if (!calls.isEmpty()) {
+        Iterator<Entry<Integer, Call>> itor = calls.entrySet().iterator();
+        while (itor.hasNext()) {
+          Call c = itor.next().getValue();
+          c.setException(closeException); // local exception
+          itor.remove();
+        }
       }
     }
   }
@@ -747,8 +849,9 @@ public class Client {
     this.maxIdleTime = 
       conf.getInt("ipc.client.connection.maxidletime", 10000); //10s
     this.connectTimeout =
-      conf.getInt("ipc.client.connect.timeout", 20000); //20s
-    this.maxRetries = conf.getInt("ipc.client.connect.max.retries", 10);
+      conf.getInt(CONNECT_TIMEOUT_KEY, CONNECT_TIMEOUT_DEFAULT); //20s
+    this.maxRetries = conf.getInt(CONNECT_MAX_RETRIES_KEY,
+        CONNECT_MAX_RETRIES_DEFAULT);
     this.tcpNoDelay = conf.getBoolean("ipc.client.tcpnodelay", false);
     this.pingInterval = getPingInterval(conf);
     if (LOG.isDebugEnabled()) {
@@ -809,7 +912,7 @@ public class Client {
    */
   @Deprecated
   public Writable call(Writable param, InetSocketAddress address)
-  throws InterruptedException, IOException {
+  throws IOException {
       return call(param, address, null);
   }
   
@@ -823,8 +926,8 @@ public class Client {
   @Deprecated
   public Writable call(Writable param, InetSocketAddress addr,
       UserGroupInformation ticket)
-      throws InterruptedException, IOException {
-    return call(param, addr, null, ticket, 0);
+      throws IOException {
+    return call(param, addr, null, ticket, 0, false);
   }
   
   /** Make a call, passing <code>param</code>, to the IPC server running at
@@ -835,34 +938,28 @@ public class Client {
    * threw an exception. */
   public Writable call(Writable param, InetSocketAddress addr, 
                        Class<?> protocol, UserGroupInformation ticket,
-                       int rpcTimeout)
-                       throws InterruptedException, IOException {
+                       int rpcTimeout, boolean fastProtocol)
+                       throws IOException {
     Call call = new Call(param);
     Connection connection = getConnection(addr, protocol, ticket,
 		rpcTimeout, call);
     try {
-      connection.sendParam(call);                 // send the parameter
+      connection.sendParam(call, fastProtocol);                 // send the parameter
     } catch (RejectedExecutionException e) {
-      throw new IOException("connection has been closed", e);
+      throw new ConnectionClosedException("connection has been closed", e);
     } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-
-      throw new IOException("interrupted waiting for sendParam to complete", e);
+      throw (InterruptedIOException) new InterruptedIOException().initCause(e);
     }
-    boolean interrupted = false;
+
     synchronized (call) {
       while (!call.done) {
         try {
           call.wait();                           // wait for the result
         } catch (InterruptedException ie) {
-          // save the fact that we were interrupted
-          interrupted = true;
+          // Exit on interruption.
+          throw (InterruptedIOException) new InterruptedIOException()
+              .initCause(ie);
         }
-      }
-
-      if (interrupted) {
-        // set the interrupt flag now that we are done waiting
-        Thread.currentThread().interrupt();
       }
 
       if (call.error != null) {
@@ -950,7 +1047,7 @@ public class Client {
         try {
           Connection connection = 
             getConnection(addresses[i], protocol, ticket, 0, call);
-          connection.sendParam(call);             // send each parameter
+          connection.sendParam(call, false);             // send each parameter
         } catch (RejectedExecutionException e) {
           throw new IOException("connection has been closed", e);
         } catch (IOException e) {
@@ -1007,7 +1104,26 @@ public class Client {
     //block above. The reason for that is if the server happens to be slow,
     //it will take longer to establish a connection and that will slow the
     //entire system down.
-    connection.setupIOstreams();
+    boolean success = false;
+    try {
+      connection.setupIOstreams();
+      success = true;
+    } finally {
+      if (!success) {
+        // We need to make sure connection is removed from connections object if
+        // there is any unhandled exception (like OOM). In this case, unlikely
+        // there is response thread started which can clear the connection
+        // eventually.
+        try {
+          if (connection.closeException == null) {
+            connection.markClosed(new IOException(
+                "Unexpected error when setup IO Stream"));
+          }
+        } finally {
+          connection.close(true);
+        }
+      }
+    }
     return connection;
   }
 
@@ -1067,4 +1183,12 @@ public class Client {
              ));
     }
   }  
+  
+  public class ConnectionClosedException extends IOException {
+    private static final long serialVersionUID = 1L;
+
+    public ConnectionClosedException(String message, Throwable cause) {
+      super(message, cause);
+    }
+  }
 }

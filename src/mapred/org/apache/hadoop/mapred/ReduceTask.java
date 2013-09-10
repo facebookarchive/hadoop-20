@@ -395,6 +395,7 @@ class ReduceTask extends Task {
     boolean isLocal = "local".equals(job.get("mapred.job.tracker", "local"));
     long reduceCopyStartMilli = System.currentTimeMillis();
     ProcResourceValues copyStartProcVals = getCurrentProcResourceValues();
+    long copyStart = jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
     if (!isLocal) {
       reduceCopier = new ReduceCopier(umbilical, job, reporter);
       if (!reduceCopier.fetchOutputs()) {
@@ -407,11 +408,16 @@ class ReduceTask extends Task {
     }
     long reducerCopyEndMilli = System.currentTimeMillis();
     ProcResourceValues copyEndProcVals = getCurrentProcResourceValues();
-
+    long copyEnd = jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
+    reporter.getCounter(Counter.REDUCE_COPY_CPU_JVM).setValue(
+      jmxThreadInfoTracker.getTaskCPUTime("REDUCE_COPY_TASK") +
+      (copyEnd - copyStart));
+    
     copyPhase.complete();                         // copy is already complete
     setPhase(TaskStatus.Phase.SORT);
     statusUpdate(umbilical);
-
+    
+    long sortStartJVMCPUMills = jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
     final FileSystem rfs = FileSystem.getLocal(job).getRaw();
     RawKeyValueIterator rIter = isLocal
       ? Merger.merge(job, rfs, job.getMapOutputKeyClass(),
@@ -426,6 +432,9 @@ class ReduceTask extends Task {
 
     long sortEndMilli = System.currentTimeMillis();
     ProcResourceValues sortEndProcVals = getCurrentProcResourceValues();
+    long sortEndJVMCPUMills = jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
+    reporter.getCounter(Counter.REDUCE_SORT_CPU_JVM).setValue(
+        sortEndJVMCPUMills - sortStartJVMCPUMills);
 
     sortPhase.complete();                         // sort is complete
     setPhase(TaskStatus.Phase.REDUCE);
@@ -664,6 +673,17 @@ class ReduceTask extends Task {
     SERIOUS_ERROR, ///< Should re-run this map
     OTHER_ERROR ///< Other error
   };
+
+  /**
+   * Root cause of copy output error
+   */
+  private static enum ErrorRootCause {
+    UNSPECIFIED, ///< Unspecified error
+    DATA_CORRUPTION, ///< Input data is incorrect
+    DNS_FAILURE, ///< Failed to query DNS
+    CONNECTION_TIMEOUT, ///< Connection timeout
+    READ_ERROR, ///< Read error
+  }
 
   class ReduceCopier<K, V> implements MRConstants {
 
@@ -938,6 +958,11 @@ class ReduceTask extends Task {
       private int numSeriousFailureFetches = 0;
       private long numBytes = 0;
       private int numThreadsBusy = 0;
+      private int numDataCorruption = 0;
+      private int numDnsFailure = 0;
+      private int numConnectionTimeout = 0;
+      private int numReadError = 0;
+
       ShuffleClientMetrics(JobConf conf) {
         MetricsContext metricsContext = MetricsUtil.getContext("mapred");
         this.shuffleMetrics =
@@ -961,6 +986,23 @@ class ReduceTask extends Task {
       public synchronized void seriousFailureFetch() {
         ++numSeriousFailureFetches;
       }
+      public synchronized void logErrorRootCause(
+        ErrorRootCause errorRootCause) {
+        switch (errorRootCause) {
+          case DATA_CORRUPTION:
+            ++numDataCorruption;
+            break;
+          case DNS_FAILURE:
+            ++numDnsFailure;
+            break;
+          case CONNECTION_TIMEOUT:
+            ++numConnectionTimeout;
+            break;
+          case READ_ERROR:
+            ++numReadError;
+            break;
+        }
+      }
       public synchronized void threadBusy() {
         ++numThreadsBusy;
       }
@@ -976,6 +1018,14 @@ class ReduceTask extends Task {
                                     numSuccessFetches);
           shuffleMetrics.incrMetric("shuffle_serious_failures_fetches",
               numSeriousFailureFetches);
+          shuffleMetrics.incrMetric("shuffle_data_corruption",
+              numDataCorruption);
+          shuffleMetrics.incrMetric("shuffle_dns_failure",
+              numDnsFailure);
+          shuffleMetrics.incrMetric("shuffle_connection_timeout",
+              numConnectionTimeout);
+          shuffleMetrics.incrMetric("shuffle_read_error",
+              numReadError);
           if (numCopiers != 0) {
             shuffleMetrics.setMetric("shuffle_fetchers_busy_percent",
                 100*((float)numThreadsBusy/numCopiers));
@@ -986,6 +1036,10 @@ class ReduceTask extends Task {
           numSuccessFetches = 0;
           numFailedFetches = 0;
           numSeriousFailureFetches = 0;
+          numDataCorruption = 0;
+          numDnsFailure = 0;
+          numConnectionTimeout = 0;
+          numReadError = 0;
         }
         shuffleMetrics.update();
       }
@@ -1540,6 +1594,8 @@ class ReduceTask extends Task {
         if (decompressor != null) {
           CodecPool.returnDecompressor(decompressor);
         }
+        
+        jmxThreadInfoTracker.updateCPUInfo();
 
       }
 
@@ -1632,6 +1688,8 @@ class ReduceTask extends Task {
           shuffleClientMetrics.successFetch();
         } else if (loc.errorType == CopyOutputErrorType.SERIOUS_ERROR) {
           shuffleClientMetrics.seriousFailureFetch();
+          shuffleClientMetrics.logErrorRootCause(
+            mapOutputStatus.errorRootCause);
           shuffleClientMetrics.failedFetch();
         } else if (loc.errorType == CopyOutputErrorType.OTHER_ERROR ||
             loc.errorType == CopyOutputErrorType.READ_ERROR) {
@@ -1724,10 +1782,18 @@ class ReduceTask extends Task {
         final MapOutput mapOutput;
         /** Error of the MapOutput */
         final CopyOutputErrorType errorType;
+        /** Root cause of the error */
+        final ErrorRootCause errorRootCause;
 
         MapOutputStatus(MapOutput mapOutput, CopyOutputErrorType errorType) {
+          this(mapOutput, errorType, ErrorRootCause.UNSPECIFIED);
+        }
+
+        MapOutputStatus(MapOutput mapOutput, CopyOutputErrorType errorType,
+          ErrorRootCause errorRootCause) {
           this.mapOutput = mapOutput;
           this.errorType = errorType;
+          this.errorRootCause = errorRootCause;
         }
       }
 
@@ -1762,7 +1828,8 @@ class ReduceTask extends Task {
             LOG.warn("getMapOutput: Header for " + mapOutputLoc + " indicates" +
                 "the map output can't be found, indicating a serious error.");
             return new MapOutputStatus(null,
-                CopyOutputErrorType.SERIOUS_ERROR);
+                CopyOutputErrorType.SERIOUS_ERROR,
+                ErrorRootCause.DATA_CORRUPTION);
           }
           mapId = TaskAttemptID.forName(header.mapId);
           compressedLength = header.compressedLength;
@@ -1770,33 +1837,38 @@ class ReduceTask extends Task {
           forReduce = header.forReduce;
         } catch (IllegalArgumentException e) {
           LOG.warn(getName() + " Invalid map id (maybe protocol mismatch)", e);
-          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR);
+          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR,
+            ErrorRootCause.DATA_CORRUPTION);
         }
         if (mapId == null) {
           LOG.warn("Missing header " + FROM_MAP_TASK + " in response for " +
             connection.getURL());
-          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR);
+          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR,
+            ErrorRootCause.DATA_CORRUPTION);
         }
         TaskAttemptID expectedMapId = mapOutputLoc.getTaskAttemptId();
         if (!mapId.equals(expectedMapId)) {
           LOG.warn(getName() + " data from wrong map:" + mapId +
               " arrived to reduce task " + reduce +
               ", where as expected map output should be from " + expectedMapId);
-          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR);
+          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR,
+            ErrorRootCause.DATA_CORRUPTION);
         }
         if (compressedLength < 0 || decompressedLength < 0) {
           LOG.warn(getName() + " invalid lengths in map output header: id:" +
               " " +
               mapId + " compressed len: " + compressedLength +
               ", decompressed len: " + decompressedLength);
-          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR);
+          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR,
+            ErrorRootCause.DATA_CORRUPTION);
         }
         if (forReduce != reduce) {
           LOG.warn(getName() + " data for the wrong reduce: " + forReduce +
               " with compressed len: " + compressedLength +
               ", decompressed len: " + decompressedLength +
               " arrived to reduce task " + reduce);
-          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR);
+          return new MapOutputStatus(null, CopyOutputErrorType.SERIOUS_ERROR,
+            ErrorRootCause.DATA_CORRUPTION);
         }
         LOG.info(getName() + " getMapOutput: " + connection.getURL() +
             " header: " + mapId +
@@ -1866,6 +1938,8 @@ class ReduceTask extends Task {
             // most probably it is the fault of the DNS. We should sleep and
             // retry later
             if (connectionTimeout == 0) {
+              shuffleClientMetrics.logErrorRootCause(
+                ErrorRootCause.DNS_FAILURE);
               throw uex;
             }
             try {
@@ -1883,6 +1957,8 @@ class ReduceTask extends Task {
             // throw an exception if we have waited for timeout amount of time
             // note that the updated value if timeout is used here
             if (connectionTimeout == 0) {
+              shuffleClientMetrics.logErrorRootCause(
+                ErrorRootCause.CONNECTION_TIMEOUT);
               throw ioe;
             }
 
@@ -1898,6 +1974,7 @@ class ReduceTask extends Task {
           return connection.getInputStream();
         } catch (IOException ioe) {
           readError = true;
+          shuffleClientMetrics.logErrorRootCause(ErrorRootCause.READ_ERROR);
           throw ioe;
         }
       }
@@ -2252,6 +2329,9 @@ class ReduceTask extends Task {
         MapOutputCopier copier = new MapOutputCopier(conf, reporter);
         copiers.add(copier);
         copier.start();
+        // register the copier to jmxThreadInfoTracker
+        jmxThreadInfoTracker.registerThreadToTask(
+            "REDUCE_COPY_TASK", copier.getId());
       }
 
       //start the on-disk-merge thread
@@ -2260,10 +2340,16 @@ class ReduceTask extends Task {
       inMemFSMergeThread = new InMemFSMergeThread();
       localFSMergerThread.start();
       inMemFSMergeThread.start();
+      jmxThreadInfoTracker.registerThreadToTask(
+          "REDUCE_COPY_TASK", localFSMergerThread.getId());
+      jmxThreadInfoTracker.registerThreadToTask(
+          "REDUCE_COPY_TASK", inMemFSMergeThread.getId());
 
       // start the map events thread
       getMapEventsThread = new GetMapEventsThread();
       getMapEventsThread.start();
+      jmxThreadInfoTracker.registerThreadToTask(
+          "REDUCE_COPY_TASK", getMapEventsThread.getId());
 
       // start the clock for bandwidth measurement
       long startTime = System.currentTimeMillis();
@@ -2618,7 +2704,7 @@ class ReduceTask extends Task {
             numInFlight--;
           }
         }
-
+        
         // all done, inform the copiers to exit
         exitGetMapEvents= true;
         try {
@@ -2991,6 +3077,8 @@ class ReduceTask extends Task {
                      " Local output file is " + outputPath + " of size " +
                      localFileSys.getFileStatus(outputPath).getLen());
             }
+          
+            jmxThreadInfoTracker.updateCPUInfo();
         } catch (Exception e) {
           LOG.warn(reduceTask.getTaskID()
                    + " Merging of the local FS files threw an exception: "
@@ -3023,6 +3111,8 @@ class ReduceTask extends Task {
               doInMemMerge();
             }
           } while (!exit);
+          
+          jmxThreadInfoTracker.updateCPUInfo();
         } catch (Exception e) {
           LOG.warn(reduceTask.getTaskID() +
                    " Merge of the inmemory files threw an exception: "
@@ -3156,6 +3246,8 @@ class ReduceTask extends Task {
         } while (!exitGetMapEvents);
 
         LOG.info("GetMapEventsThread exiting");
+        
+        jmxThreadInfoTracker.updateCPUInfo();
 
       }
 

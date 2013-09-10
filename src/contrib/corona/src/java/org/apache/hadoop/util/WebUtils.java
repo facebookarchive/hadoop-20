@@ -136,14 +136,38 @@ public class WebUtils {
     while (attributeNames.hasMoreElements()) {
       String attribute = attributeNames.nextElement();
       if (!attribute.equals("users") && !attribute.equals("poolGroups") &&
-          !attribute.equals("poolInfos") && !attribute.equals("toKillSessionId")) {
-        return "Illegal parameter " + attribute + ", only 'users, " +
-            "poolGroups, 'poolInfos' and 'toKillSessionId' parameters allowed.";
+          !attribute.equals("poolInfos") && !attribute.equals("toKillSessionId")
+          && !attribute.equals("killSessionsToken")) {
+        return 
+          "Illegal parameter " + attribute + ", only 'users, " +
+          "poolGroups, 'poolInfos', 'toKillSessionId' and 'killSessionsToken'" +
+          "parameters allowed.";
       }
     }
     return null;
   }
-
+  
+ 
+  private static final String[] VALID_TOKENS = {"prism"};
+  /**
+   * Check if the kill sessions token is a valid one
+   * @param token The value of user supplied token
+   * @return true for valid, false for invalid
+   */
+  public static boolean isValidKillSessionsToken(String token) {
+    if (token == null || token.isEmpty()) {
+      return false;
+    }
+    
+    for (String validToken:VALID_TOKENS) {
+      if (token.equals (validToken)) {
+        return true;
+      }
+    }
+    
+    return false;
+  }
+  
   /**
    * Convert the parameters to filters and html output
    * @param userFilter User filter parameter

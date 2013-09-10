@@ -17,12 +17,15 @@
  */
 package org.apache.hadoop.security;
 
+import java.io.DataInput;
+import java.io.DataOutput;
 import java.io.IOException;
-import java.security.AccessController;
-import java.security.Principal;
+import java.lang.reflect.UndeclaredThrowableException;
+import java.security.*;
 import java.util.Set;
 
 import javax.security.auth.Subject;
+import javax.security.auth.login.LoginContext;
 import javax.security.auth.login.LoginException;
 
 import org.apache.commons.logging.Log;
@@ -39,7 +42,7 @@ public abstract class UserGroupInformation implements Writable, Principal {
   
   private static final ThreadLocal<Subject> currentUser =
     new ThreadLocal<Subject>();
-  
+
   /** @return the {@link UserGroupInformation} for the current thread */ 
   public static UserGroupInformation getCurrentUGI() {
     Subject user = getCurrentUser();
@@ -95,15 +98,15 @@ public abstract class UserGroupInformation implements Writable, Principal {
     Subject user = SecurityUtil.getSubject(ugi);
     currentUser.set(user);
   }
-  
+
   /** Get username
-   * 
+   *
    * @return the user's name
    */
   public abstract String getUserName();
-  
+
   /** Get the name of the groups that the user belong to
-   * 
+   *
    * @return an array of group names
    */
   public abstract String[] getGroupNames();
@@ -150,4 +153,45 @@ public abstract class UserGroupInformation implements Writable, Principal {
     return ugi;
   }
 
+  /**
+   * Run the given action as the user.
+   * @param <T> the return type of the run method
+   * @param action the method to execute
+   * @return the value from the run method
+   */
+  public <T> T doAs(PrivilegedAction<T> action) {
+    return Subject.doAs(null, action);
+  }
+
+  /**
+   * Run the given action as the user, potentially throwing an exception.
+   * @param <T> the return type of the run method
+   * @param action the method to execute
+   * @return the value from the run method
+   * @throws IOException if the action throws an IOException
+   * @throws Error if the action throws an Error
+   * @throws RuntimeException if the action throws a RuntimeException
+   * @throws InterruptedException if the action throws an InterruptedException
+   * @throws java.lang.reflect.UndeclaredThrowableException if the action throws something else
+   */
+  public <T> T doAs(PrivilegedExceptionAction<T> action
+  ) throws IOException, InterruptedException {
+    try {
+      return Subject.doAs(null, action);
+    } catch (PrivilegedActionException pae) {
+      Throwable cause = pae.getCause();
+      LOG.error("PriviledgedActionException as:"+this+" cause:"+cause);
+      if (cause instanceof IOException) {
+        throw (IOException) cause;
+      } else if (cause instanceof Error) {
+        throw (Error) cause;
+      } else if (cause instanceof RuntimeException) {
+        throw (RuntimeException) cause;
+      } else if (cause instanceof InterruptedException) {
+        throw (InterruptedException) cause;
+      } else {
+        throw new UndeclaredThrowableException(pae,"Unknown exception in doAs");
+      }
+    }
+  }
 }

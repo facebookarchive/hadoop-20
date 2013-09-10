@@ -1,6 +1,6 @@
    <configuration>
-    <srcPath prefix="hdfs://dfs1.xxx.com:8000/user/dhruba/">
-      <policy name = "dhruba">
+    <srcPath prefix="hdfs://testdfs.xxx.com:8000/user/user1/">
+      <policy name = "user1">
         <property>
           <name>targetReplication</name>
           <value>2</value>
@@ -23,7 +23,7 @@
         </property>
       </policy>
     </srcPath>
-    <srcPath prefix="hdfs://dfs1.xxx.com:9000/warehouse/table1">
+    <srcPath prefix="hdfs://testdfs.xxx.com:9000/warehouse/table1">
       <policy name = "table1">
         <property>
           <name>targetReplication</name>

@@ -14,6 +14,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.channels.FileChannel;
 import java.nio.channels.SocketChannel;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -29,6 +30,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
@@ -39,10 +41,15 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
+import org.apache.hadoop.hdfs.protocol.VersionAndOpcode;
 import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.WriteBlockHeader;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.datanode.BlockDataFile;
 import org.apache.hadoop.hdfs.server.datanode.BlockSender;
+import org.apache.hadoop.hdfs.server.datanode.BlockWithChecksumFileReader;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
 import org.apache.hadoop.mapreduce.Counters;
 import org.apache.hadoop.mapreduce.Mapper.Context;
@@ -62,6 +69,7 @@ import org.apache.hadoop.util.Progressable;
 abstract class BlockReconstructor extends Configured {
 
   public static final Log LOG = LogFactory.getLog(BlockReconstructor.class);
+  public static final int SEND_BLOCK_MAX_RETRIES = 3;
 
   BlockReconstructor(Configuration conf) throws IOException {
     super(conf);
@@ -183,7 +191,17 @@ abstract class BlockReconstructor extends Configured {
    * Returns a DistributedFileSystem hosting the path supplied.
    */
   protected DistributedFileSystem getDFS(Path p) throws IOException {
-    return (DistributedFileSystem) p.getFileSystem(getConf());
+    FileSystem fs = p.getFileSystem(getConf());
+    DistributedFileSystem dfs = null;
+    if (fs instanceof DistributedFileSystem) {
+      dfs = (DistributedFileSystem) fs;
+    } else if (fs instanceof FilterFileSystem) {
+      FilterFileSystem ffs = (FilterFileSystem) fs;
+      if (ffs.getRawFileSystem() instanceof DistributedFileSystem) {
+        dfs = (DistributedFileSystem) ffs.getRawFileSystem();
+      }
+    }
+    return dfs;
   }
 
   /**
@@ -313,10 +331,12 @@ abstract class BlockReconstructor extends Configured {
           throw ioe;
         }
         // Now that we have recovered the file block locally, send it.
-        String datanode = chooseDatanode(lb.getLocations());
-        computeMetadataAndSendReconstructedBlock(datanode, localBlockFile,
+        computeMetadataAndSendReconstructedBlock(localBlockFile,
             lostBlock, blockContentsSize,
-            lb.getDataProtocolVersion(), lb.getNamespaceID(), progress);
+            lb.getLocations(),
+            lb.getDataProtocolVersion(), 
+            lb.getNamespaceID(), 
+            progress);
         
         numBlocksReconstructed++;
 
@@ -421,10 +441,9 @@ abstract class BlockReconstructor extends Configured {
           throw ioe;
         }
         // Now that we have recovered the parity file block locally, send it.
-        String datanode = chooseDatanode(lb.getLocations());
         computeMetadataAndSendReconstructedBlock(
-            datanode, localBlockFile, 
-            lostBlock, blockSize,
+            localBlockFile, 
+            lostBlock, blockSize, lb.getLocations(),
             lb.getDataProtocolVersion(), lb.getNamespaceID(),
             progress);
 
@@ -485,10 +504,10 @@ abstract class BlockReconstructor extends Configured {
             localBlockFile, progress);
         
         // Now that we have recovered the part file block locally, send it.
-        String datanode = chooseDatanode(lb.getLocations());
-        computeMetadataAndSendReconstructedBlock(datanode, localBlockFile,
+        computeMetadataAndSendReconstructedBlock(localBlockFile,
             lostBlock, 
             localBlockFile.length(),
+            lb.getLocations(),
             lb.getDataProtocolVersion(), lb.getNamespaceID(),
             progress);
         
@@ -587,24 +606,22 @@ abstract class BlockReconstructor extends Configured {
    * Choose a datanode (hostname:portnumber). The datanode is chosen at
    * random from the live datanodes.
    * @param locationsToAvoid locations to avoid.
-   * @return A string in the format name:port.
+   * @return A chosen datanode.
    * @throws IOException
    */
-  private String chooseDatanode(DatanodeInfo[] locationsToAvoid)
+  private DatanodeInfo chooseDatanode(DatanodeInfo[] locationsToAvoid,
+                          DatanodeInfo[] live)
   throws IOException {
-    DistributedFileSystem dfs = getDFS(new Path("/"));
-    DatanodeInfo[] live =
-      dfs.getClient().datanodeReport(DatanodeReportType.LIVE);
     LOG.info("Choosing a datanode from " + live.length +
         " live nodes while avoiding " + locationsToAvoid.length);
     Random rand = new Random();
-    String chosen = null;
+    DatanodeInfo chosen = null;
     int maxAttempts = 1000;
     for (int i = 0; i < maxAttempts && chosen == null; i++) {
       int idx = rand.nextInt(live.length);
-      chosen = live[idx].name;
+      chosen = live[idx];
       for (DatanodeInfo avoid: locationsToAvoid) {
-        if (chosen.equals(avoid.name)) {
+        if (chosen.equals(avoid)) {
           LOG.info("Avoiding " + avoid.name);
           chosen = null;
           break;
@@ -614,8 +631,16 @@ abstract class BlockReconstructor extends Configured {
     if (chosen == null) {
       throw new IOException("Could not choose datanode");
     }
-    LOG.info("Choosing datanode " + chosen);
+    LOG.info("Choosing datanode " + chosen.name);
     return chosen;
+  }
+  
+  private DatanodeInfo chooseDatanode(DatanodeInfo[] locationsToAvoid) 
+                throws IOException {
+    DistributedFileSystem dfs = getDFS(new Path("/"));
+    DatanodeInfo[] live =
+        dfs.getClient().datanodeReport(DatanodeReportType.LIVE);
+    return chooseDatanode(locationsToAvoid, live);
   }
 
   /**
@@ -675,26 +700,54 @@ abstract class BlockReconstructor extends Configured {
     return new DataInputStream(new ByteArrayInputStream(mdBytes));
   }
 
-  private void computeMetadataAndSendReconstructedBlock(String datanode,
+  private void computeMetadataAndSendReconstructedBlock(
       File localBlockFile,
       Block block, long blockSize,
+      DatanodeInfo[] locations,
       int dataTransferVersion,
       int namespaceId,
       Progressable progress)
   throws IOException {
 
     LOG.info("Computing metdata");
-    InputStream blockContents = null;
+    FileInputStream blockContents = null;
     DataInputStream blockMetadata = null;
     try {
       blockContents = new FileInputStream(localBlockFile);
       blockMetadata = computeMetadata(getConf(), blockContents);
       blockContents.close();
       progress.progress();
-      // Reopen
-      blockContents = new FileInputStream(localBlockFile);
-      sendReconstructedBlock(datanode, blockContents, blockMetadata, block, 
-          blockSize, dataTransferVersion, namespaceId, progress);
+      DatanodeInfo datanode = null;
+      
+      DistributedFileSystem dfs = getDFS(new Path("/"));
+      DatanodeInfo[] live =
+          dfs.getClient().datanodeReport(DatanodeReportType.LIVE);
+      
+      for (int retry = 0; retry < SEND_BLOCK_MAX_RETRIES; ++retry) {
+        try {
+          datanode = chooseDatanode(locations, live);
+          // Reopen
+          blockContents = new FileInputStream(localBlockFile);
+          sendReconstructedBlock(datanode.name, blockContents, blockMetadata, block, 
+              blockSize, dataTransferVersion, namespaceId, progress);
+          return;
+        } catch (IOException ex) {
+          if (retry == SEND_BLOCK_MAX_RETRIES - 1) {
+            // last retry, rethrow the exception
+            throw ex;
+          }
+          
+          // log the warn and retry
+          LOG.warn("Got exception when sending the reconstructed block to datanode " + 
+                  datanode + ", retried: " + retry + " times.", ex);
+          
+          // add the bad node to the locations.
+          DatanodeInfo[] newLocations = new DatanodeInfo[locations.length + 1];
+          System.arraycopy(locations, 0, newLocations, 0, locations.length);
+          newLocations[locations.length] = datanode;
+          locations = newLocations;
+        }
+      }
     } finally {
       if (blockContents != null) {
         blockContents.close();
@@ -718,7 +771,7 @@ abstract class BlockReconstructor extends Configured {
    * @throws IOException
    */
   private void sendReconstructedBlock(String datanode,
-      final InputStream blockContents,
+      final FileInputStream blockContents,
       final DataInputStream metadataIn,
       Block block, long blockSize,
       int dataTransferVersion, int namespaceId,
@@ -754,35 +807,35 @@ abstract class BlockReconstructor extends Configured {
       BlockSender blockSender = 
         new BlockSender(namespaceId, block, blockSize, 0, blockSize,
             corruptChecksumOk, chunkOffsetOK, verifyChecksum,
-            transferToAllowed, metadataIn,
-            new BlockSender.InputStreamFactory() {
-          @Override
-          public InputStream createStream(long offset) 
-              throws IOException {
-            // we are passing 0 as the offset above,
-            // so we can safely ignore
-            // the offset passed
-            return blockContents;
-          }
-        });
+            transferToAllowed, dataTransferVersion >= DataTransferProtocol.PACKET_INCLUDE_VERSION_VERSION,
+            new BlockWithChecksumFileReader.InputStreamWithChecksumFactory() {
+              @Override
+              public InputStream createStream(long offset) throws IOException {
+                // we are passing 0 as the offset above,
+                // so we can safely ignore
+                // the offset passed
+                return blockContents; 
+              }
 
-      // Header info
-      out.writeShort(dataTransferVersion);
-      out.writeByte(DataTransferProtocol.OP_WRITE_BLOCK);
-      if (dataTransferVersion >= DataTransferProtocol.FEDERATION_VERSION) {
-        out.writeInt(namespaceId);
-      }
-      out.writeLong(block.getBlockId());
-      out.writeLong(block.getGenerationStamp());
-      out.writeInt(0);           // no pipelining
-      out.writeBoolean(false);   // not part of recovery
-      Text.writeString(out, ""); // client
-      out.writeBoolean(true); // sending src node information
-      DatanodeInfo srcNode = new DatanodeInfo();
-      srcNode.write(out); // Write src node DatanodeInfo
-      // write targets
-      out.writeInt(0); // num targets
-      // send data & checksum
+              @Override
+              public DataInputStream getChecksumStream() throws IOException {
+                return metadataIn;
+              }
+
+            @Override
+            public BlockDataFile.Reader getBlockDataFileReader()
+                throws IOException {
+              return BlockDataFile.getDummyDataFileFromFileChannel(
+                  blockContents.getChannel()).getReader(null);
+            }
+          });
+
+      WriteBlockHeader header = new WriteBlockHeader(new VersionAndOpcode(
+          dataTransferVersion, DataTransferProtocol.OP_WRITE_BLOCK));
+      header.set(namespaceId, block.getBlockId(), block.getGenerationStamp(),
+          0, false, true, new DatanodeInfo(), 0, null, "");
+      header.writeVersionAndOpCode(out);
+      header.write(out);
       blockSender.sendBlock(out, baseStream, null, progress);
 
       LOG.info("Sent block " + block + " to " + datanode);

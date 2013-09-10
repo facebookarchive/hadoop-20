@@ -21,6 +21,9 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -31,6 +34,7 @@ import org.apache.hadoop.io.WritableFactory;
 /**
  * A class for file/directory permissions.
  */
+@ThriftStruct
 public class FsPermission implements Writable {
   private static final Log LOG = LogFactory.getLog(FsPermission.class);
   
@@ -73,7 +77,8 @@ public class FsPermission implements Writable {
    * @param mode
    * @see #toShort()
    */
-  public FsPermission(short mode) { fromShort(mode); }
+  @ThriftConstructor
+  public FsPermission(@ThriftField(1) short mode) { fromShort(mode); }
 
   /**
    * Copy constructor
@@ -124,6 +129,12 @@ public class FsPermission implements Writable {
     fromShort(in.readShort());
   }
 
+  /** Write {@link FsPermission} to {@link DataInput} */
+  public static void write(DataOutput out, FsPermission masked) throws IOException {
+    FsPermission perm = new FsPermission(masked);
+    perm.write(out);
+  }
+
   /**
    * Create and initialize a {@link FsPermission} from {@link DataInput}.
    */
@@ -140,6 +151,11 @@ public class FsPermission implements Writable {
     int s = (useraction.ordinal() << 6) | (groupaction.ordinal() << 3) |
              otheraction.ordinal();
     return (short)s;
+  }
+
+  @ThriftField(1)
+  public short getShort() {
+    return toShort();
   }
 
   /** {@inheritDoc} */

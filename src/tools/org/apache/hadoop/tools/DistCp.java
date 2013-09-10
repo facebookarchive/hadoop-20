@@ -1038,7 +1038,7 @@ public class DistCp implements Tool {
       }
 
       //if a file
-      //here skip count acctually counts how many file chunks are skipped
+      //here skip count actually counts how many file chunks are skipped
       if (destFileSys.exists(absdst) && !overwrite
           && !needsUpdate(srcstat, destFileSys, absdst)) {
         ++skipcount;
@@ -1047,9 +1047,24 @@ public class DistCp implements Tool {
         return;
       }
 
-
-      Path tmpFile = new Path(job.get(TMP_DIR_LABEL),
+      Path chunkFile = new Path(job.get(TMP_DIR_LABEL),
           createFileChunkPath(relativedst, chunkIndex));
+      destFileSys.mkdirs(chunkFile.getParent());
+
+      // No need to copy over the chunk file if it already exists.
+      if (destFileSys.exists(chunkFile) &&
+          !needsUpdate(srcstat, destFileSys, chunkFile)) {
+        ++skipcount;
+        reporter.incrCounter(Counter.SKIP, 1);
+        updateStatus(reporter);
+        return;
+      }
+
+      String attemptId = job.get("mapred.task.id");
+      Path tmpFile = new Path(job.get(TMP_DIR_LABEL),
+          createFileChunkPath(new Path(relativedst, "_tmp_" + attemptId),
+            chunkIndex));
+
       long cbcopied = 0L;
       long needCopied = length;
       FSDataInputStream in = null;
@@ -1087,19 +1102,33 @@ public class DistCp implements Tool {
         }
 
       } finally {
+        if (cbcopied != length) {
+          LOG.warn("Deleting temp file : " + tmpFile
+              + ", since the copy failed");
+          destFileSys.delete(tmpFile, false);
+        }
         checkAndClose(in);
         checkAndClose(out);
       }
 
       if (cbcopied != length) {
         throw new IOException("File size not matched: copied "
-            + bytesString(cbcopied) + " to tmpFile (=" + tmpFile
+            + bytesString(cbcopied) + " to chunkFile (=" + chunkFile
             + ") but expected " + bytesString(length) 
             + " from " + srcstat.getPath());        
       }
       else {
-        FileStatus tmpstat = destFileSys.getFileStatus(tmpFile);
-        updateDestStatus(srcstat, tmpstat);
+        if (!destFileSys.rename(tmpFile, chunkFile)) {
+          // If the chunkFile already exists, rename will fail and this is an
+          // error we should ignore since the copy has already been
+          // done by a speculated task.
+          if (!destFileSys.exists(chunkFile)) {
+            throw new IOException("Rename " + tmpFile + " to "
+                + chunkFile + " failed");
+          }
+        }
+        FileStatus chunkFileStat = destFileSys.getFileStatus(chunkFile);
+        updateDestStatus(srcstat, chunkFileStat);
       }
 
       outc.collect(new Text(relativedst.toUri().getPath()), 
@@ -1265,7 +1294,7 @@ public class DistCp implements Tool {
       FileSystem fs = p.getFileSystem(conf);
       FileStatus[] inputs = fs.globStatus(p);
 
-      if(inputs.length > 0) {
+      if(inputs != null && inputs.length > 0) {
         for (FileStatus onePath: inputs) {
           unglobbed.add(onePath.getPath());
         }
@@ -2018,6 +2047,9 @@ public class DistCp implements Tool {
       System.err.println(StringUtils.stringifyException(e) + "\n" + usage);
       ToolRunner.printGenericCommandUsage(System.err);
       return -1;
+    } catch (InvalidInputException e) {
+      System.err.println(StringUtils.stringifyException(e) + "\n");
+      return -1;
     } catch (DuplicationException e) {
       System.err.println(StringUtils.stringifyException(e));
       return DuplicationException.ERROR_CODE;
@@ -2165,7 +2197,6 @@ public class DistCp implements Tool {
 
     // turn off speculative execution, because DFS doesn't handle
     // multiple writers to the same file.
-    jobconf.setMapSpeculativeExecution(false);
     jobconf.setReduceSpeculativeExecution(false);
 
     jobconf.setMapOutputKeyClass(Text.class);

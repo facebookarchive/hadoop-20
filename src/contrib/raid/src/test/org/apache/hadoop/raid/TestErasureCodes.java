@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.raid;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Random;
@@ -132,7 +133,7 @@ public class TestErasureCodes extends TestCase {
     assertTrue("Decode failed", java.util.Arrays.equals(copy, message[0]));
   }
 
-  public void testRSEncodeDecodeBulk() {
+  public void testRSEncodeDecodeBulk() throws IOException {
     // verify the production size.
     verifyRSEncodeDecodeBulk(10, 4);
     
@@ -140,7 +141,7 @@ public class TestErasureCodes extends TestCase {
     verifyRSEncodeDecodeBulk(3, 3);
   }
   
-  public void verifyRSEncodeDecodeBulk(int stripeSize, int paritySize) {
+  public void verifyRSEncodeDecodeBulk(int stripeSize, int paritySize) throws IOException {
     ReedSolomonCode rsCode = new ReedSolomonCode(stripeSize, paritySize);
     int symbolMax = (int) Math.pow(2, rsCode.symbolSize());
     byte[][] message = new byte[stripeSize][];

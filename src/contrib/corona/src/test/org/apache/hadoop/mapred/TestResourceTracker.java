@@ -55,6 +55,12 @@ public class TestResourceTracker extends TestCase {
     public boolean hasSpeculativeReduces() { return false; }
 
     @Override
+    public boolean shouldLogCannotspeculativeMaps() { return false; }
+
+    @Override
+    public boolean shouldLogCannotspeculativeReduces() { return false; }
+    
+    @Override
     public boolean shouldSpeculateAllRemainingMaps() { return false; }
 
     @Override

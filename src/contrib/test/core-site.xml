@@ -21,4 +21,9 @@
   </description> 
 </property>
 
+<property>
+  <name>fs.hdfs.client.configuration.impl</name>
+  <value>org.apache.hadoop.conf.DefaultClientConfiguration</value>
+</property>
+
 </configuration>

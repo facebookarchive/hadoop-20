@@ -37,7 +37,7 @@ import java.io.*;
  *   ... write data to its ultimate destination ...
  * }
  * </pre>
- *  
+ *
  */
 public class DataOutputBuffer extends DataOutputStream {
 
@@ -48,11 +48,16 @@ public class DataOutputBuffer extends DataOutputStream {
     public Buffer() {
       super();
     }
-    
+
     public Buffer(int size) {
       super(size);
     }
-    
+
+    public Buffer(byte[] array) {
+      super(0);
+      buf = array;
+    }
+
     public void write(DataInput in, int len) throws IOException {
       int newcount = count + len;
       if (newcount > buf.length) {
@@ -66,16 +71,20 @@ public class DataOutputBuffer extends DataOutputStream {
   }
 
   private Buffer buffer;
-  
+
   /** Constructs a new empty buffer. */
   public DataOutputBuffer() {
     this(new Buffer());
   }
-  
+
   public DataOutputBuffer(int size) {
     this(new Buffer(size));
   }
-  
+
+  public DataOutputBuffer(byte[] array) {
+    this(new Buffer(array));
+  }
+
   private DataOutputBuffer(Buffer buffer) {
     super(buffer);
     this.buffer = buffer;

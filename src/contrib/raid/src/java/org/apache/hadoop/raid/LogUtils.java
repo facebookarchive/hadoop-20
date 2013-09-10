@@ -64,6 +64,7 @@ public class LogUtils {
     DecodingTime,
     ReadBytes,
     RemoteRackReadBytes,
+    RecoveryTime,
     Offset,
     ReadBlocks,
     MetaBlocks,
@@ -171,7 +172,17 @@ public class LogUtils {
       long errorOffset, LOGTYPES type, FileSystem fs,
       Throwable ex, Context context) {
     logRaidReconstructionMetrics(result, bytes, codec, -1, -1,
-        -1, -1, -1, srcFile, errorOffset, type, fs, ex, context);
+        -1, -1, -1, srcFile, errorOffset, type, fs, ex, context,
+        -1);
+  }
+  
+  public static void logRaidReconstructionMetrics(
+      LOGRESULTS result, long bytes, Codec codec, Path srcFile,
+      long errorOffset, LOGTYPES type, FileSystem fs,
+      Throwable ex, Context context, long recoveryTime) {
+    logRaidReconstructionMetrics(result, bytes, codec, -1, -1,
+        -1, -1, -1, srcFile, errorOffset, type, fs, ex, context,
+        recoveryTime);
   }
   
   public static void logRaidReconstructionMetrics(
@@ -179,7 +190,7 @@ public class LogUtils {
       long decodingTime, int numMissingBlocks, long numReadBytes, 
       long numReadRemoteRackBytes, Path srcFile, 
       long errorOffset, LOGTYPES type, FileSystem fs,
-      Throwable ex, Context context) {
+      Throwable ex, Context context, long recoveryTime) {
     try {
       incrLogMetricCounter(context, fs, type, result, 
           codec == null? null: codec.id);
@@ -202,6 +213,9 @@ public class LogUtils {
       if (numReadRemoteRackBytes >= 0) 
         sample.addIntValue(LOGKEYS.RemoteRackReadBytes.name(),
             numReadRemoteRackBytes);
+      if (recoveryTime > 0) {
+        sample.addIntValue(LOGKEYS.RecoveryTime.name(), recoveryTime);
+      }
       sample.addNormalValue(LOGKEYS.Path.name(), srcFile.toString());
       sample.addIntValue(LOGKEYS.Offset.name(), errorOffset);
       sample.addNormalValue(LOGKEYS.Type.name(), type.name());

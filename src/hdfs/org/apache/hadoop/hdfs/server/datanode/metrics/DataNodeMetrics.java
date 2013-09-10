@@ -18,12 +18,14 @@
 package org.apache.hadoop.hdfs.server.datanode.metrics;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.server.common.CountingLogger.ErrorCounter;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
 import org.apache.hadoop.metrics.jvm.JvmMetrics;
 import org.apache.hadoop.metrics.util.MetricsBase;
+import org.apache.hadoop.metrics.util.MetricsIntValue;
 import org.apache.hadoop.metrics.util.MetricsRegistry;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingInt;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
@@ -42,12 +44,16 @@ import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
  *  <p> {@link #blocksRead}.inc()
  *
  */
-public class DataNodeMetrics implements Updater {
+public class DataNodeMetrics implements Updater, ErrorCounter {
   private final MetricsRecord metricsRecord;
   private DataNodeActivityMBean datanodeActivityMBean;
   public MetricsRegistry registry = new MetricsRegistry();
-  
-  
+
+  public MetricsTimeVaryingInt loggedErrors =
+      new MetricsTimeVaryingInt("logged_errors", registry);
+  public MetricsTimeVaryingInt loggedWarnings =
+      new MetricsTimeVaryingInt("logged_warnings", registry);
+
   public MetricsTimeVaryingLong bytesWritten = 
                       new MetricsTimeVaryingLong("bytes_written", registry);
   public MetricsTimeVaryingLong bytesRead = 
@@ -64,6 +70,12 @@ public class DataNodeMetrics implements Updater {
                         new MetricsTimeVaryingInt("blocks_verified", registry);
   public MetricsTimeVaryingInt blockVerificationFailures =
                        new MetricsTimeVaryingInt("block_verification_failures", registry);
+  public MetricsTimeVaryingInt opFailures =
+      new MetricsTimeVaryingInt("operation_failures", registry);
+  public MetricsTimeVaryingInt blockReadFailures =
+      new MetricsTimeVaryingInt("block_read_failures", registry);
+  public MetricsTimeVaryingInt dataXceiverConnFailures =
+      new MetricsTimeVaryingInt("data_xceiver_connection_failures", registry);
   
   public MetricsTimeVaryingInt readsFromLocalClient = 
                 new MetricsTimeVaryingInt("reads_from_local_client", registry);
@@ -81,10 +93,15 @@ public class DataNodeMetrics implements Updater {
   public MetricsTimeVaryingInt volumeFailures = 
           new MetricsTimeVaryingInt("volumeFailures", registry, "The number of volume failures");
   
+  public MetricsTimeVaryingInt cachedFileHandlerCount =
+          new MetricsTimeVaryingInt("cached_file_handler_count", registry);
+  
   public MetricsTimeVaryingRate readBlockOp = 
                 new MetricsTimeVaryingRate("readBlockOp", registry);
   public MetricsTimeVaryingRate writeBlockOp = 
                 new MetricsTimeVaryingRate("writeBlockOp", registry);
+  public MetricsTimeVaryingRate appendBlockOp = 
+                new MetricsTimeVaryingRate("appendBlockOp", registry);
   public MetricsTimeVaryingRate readMetadataOp = 
                 new MetricsTimeVaryingRate("readMetadataOp", registry);
   public MetricsTimeVaryingRate blockChecksumOp = 
@@ -108,8 +125,14 @@ public class DataNodeMetrics implements Updater {
                       new MetricsTimeVaryingRate("receive_and_write_packet_latency", registry);
   public MetricsTimeVaryingRate writePacketLatency =
                       new MetricsTimeVaryingRate("write_packet_latency", registry);
+  public MetricsTimeVaryingRate syncFileRangeLatency =
+                      new MetricsTimeVaryingRate("sync_file_range_latency", registry);
+  public MetricsTimeVaryingLong slowWritePacketNumOps =
+                      new MetricsTimeVaryingLong("slow_write_packet_num_ops", registry);
   public MetricsTimeVaryingRate mirrorWritePacketLatency =
                       new MetricsTimeVaryingRate("mirror_write_packet_latency", registry);
+  public MetricsTimeVaryingLong slowMirrorWritePacketNumOps =
+                      new MetricsTimeVaryingLong("slow_mirror_write_packet_num_ops", registry);
   public MetricsTimeVaryingRate readPacketLatency =
                       new MetricsTimeVaryingRate("read_packet_latency", registry);
   public MetricsTimeVaryingRate largeReadsToBufRate =
@@ -128,6 +151,9 @@ public class DataNodeMetrics implements Updater {
   public MetricsTimeVaryingRate bytesReadRate =
                       new MetricsTimeVaryingRate("bytes_read_rate", registry);
 
+  public MetricsIntValue threadActiveness = new MetricsIntValue("thread_alive",
+      registry);
+  
   public DataNodeMetrics(Configuration conf, String storageId) {
     String sessionId = conf.get("session.id"); 
     // Initiate reporting of Java VM metrics
@@ -164,11 +190,23 @@ public class DataNodeMetrics implements Updater {
   public void resetAllMinMax() {
     readBlockOp.resetMinMax();
     writeBlockOp.resetMinMax();
+    appendBlockOp.resetMinMax();
     readMetadataOp.resetMinMax();
     blockChecksumOp.resetMinMax();
     copyBlockOp.resetMinMax();
     replaceBlockOp.resetMinMax();
     heartbeats.resetMinMax();
     blockReports.resetMinMax();
+    threadActiveness.set(0);
+  }
+
+  @Override
+  public void errorInc() {
+    loggedErrors.inc();
+  }
+
+  @Override
+  public void warnInc() {
+    loggedWarnings.inc();
   }
 }

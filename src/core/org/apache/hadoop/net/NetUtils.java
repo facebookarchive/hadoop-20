@@ -20,9 +20,11 @@ package org.apache.hadoop.net;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
+import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketAddress;
 import java.net.SocketException;
@@ -153,6 +155,7 @@ public class NetUtils {
    */
   public static InetSocketAddress createSocketAddr(String target,
       int defaultPort) {
+    // Format [IPv6 Address]:Port
     int colonIndex = target.indexOf(':');
     if (colonIndex < 0 && defaultPort == -1) {
       throw new RuntimeException("Not a host:port pair: " + target);
@@ -160,19 +163,13 @@ public class NetUtils {
     String hostname;
     int port = -1;
     if (!target.contains("/")) {
-      if (colonIndex == -1) {
-        hostname = target;
-      } else {
-        // must be the old style <host>:<port>
-        hostname = target.substring(0, colonIndex);
-        port = Integer.parseInt(target.substring(colonIndex + 1));
-      }
-    } else {
-      // a new uri
-      URI addr = new Path(target).toUri();
-      hostname = addr.getHost();
-      port = addr.getPort();
+      target = "hdfs://" + target;
     }
+    // a new uri
+    URI addr = new Path(target).toUri();
+    hostname = addr.getHost();
+    port = addr.getPort();
+    
 
     if (port == -1) {
       port = defaultPort;
@@ -200,27 +197,29 @@ public class NetUtils {
       String oldPortName,
       String newBindAddressName) {
     String oldAddr = conf.get(oldBindAddressName);
-    String oldPort = conf.get(oldPortName);
+    int oldPort = conf.getInt(oldPortName, 0);
     String newAddrPort = conf.get(newBindAddressName);
-    if (oldAddr == null && oldPort == null) {
-      return newAddrPort;
+    if (oldAddr == null && oldPort == 0) {
+      return toIpPort(createSocketAddr(newAddrPort));
     }
-    String[] newAddrPortParts = newAddrPort.split(":",2);
-    if (newAddrPortParts.length != 2) {
-      throw new IllegalArgumentException("Invalid address/port: " + 
-          newAddrPort);
-    }
+    InetSocketAddress newAddr = NetUtils.createSocketAddr(newAddrPort);
     if (oldAddr == null) {
-      oldAddr = newAddrPortParts[0];
+      oldAddr = newAddr.getAddress().getHostAddress();
     } else {
       LOG.warn("Configuration parameter " + oldBindAddressName +
           " is deprecated. Use " + newBindAddressName + " instead.");
     }
-    if (oldPort == null) {
-      oldPort = newAddrPortParts[1];
+    if (oldPort == 0) {
+      oldPort = newAddr.getPort();
     } else {
       LOG.warn("Configuration parameter " + oldPortName +
           " is deprecated. Use " + newBindAddressName + " instead.");      
+    }
+    try {
+      return toIpPort(oldAddr, oldPort);
+    } catch (UnknownHostException e) {
+      LOG.error("DNS not supported.");
+      LOG.fatal(e);
     }
     return oldAddr + ":" + oldPort;
   }
@@ -465,15 +464,10 @@ public class NetUtils {
    * @return its IP address in the string format
    */
   public static String normalizeHostName(String name) {
-    if (Character.digit(name.charAt(0), 16) != -1) { // it is an IP
+    try {
+      return InetAddress.getByName(name).getHostAddress();
+    } catch (UnknownHostException e) {
       return name;
-    } else {
-      try {
-        InetAddress ipAddress = InetAddress.getByName(name);
-        return ipAddress.getHostAddress();
-      } catch (UnknownHostException e) {
-        return name;
-      }
     }
   }
 
@@ -486,11 +480,11 @@ public class NetUtils {
    * @see #normalizeHostName(String)
    */
   public static List<String> normalizeHostNames(Collection<String> names) {
-    List<String> hostNames = new ArrayList<String>(names.size());
+    List<String> resolvedIpAddresses = new ArrayList<String>(names.size());
     for (String name : names) {
-      hostNames.add(normalizeHostName(name));
+      resolvedIpAddresses.add(normalizeHostName(name));
     }
-    return hostNames;
+    return resolvedIpAddresses;
   }
 
   final static Map<InetAddress, Boolean> knownLocalAddrs = new ConcurrentHashMap<InetAddress, Boolean>();
@@ -531,6 +525,10 @@ public class NetUtils {
   }
 
   public static InetSocketAddress resolveAddress(InetSocketAddress address) {
+    if(wasInitializedWithIp(address.getAddress())) {
+      // No need to resolve it when initialized with an IP address.
+      return address;
+    }
     String hostName = address.getHostName() + ":" + address.getPort();
     InetSocketAddress newAddr = createSocketAddr(hostName);
     if (newAddr.isUnresolved()) {
@@ -557,5 +555,56 @@ public class NetUtils {
     }
     return src;
   }
+  
+  public static boolean wasInitializedWithIp(InetAddress address) {
+    return address.toString().startsWith("/");
+  }
+  
+  public static boolean wasInitializedWithHostname(InetAddress address) {
+    return !wasInitializedWithIp(address);
+  }
 
+  
+  public static String toIpPort(InetSocketAddress addr) {
+    if (addr == null) {
+      return null;
+    }
+    return getHostAddress(addr.getAddress()) + ":" + addr.getPort();
+  }
+  
+  public static String toIpPort(String ipAddress, int port) throws UnknownHostException {
+    if (ipAddress == null) {
+      return null;
+    }
+    InetAddress addr = InetAddress.getByName(ipAddress.trim());
+    return getHostAddress(addr) + ":" + port;
+  }
+  
+  public static String getHostAddress(InetAddress addr) {
+    if(addr == null) {
+      return null;
+    }
+    String ipAddress = addr.getHostAddress();
+    if (addr instanceof Inet6Address) {
+      ipAddress = "[" + ipAddress + "]";
+    }
+    return ipAddress;
+  }
+
+  /**
+   * Tries to bind to the given address. Throws an exception on failure.
+   * Used to fail earlier and verify configuration values.
+   */
+  public static void isSocketBindable(InetSocketAddress addr)
+      throws IOException {
+    if (addr == null) {
+      return;
+    }
+    ServerSocket socket = new ServerSocket();
+    try {
+      socket.bind(addr);
+    } finally {
+      socket.close();
+    }
+  }
 }

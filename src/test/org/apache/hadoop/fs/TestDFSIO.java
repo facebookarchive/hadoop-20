@@ -238,9 +238,8 @@ public class TestDFSIO extends Configured implements Tool {
       
       try {
         // write to the file
-        long nrRemaining;
-        for (nrRemaining = totalSize; nrRemaining > 0; nrRemaining -= bufferSize) {
-          int curSize = (bufferSize < nrRemaining) ? bufferSize : (int)nrRemaining; 
+        for (int nrRemaining = (int)totalSize, curSize = 0; nrRemaining > 0; nrRemaining -= curSize) {
+          curSize = (bufferSize < nrRemaining) ? bufferSize : (int)nrRemaining; 
           out.write(buffer, 0, curSize);
           reporter.setStatus("writing " + name + "@" + 
                              (totalSize - nrRemaining) + "/" + totalSize 
@@ -344,9 +343,12 @@ public class TestDFSIO extends Configured implements Tool {
       // open file
       DataInputStream in = fs.open(new Path(DATA_DIR, name));
       try {
-        long actualSize = 0;
-        for(int curSize = bufferSize; curSize == bufferSize;) {
-          curSize = in.read(buffer, 0, bufferSize);
+        for(long actualSize = 0; actualSize < totalSize;) {
+          int curSize = in.read(buffer, 0, bufferSize);
+          if (curSize == -1) {
+        	  break;
+          }
+        	  
           actualSize += curSize;
           reporter.setStatus("reading " + name + "@" + 
                              actualSize + "/" + totalSize 
@@ -475,6 +477,7 @@ public class TestDFSIO extends Configured implements Tool {
     int bufferSize = DEFAULT_BUFFER_SIZE;
     int fileSize = 1;
     int nrFiles = 1;
+    boolean ifPrintProfile = false;
     Configuration fsConfig = new Configuration(getConf());
     long blockSize = fsConfig.getLong("dfs.block.size", 64L * 1024 * 1024);
     short replication = (short)fsConfig.getInt("dfs.replication", 3);
@@ -486,7 +489,7 @@ public class TestDFSIO extends Configured implements Tool {
     String usage = "Usage: " + className + 
                " -read | -write | -append | -clean " +
                "[-nrFiles N] [-fileSize MB] [-resFile resultFileName] " +
-               "[-bufferSize Bytes] ";
+               "[-bufferSize Bytes] [-printProfile]";
     
     System.out.println(version);
     if (args.length == 0) {
@@ -504,6 +507,8 @@ public class TestDFSIO extends Configured implements Tool {
         testType = TEST_TYPE_CLEANUP;
       } else if (args[i].startsWith("-seq")) {
         isSequential = true;
+      } else if (args[i].startsWith("-printProfile")) {
+        ifPrintProfile = true;
       } else if (args[i].equals("-nrFiles")) {
         nrFiles = Integer.parseInt(args[++i]);
       } else if (args[i].equals("-fileSize")) {
@@ -524,6 +529,7 @@ public class TestDFSIO extends Configured implements Tool {
     LOG.info("bufferSize = " + bufferSize);
     LOG.info("blockSize = " + blockSize);
     LOG.info("replication = " + replication);
+    LOG.info("print write profile ? " + ifPrintProfile);
   
     try {
       fsConfig.setInt("test.io.file.buffer.size", bufferSize);
@@ -549,6 +555,9 @@ public class TestDFSIO extends Configured implements Tool {
         return 0;
       }
       createControlFile(fs, fileSize, nrFiles, fsConfig);
+
+      fsConfig.setBoolean("dfs.write.profile.auto.print", ifPrintProfile);
+
       long tStart = System.currentTimeMillis();
       if (testType == TEST_TYPE_WRITE) {
         writeTest(fs, fsConfig);

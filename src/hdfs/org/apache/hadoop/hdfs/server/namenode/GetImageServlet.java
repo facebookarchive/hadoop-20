@@ -35,6 +35,7 @@ import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.DataTransferThrottler;
 import org.apache.hadoop.util.StringUtils;
 
@@ -45,6 +46,9 @@ import org.apache.hadoop.util.StringUtils;
  */
 public class GetImageServlet extends HttpServlet {
   private static final long serialVersionUID = -7669068179452648952L;
+  
+  public final static String CONTENT_DISPOSITION = "Content-Disposition";
+  public final static String HADOOP_IMAGE_EDITS_HEADER = "X-Image-Edits-Name";
 
   private static final Log LOG = LogFactory.getLog(GetImageServlet.class);
 
@@ -120,7 +124,7 @@ public class GetImageServlet extends HttpServlet {
           
           MD5Hash downloadImageDigest = TransferFsImage.downloadImageToStorage(
                     parsedParams.getInfoServer(), txid,
-                    nnImage.storage, true);
+                    nnImage, true);
         
           nnImage.checkpointUploadDone(txid, downloadImageDigest);
           
@@ -142,7 +146,7 @@ public class GetImageServlet extends HttpServlet {
    * @param conf configuration
    * @return a data transfer throttler
    */
-  private final DataTransferThrottler getThrottler(Configuration conf, 
+  public static final DataTransferThrottler getThrottler(Configuration conf, 
       boolean disableThrottler) {
     if (disableThrottler) {
       return null;
@@ -161,7 +165,7 @@ public class GetImageServlet extends HttpServlet {
    * Set headers for content length, and, if available, md5.
    * @throws IOException 
    */
-  private void setVerificationHeaders(HttpServletResponse response, File file)
+  public static void setVerificationHeaders(HttpServletResponse response, File file)
   throws IOException {
     response.setHeader(TransferFsImage.CONTENT_LENGTH,
         String.valueOf(file.length()));
@@ -169,6 +173,13 @@ public class GetImageServlet extends HttpServlet {
     if (hash != null) {
       response.setHeader(TransferFsImage.MD5_HEADER, hash.toString());
     }
+  }
+  
+  public static void setFileNameHeaders(HttpServletResponse response,
+      File file) {
+    response.setHeader(CONTENT_DISPOSITION, "attachment; filename=" +
+        file.getName());
+    response.setHeader(HADOOP_IMAGE_EDITS_HEADER, file.getName());
   }
 
   static String getParamStringForImage(long txid,
@@ -201,7 +212,7 @@ public class GetImageServlet extends HttpServlet {
   }
 
   
-  static class GetImageParams {
+  public static class GetImageParams {
     private boolean isGetImage;
     private boolean isGetEdit;
     private boolean isPutImage;
@@ -279,7 +290,7 @@ public class GetImageServlet extends HttpServlet {
       return isGetEdit;
     }
 
-    boolean isGetImage() {
+    public boolean isGetImage() {
       return isGetImage;
     }
 
@@ -287,7 +298,7 @@ public class GetImageServlet extends HttpServlet {
       return isPutImage;
     }
     
-    boolean isThrottlerDisabled() {
+    public boolean isThrottlerDisabled() {
       return disableThrottler;
     }
     
@@ -295,7 +306,7 @@ public class GetImageServlet extends HttpServlet {
       if (machineName == null || remoteport == 0) {
         throw new IOException ("MachineName and port undefined");
       }
-      return machineName + ":" + remoteport;
+      return NetUtils.toIpPort(machineName, remoteport);
     }
     
     private static String getParam(HttpServletRequest request, String param)

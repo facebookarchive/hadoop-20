@@ -26,16 +26,21 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.mapreduce.JobID;
 import org.apache.hadoop.metrics.util.MetricsLongValue;
 import org.apache.hadoop.metrics.util.MetricsRegistry;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.FailedFileInfo;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Worker.LostFileInfo;
+import org.apache.hadoop.raid.RaidHistogram.BlockFixStatus;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 
 
@@ -57,6 +62,15 @@ public abstract class BlockIntegrityMonitor extends Configured {
   public static final String BLOCKFIX_CLASSNAME = "raid.blockfix.classname";
   public static final String BLOCKCHECK_INTERVAL = "raid.blockfix.interval";
   public static final String CORRUPTFILECOUNT_INTERVAL = "raid.corruptfilecount.interval";
+  public static final String RAIDNODE_HISTOGRAM_LENGTH_KEY = 
+    "raid.histogram.length";
+  public static final String RAIDNODE_HISTOGRAM_PERCENTS_KEY = 
+    "raid.histogram.percents";
+  //The directories checked by the corrupt file monitor, seperate by comma
+  public static final String RAIDNODE_CORRUPT_FILE_COUNTER_DIRECTORIES_KEY = 
+    "raid.corruptfile.counter.dirs";
+  private static final String[] DEFAULT_CORRUPT_FILE_COUNTER_DIRECTORIES = 
+    new String[]{"/"};
   public static final String BLOCKFIX_READ_TIMEOUT = 
     "raid.blockfix.read.timeout";
   public static final String BLOCKFIX_WRITE_TIMEOUT = 
@@ -64,10 +78,16 @@ public abstract class BlockIntegrityMonitor extends Configured {
   // If a file has replication at least this, we can assume its not raided.
   public static final String NOT_RAIDED_REPLICATION =
     "raid.blockfix.noraid.replication";
-
-  public static final long DEFAULT_BLOCKFIX_INTERVAL = 60 * 1000; // 1 min
+  public static final String MONITOR_SECONDS_KEY = 
+    "raid.monitor.seconds";  
+  public static final String DEFAULT_MONITOR_SECONDS = "18000,86400,604800"; //5h, 1d, 1w 
+  public static final long DEFAULT_BLOCKFIX_INTERVAL = 5 * 1000; // 5 seconds 
   public static final long DEFAULT_CORRUPTFILECOUNT_INTERVAL = 600 * 1000; //10min
   public static final short DEFAULT_NOT_RAIDED_REPLICATION = 3;
+  public static final int DEFAULT_RAIDNODE_HISTOGRAM_LENGTH = 20;
+  public static final String DEFAULT_RAIDNODE_HISTOGRAM_PERCENTS = "0,50,95,99,100";
+  protected HashMap<String, RaidHistogram> recoveryTimes;
+  public String[] monitorDirs;
 
   public static BlockIntegrityMonitor createBlockIntegrityMonitor(
       Configuration conf) throws ClassNotFoundException {
@@ -102,14 +122,21 @@ public abstract class BlockIntegrityMonitor extends Configured {
   private long numBlockFixSimulationSuccess = 0;
   private long numFilesToFixDropped = 0;
   private long numfileFixBytesReadRemoteRack = 0;
+  private int histoLen;
+  private ArrayList<Float> percents;
+  private String[] monitorSeconds;
+  protected long maxWindowTime;
+  public static String OTHERS = "others";
   public volatile boolean running = true;
 
   // interval between checks for lost files
   protected long blockCheckInterval;
   protected long corruptFileCountInterval;
   protected short notRaidedReplication;
+  public volatile long lastSuccessfulFixTime = System.currentTimeMillis();
+  public volatile long approximateNumRecoverableFiles = 0L;
 
-  public BlockIntegrityMonitor(Configuration conf) {
+  public BlockIntegrityMonitor(Configuration conf) throws Exception {
     super(conf);
     blockCheckInterval =
       getConf().getLong(BLOCKCHECK_INTERVAL, DEFAULT_BLOCKFIX_INTERVAL);
@@ -117,6 +144,36 @@ public abstract class BlockIntegrityMonitor extends Configured {
       getConf().getLong(CORRUPTFILECOUNT_INTERVAL, DEFAULT_CORRUPTFILECOUNT_INTERVAL);
     notRaidedReplication = (short) getConf().getInt(
       NOT_RAIDED_REPLICATION, DEFAULT_NOT_RAIDED_REPLICATION);
+    recoveryTimes = new HashMap<String, RaidHistogram>();
+    monitorSeconds = getConf().get(MONITOR_SECONDS_KEY,
+        DEFAULT_MONITOR_SECONDS).split(",");
+    maxWindowTime = 7*24*3600*1000; //one week
+    ArrayList<Long> windows = new ArrayList<Long>();
+    for (int i = 0; i < monitorSeconds.length; i++) {
+      long window = Long.parseLong(monitorSeconds[i])*1000; 
+      windows.add(window);
+      if (window > maxWindowTime) {
+        maxWindowTime = window;
+      }
+    }
+    monitorDirs = getCorruptMonitorDirs(getConf());
+    for (String monitorDir: monitorDirs) {
+      recoveryTimes.put(monitorDir, new RaidHistogram(windows, conf));
+    }
+    recoveryTimes.put(OTHERS, new RaidHistogram(windows, conf));
+    histoLen = getConf().getInt(RAIDNODE_HISTOGRAM_LENGTH_KEY, 
+        DEFAULT_RAIDNODE_HISTOGRAM_LENGTH);
+    String[] percentStrs = getConf().get(RAIDNODE_HISTOGRAM_PERCENTS_KEY,
+        DEFAULT_RAIDNODE_HISTOGRAM_PERCENTS).split(",");
+    percents = new ArrayList<Float>();
+    for (String percentStr: percentStrs) {
+      percents.add(Float.parseFloat(percentStr)/100);
+    }
+  }
+  
+  public String[] getPercentStrs() {
+    return getConf().get(RAIDNODE_HISTOGRAM_PERCENTS_KEY,
+        DEFAULT_RAIDNODE_HISTOGRAM_PERCENTS).split(",");
   }
   
   /**
@@ -270,6 +327,15 @@ public abstract class BlockIntegrityMonitor extends Configured {
   public synchronized long getNumFilesCopied() {
     return numFilesCopied;
   }
+  
+  public long getTimeSinceLastSuccessfulFix() {
+    if (this.approximateNumRecoverableFiles > 0) {
+      // Make sure it's larger than 0
+      return (System.currentTimeMillis() - this.lastSuccessfulFixTime) / 1000 + 1;
+    } else {
+      return 0L;
+    }
+  }
 
   /**
    * Increments the number of decommissioning files that have been copied by  
@@ -286,12 +352,16 @@ public abstract class BlockIntegrityMonitor extends Configured {
   }
 
   static boolean isSourceFile(String p) {
+    return isParityFile(p) == null;
+  }
+  
+  static Codec isParityFile(String p) {
     for (Codec codec: Codec.getCodecs()) {
       if (p.startsWith(codec.getParityPrefix())) {
-        return false;
+        return codec;
       }
     }
-    return true;
+    return null;
   }
 
   static boolean doesParityDirExist(FileSystem parityFs, String path)
@@ -340,6 +410,56 @@ public abstract class BlockIntegrityMonitor extends Configured {
 
   public abstract Status getAggregateStatus();
 
+  static public String[] getCorruptMonitorDirs(Configuration conf) {
+    return conf.getStrings(
+        RAIDNODE_CORRUPT_FILE_COUNTER_DIRECTORIES_KEY,
+        DEFAULT_CORRUPT_FILE_COUNTER_DIRECTORIES);
+  }
+  
+  public void sendRecoveryTime(String path, long recoveryTime, String taskId)
+      throws IOException {
+    if (recoveryTime != RaidHistogram.RECOVERY_FAIL) {
+      lastSuccessfulFixTime = System.currentTimeMillis();
+    }
+    boolean match = false;
+    for (String monitorDir: monitorDirs) {
+      if (path.startsWith(monitorDir)) {
+        match = true;
+        recoveryTimes.get(monitorDir).put(path, recoveryTime, taskId);
+      }
+    }
+    if (match == false) {
+      recoveryTimes.get(OTHERS).put(path, recoveryTime, taskId); 
+    }
+  }
+  
+  // Test
+  public int getNumberOfPoints(String monitorDir) throws IOException {
+    if (!recoveryTimes.containsKey(monitorDir)) {
+      return 0;
+    }
+    return recoveryTimes.get(monitorDir).getNumberOfPoints();
+  }
+  
+  public TreeMap<Long, BlockFixStatus> getBlockFixStatus(String monitorDir,
+      long endTime) throws IOException {
+    return getBlockFixStatus(monitorDir, histoLen, percents, endTime);
+  }
+
+  public TreeMap<Long, BlockFixStatus> getBlockFixStatus(String monitorDir, 
+      int histoLen, ArrayList<Float> percents, long endTime)
+      throws IOException {
+    if (!recoveryTimes.containsKey(monitorDir)) {
+      return null;
+    }
+    return recoveryTimes.get(monitorDir).getBlockFixStatus(histoLen, percents,
+        endTime);
+  }
+  
+  public HashMap<String, RaidHistogram> getRecoveryTimes()  {
+    return recoveryTimes;
+  }
+  
   public static class Status {
     final int highPriorityFiles;
     final int lowPriorityFiles;

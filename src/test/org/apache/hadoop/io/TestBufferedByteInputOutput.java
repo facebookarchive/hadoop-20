@@ -173,19 +173,15 @@ public class TestBufferedByteInputOutput {
     
     // no more writes to the internal buffer
     dis.close();
-    
-    // we should be able to read 100 (buffer size)
-    for (int i = 0; i < 100; i++) {
-      assertFalse(-1 == dis.read());
-    }
-
-    dis.close(); // can call multiple close()   
+ 
     try {
-      dis.read();
+      dis.read(); // read will call DataInputStream fill() which should fail
       fail("Read should fail because we are closed");
     } catch (Exception e) {
       LOG.info("Expected exception " + e.getMessage());
     }
+    
+    dis.close(); // can call multiple close()  
     
     try {
       dis.read(new byte[10], 0, 10);
@@ -216,14 +212,20 @@ public class TestBufferedByteInputOutput {
     dos.close(); // can close multiple times
     
     try {
-      dos.write(1);
+      // this will cause to flush BufferedOutputStream
+      for (int i = 0; i < 10000; i++) {
+        dos.write(1);
+      }
       fail("Write should fail");
     } catch (Exception e) {
       LOG.info("Expected exception " + e.getMessage());
     }
     
     try {
-      dos.write(new byte[10], 0, 10);
+      // this will cause to flush BufferedOutputStream
+      for (int i = 0; i < 1000; i++) {
+        dos.write(new byte[10], 0, 10);
+      }
       fail("Write should fail");
     } catch (Exception e) {
       LOG.info("Expected exception " + e.getMessage());

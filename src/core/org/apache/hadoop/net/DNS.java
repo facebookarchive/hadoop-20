@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.net;
 
+import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
@@ -38,6 +39,8 @@ import javax.naming.directory.InitialDirContext;
  * 
  */
 public class DNS {
+  
+  private static final String PREFER_IPV6_ADDRESS_PROPERTY = "java.net.preferIPv6Addresses"; 
 
   /**
    * Returns the hostname associated with the specified IP address by the
@@ -50,7 +53,9 @@ public class DNS {
    * @return The host name associated with the provided IP
    * @throws NamingException
    *             If a NamingException is encountered
+   * @deprecated Reliance on DNS is not preferred
    */
+  @Deprecated
   public static String reverseDns(InetAddress hostIp, String ns)
     throws NamingException {
     //
@@ -88,15 +93,25 @@ public class DNS {
   public static String[] getIPs(String strInterface)
     throws UnknownHostException {
     try {
+      boolean toGetIpv4 = true;
+      if (System.getProperty(PREFER_IPV6_ADDRESS_PROPERTY) != null) {
+        toGetIpv4 = "false".equals(System
+            .getProperty(PREFER_IPV6_ADDRESS_PROPERTY));
+      }
       NetworkInterface netIF = NetworkInterface.getByName(strInterface);
-      if (netIF == null)
+      if (netIF == null) {
         return new String[] { InetAddress.getLocalHost()
                               .getHostAddress() };
-      else {
+      } else {
         Vector<String> ips = new Vector<String>();
-        Enumeration e = netIF.getInetAddresses();
-        while (e.hasMoreElements())
-          ips.add(((InetAddress) e.nextElement()).getHostAddress());
+        Enumeration<InetAddress> e = netIF.getInetAddresses();
+        while (e.hasMoreElements()) {
+          InetAddress curr = e.nextElement();
+          if (toGetIpv4 && !(curr instanceof Inet4Address)) {
+            continue;
+          }
+          ips.add(curr.getHostAddress());
+        }
         return ips.toArray(new String[] {});
       }
     } catch (SocketException e) {
@@ -132,6 +147,7 @@ public class DNS {
    *         the specified interface
    * @throws UnknownHostException
    */
+  @Deprecated
   public static String[] getHosts(String strInterface, String nameserver)
     throws UnknownHostException {
     String[] ips = getIPs(strInterface);
@@ -161,6 +177,7 @@ public class DNS {
    *             If one is encountered while querying the deault interface
    * 
    */
+  @Deprecated
   public static String[] getHosts(String strInterface)
     throws UnknownHostException {
     return getHosts(strInterface, null);
@@ -179,6 +196,7 @@ public class DNS {
    * @throws UnknownHostException
    *             If one is encountered while querying the deault interface
    */
+  @Deprecated
   public static String getDefaultHost(String strInterface, String nameserver)
     throws UnknownHostException {
     if (strInterface.equals("default")) 
@@ -202,6 +220,7 @@ public class DNS {
    * @throws UnknownHostException
    *             If one is encountered while querying the deault interface
    */
+  @Deprecated
   public static String getDefaultHost(String strInterface)
     throws UnknownHostException {
     return getDefaultHost(strInterface, null);

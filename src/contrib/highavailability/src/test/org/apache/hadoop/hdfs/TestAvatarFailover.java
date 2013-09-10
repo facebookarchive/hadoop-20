@@ -21,9 +21,15 @@ package org.apache.hadoop.hdfs;
 import org.junit.Test;
 import static org.junit.Assert.*;
 
+import java.io.OutputStream;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 public class TestAvatarFailover extends AvatarSetupUtil {
   final static Log LOG = LogFactory.getLog(TestAvatarFailover.class);
@@ -257,5 +263,40 @@ public class TestAvatarFailover extends AvatarSetupUtil {
       fThread.interrupt();
       throw e;
     }
+  }
+
+  private static class TestAvatarFailoverHandler extends InjectionHandler {
+    protected boolean _falseCondition(InjectionEventI event, Object... args) {
+      if (event == InjectionEvent.DFSCLIENT_FINGERPRINT_MISMATCH) {
+        return true;
+      }
+      return false;
+    }
+  }
+
+  /**
+   * This tests a failover when the client and server fingerprints don't match.
+   */
+  @Test
+  public void testFailoverWithFingerPrintMismatch() throws Exception {
+    int blocksize = 1024;
+    setUp(false, "testFailoverWithFingerPrintMismatch", blocksize);
+
+    // Write some data.
+    OutputStream out = dafs.create(new Path("/test"));
+    byte[] buffer = new byte[blocksize];
+    out.write(buffer, 0, buffer.length);
+
+    // Perform the failover.
+    cluster.failOver();
+    TestAvatarFailoverHandler h = new TestAvatarFailoverHandler();
+    InjectionHandler.set(h);
+
+    // This should get a new block from the namenode and simulate the finger
+    // print mismatch.
+    out.write(buffer, 0, buffer.length);
+    out.write(buffer, 0, buffer.length);
+    out.close();
+
   }
 }

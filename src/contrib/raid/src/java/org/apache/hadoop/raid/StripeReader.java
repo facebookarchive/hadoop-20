@@ -314,21 +314,28 @@ public abstract class StripeReader {
     return inputs;
   }
   
+  public static LocationPair getBlockLocation(Codec codec, FileSystem srcFs,
+      Path srcFile, int blockIdxInFile, Configuration conf)
+          throws IOException {
+    return getBlockLocation(codec, srcFs, srcFile, blockIdxInFile, conf, null);
+  }
+  
   /**
    * Given a block in the file and specific codec, return the LocationPair
    * object which contains id of the stripe it belongs to and its
    * location in the stripe
    */
   public static LocationPair getBlockLocation(Codec codec, FileSystem srcFs,
-      Path srcFile, int blockIdxInFile, Configuration conf)
-          throws IOException {
+      Path srcFile, int blockIdxInFile, Configuration conf, 
+      List<FileStatus> lfs) throws IOException {
     int stripeIdx = 0; 
     int blockIdxInStripe = 0;
     int blockIdx = blockIdxInFile; 
-    List<FileStatus> lfs = null;
     if (codec.isDirRaid) {
       Path parentPath = srcFile.getParent();
-      lfs = RaidNode.listDirectoryRaidFileStatus(conf, srcFs, parentPath);
+      if (lfs == null) {
+        lfs = RaidNode.listDirectoryRaidFileStatus(conf, srcFs, parentPath);
+      }
       if (lfs == null) {
         throw new IOException("Couldn't list files under " + parentPath);
       }
@@ -357,7 +364,7 @@ public abstract class StripeReader {
     
     return new LocationPair(stripeIdx, blockIdxInStripe, null);
   }
-  
+
   public static StripeReader getStripeReader(Codec codec, Configuration conf, 
       long blockSize, FileSystem fs, long stripeIdx, FileStatus srcStat)
           throws IOException {

@@ -21,9 +21,12 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
-import org.apache.hadoop.fs.Path;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.ContentSummary;
-import org.apache.hadoop.fs.permission.*;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
@@ -34,6 +37,9 @@ import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.FSImageFormat.FSImageLoadingContext;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.BlockMetaInfoType;
+import org.apache.hadoop.hdfs.server.namenode.INodeStorage.StorageType;
+import org.apache.hadoop.hdfs.util.LightWeightGSet.LinkedElement;
+import org.apache.hadoop.raid.RaidCodec;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -41,15 +47,20 @@ import org.apache.hadoop.util.StringUtils;
  * This is a base INode class containing common fields for file and 
  * directory inodes.
  */
-public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
+public abstract class INode implements Comparable<byte[]>, FSInodeInfo, LinkedElement {
+  public static final Log LOG = LogFactory.getLog(INode.class);
   protected byte[] name;
   protected INodeDirectory parent;
   protected long modificationTime;
   protected volatile long accessTime;
+  private final long id; // Unique id for inode per namenode, not recyclable
+  private LinkedElement next = null;
   
   public static enum INodeType {
     REGULAR_INODE((byte) 1),
-    HARDLINKED_INODE((byte) 2);
+    HARDLINKED_INODE((byte) 2),
+    RAIDED_INODE((byte) 3),
+    HARDLINK_RAIDED_INODE((byte) 4);
     
     public final byte type;
     INodeType(byte type) {
@@ -103,11 +114,15 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     }
   }
 
+  /**
+   * This is for testing
+   */
   protected INode() {
     name = null;
     parent = null;
     modificationTime = 0;
     accessTime = 0;
+    id = INodeId.GRANDFATHER_INODE_ID;
   }
   
   protected void updateINode(PermissionStatus permissions, long mTime, long atime) {
@@ -116,16 +131,17 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     setPermissionStatus(permissions);
   }
 
-  INode(PermissionStatus permissions, long mTime, long atime) {
+  INode(long id, PermissionStatus permissions, long mTime, long atime) {
     this.name = null;
     this.parent = null;
     this.modificationTime = mTime;
+    this.id = id;
     setAccessTime(atime);
     setPermissionStatus(permissions);
   }
 
-  protected INode(String name, PermissionStatus permissions) {
-    this(permissions, 0L, 0L);
+  protected INode(long id, String name, PermissionStatus permissions) {
+    this(id, permissions, 0L, 0L);
     setLocalName(name);
   }
   
@@ -139,6 +155,7 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     setPermissionStatus(other.getPermissionStatus());
     setModificationTime(other.getModificationTime());
     setAccessTime(other.getAccessTime());
+    this.id = other.getId();
   }
 
   /**
@@ -194,6 +211,10 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
   protected void setPermission(FsPermission permission) {
     updatePermissionStatus(PermissionStatusFormat.MODE, permission.toShort());
   }
+  /** Get iNode id */
+  public long getId() {
+    return id;
+  }
 
   /**
    * Check whether it's a directory
@@ -206,9 +227,11 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * @param v blocks to be cleared and collected
    * @param blocksLimit the upper limit of blocks to be collected
    *        A parameter of 0 indicates that there is no limit
+   * @param removedINodes inodes to be removed, in order to clear from inodeMap
    * @return the number of files deleted
    */
-  abstract int collectSubtreeBlocksAndClear(List<Block> v, int blocksLimit);
+  abstract int collectSubtreeBlocksAndClear(List<BlockInfo> v, int blocksLimit, 
+      List<INode> removedINodes);
 
   /** Compute {@link ContentSummary}. */
   public final ContentSummary computeContentSummary() {
@@ -221,6 +244,17 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * 0: length, 1: file count, 2: directory count 3: disk space
    */
   abstract long[] computeContentSummary(long[] summary);
+  
+  /**
+   * Verify if file is regular storage, otherwise throw an exception
+   */
+  public static void enforceRegularStorageINode(INodeFile inode, String msg)
+    throws IOException {
+    if (inode.getStorageType() != StorageType.REGULAR_STORAGE) {
+      LOG.error(msg);
+      throw new IOException(msg);
+    }
+  }
   
   /**
    * Get the quota set for this inode
@@ -424,16 +458,21 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     }
     return len1 - len2;
   }
-
-  public boolean equals(Object o) {
-    if (!(o instanceof INode)) {
+  
+  public boolean equals(Object that) {
+    if (!(that instanceof INode)) {
       return false;
     }
-    return Arrays.equals(this.name, ((INode)o).name);
+    return getId() == ((INode) that).getId();
   }
 
+  /** This is used in inodeMap in {@link FSDirectory} */
   public int hashCode() {
-    return Arrays.hashCode(this.name);
+    return getHashCode(id); 
+  }
+  
+  public static int getHashCode(long id) {
+    return (int)(id ^ (id>>>32));
   }
 
   //
@@ -460,6 +499,7 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
   /**
    * Create an INode; the inode's name is not set yet
    *
+   * @param id inode id
    * @param permissions permissions
    * @param blocks blocks if a file
    * @param symlink symblic link if a symbolic link
@@ -471,10 +511,13 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * @param preferredBlockSize block size
    * @param inodeType The INode type
    * @param hardLinkID The HardLinkID
+   * @param codec The raid codec for Raided file
+   * @param parityReplication Replication of parity blocks for raided file
    * @param context The context when loading the fsImage
    * @return an inode
    */
-  static INode newINode(PermissionStatus permissions,
+  static INode newINode(long id,
+                        PermissionStatus permissions,
                         BlockInfo[] blocks, 
                         short replication,
                         long modificationTime,
@@ -484,20 +527,21 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
                         long preferredBlockSize,
                         byte inodeType,
                         long hardLinkID,
+                        RaidCodec codec,
                         FSImageLoadingContext context) {
     if (inodeType == INode.INodeType.REGULAR_INODE.type) {
       // Process the regular INode file
       if (blocks == null) { // directory
         if (nsQuota >= 0 || dsQuota >= 0) { // directory with quota
           return new INodeDirectoryWithQuota(
-              permissions, modificationTime, nsQuota, dsQuota);
+              id, permissions, modificationTime, nsQuota, dsQuota);
         }
         // regular directory
-        return new INodeDirectory(permissions, modificationTime);
+        return new INodeDirectory(id, permissions, modificationTime);
       }
       // file
-      return new INodeFile(permissions, blocks, replication,
-                                modificationTime, atime, preferredBlockSize);
+      return new INodeFile(id, permissions, blocks, replication,
+                           modificationTime, atime, preferredBlockSize, null);
     } else if (inodeType == INode.INodeType.HARDLINKED_INODE.type) {
       // Process the HardLink INode file
       // create and register the hard link file info  
@@ -505,12 +549,13 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
         INodeHardLinkFile.loadHardLinkFileInfo(hardLinkID, context); 
       
       // Reuse the same blocks for the hardlinked files
-      if (hardLinkFileInfo.getReferenceCnt() > 1) {
+      if (hardLinkFileInfo.getReferenceCnt() > 0) {
         blocks = hardLinkFileInfo.getHardLinkedFile(0).getBlocks();
       }
       
       // Create the INodeHardLinkFile and increment the reference cnt
-      INodeHardLinkFile hardLinkFile = new INodeHardLinkFile(permissions, 
+      INodeHardLinkFile hardLinkFile = new INodeHardLinkFile(id,
+                                                            permissions, 
                                                             blocks, 
                                                             replication,  
                                                             modificationTime, 
@@ -519,8 +564,21 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
                                                             hardLinkFileInfo);
       hardLinkFile.incReferenceCnt();
       return hardLinkFile;
+    } else if (inodeType == INode.INodeType.RAIDED_INODE.type) {
+      return new INodeFile(id, permissions, blocks, replication,
+                           modificationTime, atime, preferredBlockSize,
+                           codec);
     } else {
       throw new IllegalArgumentException("Invalide inode type: " + inodeType);
     }
+  }
+  @Override
+  public void setNext(LinkedElement next) {
+    this.next = next;
+  }
+    
+  @Override
+  public LinkedElement getNext() {
+    return next;
   }
 }

@@ -100,12 +100,6 @@ public class SessionNotificationCtx implements Configurable {
     coronaSerializer.readField("handle");
     this.handle = coronaSerializer.readValueAs(String.class);
 
-    try {
-      this.session = sessionManager.getSession(this.handle);
-    } catch (InvalidSessionHandle e) {
-      throw new IOException(e.getMessage());
-    }
-
     coronaSerializer.readField("host");
     this.host = coronaSerializer.readValueAs(String.class);
 
@@ -147,6 +141,14 @@ public class SessionNotificationCtx implements Configurable {
     coronaSerializer.readEndArrayToken("pendingCalls");
 
     coronaSerializer.readEndObjectToken("CoronaSerializer");
+
+    // check if the session is valid at the end of the parsing
+    try {
+      this.session = sessionManager.getSession(this.handle);
+    } catch (InvalidSessionHandle e) {
+      throw new IOException(e.getMessage());
+    }
+
   }
 
   /**
@@ -203,23 +205,24 @@ public class SessionNotificationCtx implements Configurable {
   public String getSessionHandle() {
     return handle;
   }
-
+  
   private void dispatchCall(TBase call) throws TException {
-    LOG.info("Dispatching call " + call.getClass().getName());
     if (call instanceof  SessionDriverService.grantResource_args) {
       SessionDriverService.grantResource_args args = ( SessionDriverService.grantResource_args)call;
       if (!args.handle.equals(handle))
         throw new RuntimeException ("Call handle: " + args.handle +
                                     " does not match session handle: " + handle);
 
+      LOG.info("Dispatching grant " + args.handle + " " + args.granted.size());
       client.grantResource(args.handle, args.granted);
-      session.setResourceGrant(args.granted);
+      //session.setResourceGrant(args.granted);
     } else if (call instanceof  SessionDriverService.revokeResource_args) {
       SessionDriverService.revokeResource_args args = ( SessionDriverService.revokeResource_args)call;
       if (!args.handle.equals(handle))
         throw new RuntimeException ("Call handle: " + args.handle +
                                     " does not match session handle: " + handle);
 
+      LOG.info("Dispatching revoke " + args.handle + " " + args.revoked.size());
       client.revokeResource(args.handle, args.revoked, false);
     } else if (call instanceof SessionDriverService.processDeadNode_args) {
       SessionDriverService.processDeadNode_args args =
@@ -228,6 +231,7 @@ public class SessionNotificationCtx implements Configurable {
         throw new RuntimeException ("Call handle: " + args.handle +
                                     " does not match session handle: " + handle);
       client.processDeadNode(args.handle, args.node);
+      LOG.info("Dispatching deadnode  " + args.handle);
     } else {
       throw new RuntimeException("Unknown Class: " + call.getClass().getName());
     }
@@ -274,8 +278,7 @@ public class SessionNotificationCtx implements Configurable {
             LOG.error("Call to session: " + handle + " for call: " +
               call.getClass().getName() + ", numRetry: " + numRetries +
               "(retryCountMax=" + retryCountMax + ")" +
-              " failed with SocketTimeoutException, will not retry any more");
-            numRetries = retryCountMax + 1;
+              " failed with SocketTimeoutException, will retry it");
           }
         }
         if (!logged) {

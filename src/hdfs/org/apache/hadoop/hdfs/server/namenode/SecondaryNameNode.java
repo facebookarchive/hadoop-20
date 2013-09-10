@@ -78,7 +78,6 @@ public class SecondaryNameNode implements Runnable {
   private volatile boolean shouldRun;
   private HttpServer infoServer;
   private int infoPort;
-  private String infoBindAddress;
 
   private Collection<URI> checkpointDirs;
   private Collection<URI> checkpointEditsDirs;
@@ -120,7 +119,7 @@ public class SecondaryNameNode implements Runnable {
     
     // Create connection to the namenode.
     shouldRun = true;
-    nameNodeAddr = NameNode.getAddress(conf);
+    nameNodeAddr = NameNode.getClientProtocolAddress(conf);
 
     this.conf = conf;
     this.namenode =
@@ -148,9 +147,9 @@ public class SecondaryNameNode implements Runnable {
                                 "dfs.secondary.info.port",
                                 "dfs.secondary.http.address");
     InetSocketAddress infoSocAddr = NetUtils.createSocketAddr(infoAddr);
-    infoBindAddress = infoSocAddr.getHostName();
+    String infoBindIpAddress = infoSocAddr.getAddress().getHostAddress();
     int tmpInfoPort = infoSocAddr.getPort();
-    infoServer = new HttpServer("secondary", infoBindAddress, tmpInfoPort,
+    infoServer = new HttpServer("secondary", infoBindIpAddress, tmpInfoPort,
         tmpInfoPort == 0, conf);
     infoServer.setAttribute("name.system.image", checkpointImage);
     this.infoServer.setAttribute("name.conf", conf);
@@ -159,8 +158,8 @@ public class SecondaryNameNode implements Runnable {
 
     // The web-server port can be ephemeral... ensure we have the correct info
     infoPort = infoServer.getPort();
-    conf.set("dfs.secondary.http.address", infoBindAddress + ":" +infoPort); 
-    LOG.info("Secondary Web-server up at: " + infoBindAddress + ":" +infoPort);
+    conf.set("dfs.secondary.http.address", infoBindIpAddress + ":" +infoPort); 
+    LOG.info("Secondary Web-server up at: " + infoBindIpAddress + ":" +infoPort);
     LOG.warn("Checkpoint Period   :" + checkpointPeriod + " secs " +
              "(" + checkpointPeriod/60 + " min)");
     LOG.warn("Log Size Trigger    :" + checkpointTxnCount  + " transactions ");
@@ -264,10 +263,10 @@ public class SecondaryNameNode implements Runnable {
     } else {
       MD5Hash downloadedHash = TransferFsImage
           .downloadImageToStorage(nnHostPort, sig.mostRecentCheckpointTxId,
-              dstImage.storage, true);
+              dstImage, true);
       dstImage.checkpointUploadDone(sig.mostRecentCheckpointTxId, downloadedHash);
-      FSImage.saveDigestAndRenameCheckpointImage(sig.mostRecentCheckpointTxId,
-          downloadedHash, dstImage.storage);
+      dstImage.saveDigestAndRenameCheckpointImage(sig.mostRecentCheckpointTxId,
+          downloadedHash);
 
     }
 
@@ -495,6 +494,7 @@ public class SecondaryNameNode implements Runnable {
    * @exception Exception if the filesystem does not exist.
    */
   public static void main(String[] argv) throws Exception {
+    org.apache.hadoop.hdfs.DnsMonitorSecurityManager.setTheManager();
     StringUtils.startupShutdownMessage(SecondaryNameNode.class, argv, LOG);
     Configuration tconf = new Configuration();
     try {
@@ -539,6 +539,7 @@ public class SecondaryNameNode implements Runnable {
       Collection<URI> tempDataDirs = new ArrayList<URI>(dataDirs);
       Collection<URI> tempEditsDirs = new ArrayList<URI>(editsDirs);
       storage.setStorageDirectories(tempDataDirs, tempEditsDirs, null);
+      imageSet = new ImageSet(this, tempDataDirs, tempEditsDirs, null);
       
       for (Iterator<StorageDirectory> it = 
                    storage.dirIterator(); it.hasNext();) {
@@ -603,7 +604,8 @@ public class SecondaryNameNode implements Runnable {
               + sig.mostRecentCheckpointTxId + " even though it should have "
               + "just been downloaded");
         }
-        loadFSImage(file);
+        loadFSImage(new ImageInputStream(sig.mostRecentCheckpointTxId,
+            new FileInputStream(file), null, "image", file.length()));
       }
       FSImage.rollForwardByApplyingLogs(manifest, this);
       this.saveFSImageInAllDirs(this.getLastAppliedTxId(), false);

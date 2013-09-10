@@ -40,7 +40,7 @@ public class TestCopyFilesDistcp extends TestCase {
   {
     ((Log4JLogger)LogFactory.getLog(TestCopyFilesDistcp.class)
         ).getLogger().setLevel(Level.OFF);
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.OFF);
+    DataNode.LOG.getLogger().setLevel(Level.OFF);
     ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.OFF);
     ((Log4JLogger)DistCp.LOG).getLogger().setLevel(Level.ALL);
   }

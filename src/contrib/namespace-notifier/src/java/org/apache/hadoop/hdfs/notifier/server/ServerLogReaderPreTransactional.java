@@ -153,6 +153,10 @@ public class ServerLogReaderPreTransactional implements IServerLogReader {
             op.getTransactionId());
       }
       
+      if (ServerLogReaderUtil.shouldSkipOp(expectedTransactionId, op)) {
+        updateStreamPosition();
+        continue;
+      }
       expectedTransactionId = ServerLogReaderUtil.checkTransactionId(
           expectedTransactionId, op);
       updateStreamPosition();
@@ -216,10 +220,8 @@ public class ServerLogReaderPreTransactional implements IServerLogReader {
    * @throws IOException if a fatal error occurred.
    */
   private void refreshStreamPosition() throws IOException {
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Refreshing the stream at position: " + editLogFilePosition);
-    }
-    inputStream.refresh(editLogFilePosition);
+    LOG.info("Refreshing the stream at position: " + editLogFilePosition);
+    inputStream.refresh(editLogFilePosition, expectedTransactionId);
   }
   
   

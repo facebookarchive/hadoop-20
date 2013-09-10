@@ -58,7 +58,7 @@ public class Ingest implements Runnable {
   private int logVersion;
   volatile private boolean success = false;  // not successfully ingested yet
   
-  EditLogInputStream inputEditLog = null;
+  EditLogInputStream inputEditStream = null;
   long currentPosition; // current offset in the transaction log
   final FSNamesystem fsNamesys;
   
@@ -74,7 +74,7 @@ public class Ingest implements Runnable {
     this.confg = conf;
     this.startTxId = startTxId;
     catchUpLag = conf.getLong("avatar.catchup.lag", 2 * 1024 * 1024L);
-    inputEditLog = standby.setupIngestStreamWithRetries(startTxId);
+    inputEditStream = standby.setupIngestStreamWithRetries(startTxId);
   }
 
   public void run() {
@@ -128,10 +128,14 @@ public class Ingest implements Runnable {
    * @throws IOException
    */
   private void setCatchingUp() throws IOException {
-    if (!standby.getRemoteJournal().isSegmentInProgress(startTxId)) {
+    try {
+      if (inputEditStream != null && inputEditStream.isInProgress()) {
+        catchingUp = (inputEditStream.length() - inputEditStream.getPosition() > catchUpLag);
+      } else {
+        catchingUp = true;
+      }
+    } catch (Exception e) {
       catchingUp = true;
-    } else {
-      catchingUp = (inputEditLog.length() - inputEditLog.getPosition() > catchUpLag);
     }
   }
 
@@ -161,13 +165,16 @@ public class Ingest implements Runnable {
   /**
    * Returns the distance in bytes between the current position inside of the
    * edits log and the length of the edits log
-   */ 
+   */
   public long getLagBytes() {
     try {
-      if (standby.getRemoteJournal().isSegmentInProgress(startTxId)) {
-        return this.inputEditLog == null ? -1 :
-          (this.inputEditLog.length() - this.inputEditLog.getPosition());
-      } 
+      if (inputEditStream != null && inputEditStream.isInProgress()) {
+        // for file journals it may happen that we read a segment finalized
+        // by primary, but not refreshed by the standby, so length() returns 0
+        // hence we take max(-1,lag)
+        return Math.max(-1,
+            inputEditStream.length() - this.inputEditStream.getPosition());
+      }
       return -1;
     } catch (IOException ex) {
       LOG.error("Error getting the lag", ex);
@@ -186,11 +193,11 @@ public class Ingest implements Runnable {
     LOG.info("Ingest: Consuming transactions: " + this.toString());
 
     try {
-      logVersion = inputEditLog.getVersion();
+      logVersion = inputEditStream.getVersion();
       if (!LayoutVersion.supports(Feature.TXID_BASED_LAYOUT, logVersion))
         throw new RuntimeException("Log version is too old");
       
-      currentPosition = inputEditLog.getPosition();
+      currentPosition = inputEditStream.getPosition();
       numEdits = ingestFSEdits(); // continue to ingest 
     } finally {
       LOG.info("Ingest: Closing ingest for segment: " + this.toString());
@@ -200,7 +207,7 @@ public class Ingest implements Runnable {
       if(endTxId == -1 && fsDir.fsImage.getEditLog().isOpen()) {
         fsDir.fsImage.getEditLog().logSync();
       }
-      inputEditLog.close();
+      inputEditStream.close();
       standby.clearIngestState();
     }
     LOG.info("Ingest: Edits segment: " + this.toString()
@@ -268,15 +275,16 @@ public class Ingest implements Runnable {
       // coherancy and the edit log could be stored in NFS.
       //
       if (reopen || lastScan) {
-        inputEditLog.close();
-        inputEditLog = standby.setupIngestStreamWithRetries(startTxId);
+        inputEditStream.close();
+        inputEditStream = standby.setupIngestStreamWithRetries(startTxId);
         if (lastScan) {
+          // QUIESCE requested by Standby thread
           LOG.info("Ingest: Starting last scan of transaction log: " + this.toString());
           quitAfterScan = true;
         }
 
         // discard older buffers and start a fresh one.
-        inputEditLog.refresh(currentPosition);       
+        inputEditStream.refresh(currentPosition, localEditLog.getLastWrittenTxId());       
         setCatchingUp();
         reopen = false;
       }
@@ -285,20 +293,45 @@ public class Ingest implements Runnable {
       // Process all existing transactions till end of file
       //
       while (running) {
-        currentPosition = inputEditLog.getPosition(); // record the current file offset.
+        
+        if (lastScan && !quitAfterScan) {
+          // Standby thread informed the ingest to quiesce
+          // we should refresh the input stream as soon as possible
+          // then quitAfterScan will be true
+          break;
+        }
+        
+        // record the current file offset.
+        currentPosition = inputEditStream.getPosition(); 
         InjectionHandler.processEvent(InjectionEvent.INGEST_BEFORE_LOAD_EDIT);
 
         fsNamesys.writeLock();
         try {
           error = false;
-          op = ingestFSEdit(inputEditLog);
+          op = ingestFSEdit(inputEditStream);
           
+          /*
+           * In the case of segments recovered on primary namenode startup, we
+           * have segments that are finalized (by name), but not containing the
+           * ending transaction. Without this check, we will keep looping until
+           * the next checkpoint to discover this situation.
+           */
+          if (!inputEditStream.isInProgress()
+              && standby.getLastCorrectTxId() == inputEditStream.getLastTxId()) {
+            // this is a correct segment with no end segment transaction
+            LOG.info("Ingest: Reached finalized log segment end with no end marker. "
+                + this.toString());
+            tearDown(localEditLog, false, true);
+            break;
+          }
+
           if (op == null) {
             FSNamesystem.LOG.debug("Ingest: Invalid opcode, reached end of log " +
                                    "Number of transactions found " + 
                                    numEdits);
             break; // No more transactions.
           }
+          
           sharedLogTxId = op.txid;
           // Verify transaction ids match.
           localLogTxId = localEditLog.getLastWrittenTxId() + 1;
@@ -325,7 +358,7 @@ public class Ingest implements Runnable {
           if (shouldLoad(sharedLogTxId)) {
             FSEditLogLoader.loadEditRecord(
                 logVersion, 
-                inputEditLog,
+                inputEditStream,
                 recentOpcodeOffsets, 
                 opCounts, 
                 fsNamesys, 
@@ -335,7 +368,7 @@ public class Ingest implements Runnable {
           }     
           
           LOG.info("Ingest: " + this.toString() 
-                            + ", size: " + inputEditLog.length()
+                            + ", size: " + inputEditStream.length()
                             + ", processing transaction at offset: " + currentPosition 
                             + ", txid: " + op.txid
                             + ", opcode: " + op.opCode);
@@ -347,13 +380,13 @@ public class Ingest implements Runnable {
             InjectionHandler
                 .processEventIO(InjectionEvent.INGEST_CLEAR_STANDBY_STATE);
             LOG.info("Ingest: Closing log segment: " + this.toString());
-            tearDown(localEditLog, localLogTxId, true, true);
+            tearDown(localEditLog, true, true);
             numEdits++;
             LOG.info("Ingest: Reached log segment end. " + this.toString());
             break;
           } else {
             localEditLog.logEdit(op);
-            if (inputEditLog.getReadChecksum() != FSEditLog
+            if (inputEditStream.getReadChecksum() != FSEditLog
                 .getChecksumForWrite().getValue()) {
               throw new IOException(
                   "Ingest: mismatched r/w checksums for transaction #"
@@ -388,13 +421,13 @@ public class Ingest implements Runnable {
       // appear in the file and then continue;
       if (error || running) {
         // discard older buffers and start a fresh one.
-        inputEditLog.refresh(currentPosition);
+      	inputEditStream.refresh(currentPosition, localEditLog.getLastWrittenTxId());
         setCatchingUp();
 
         if (error) {
           LOG.info("Ingest: Incomplete transaction record at offset " + 
-              inputEditLog.getPosition() +
-                   " but the file is of size " + inputEditLog.length() + 
+              inputEditStream.getPosition() +
+                   " but the file is of size " + inputEditStream.length() + 
                    ". Continuing....");
         }
 
@@ -426,23 +459,23 @@ public class Ingest implements Runnable {
       if(localEditLog.isOpen()) {
         // quiesced non-finalized segment
         LOG.info("Ingest: Reached non-finalized log segment end. "+ this.toString());
-        tearDown(localEditLog, localLogTxId, false, localLogTxId != startTxId);
+        tearDown(localEditLog, false, localLogTxId != startTxId);
       }
     }
     FSEditLogLoader.dumpOpCounts(opCounts);
     return numEdits; // total transactions consumed
   }
   
-  private void tearDown(FSEditLog localEditLog, long localLogTxId,
+  private void tearDown(FSEditLog localEditLog,
       boolean writeEndTxn, boolean updateLastCorrectTxn) throws IOException {
     localEditLog.endCurrentLogSegment(writeEndTxn);
-    endTxId = localLogTxId;
+    endTxId = localEditLog.getLastWrittenTxId();
     running = false;
     lastScan = true;
     if (updateLastCorrectTxn) {
-      standby.setLastCorrectTxId(localLogTxId);
+      standby.setLastCorrectTxId(endTxId);
     }
-    standby.clearIngestState(localLogTxId + 1);
+    standby.clearIngestState(endTxId + 1);
   }
   
   public String toString() {

@@ -37,10 +37,6 @@ import java.nio.channels.FileChannel;
  */
 public class BlockReaderLocalInlineChecksum extends BlockReaderLocalBase {
 
-  private static int BYTE_BUFFER_LENGTH = 4 * 1024;
-  private ByteBuffer byteBuffer = null;
-  private ByteBuffer tempBuffer = null;
-
   private boolean needVerifyChecksum = false;
 
   private final FileChannel dataFileChannel; // reader for the data file
@@ -216,9 +212,9 @@ public class BlockReaderLocalInlineChecksum extends BlockReaderLocalBase {
     // Calculate current block size from current file position
     long filePos = dataFileChannel.position();
     long blockPos = BlockInlineChecksumReader.getBlockSizeFromFileLength(
-        filePos - filePos % bytesPerChecksum, checksum.getChecksumType(),
+        filePos - filePos % (checksumSize + bytesPerChecksum), checksum.getChecksumType(),
         bytesPerChecksum)
-        + filePos % bytesPerChecksum;
+        + filePos % (checksumSize + bytesPerChecksum);
 
     long startChunkOffset; // start offset in the current chunk
     if (blockPos % bytesPerChecksum != 0) {
@@ -267,13 +263,11 @@ public class BlockReaderLocalInlineChecksum extends BlockReaderLocalBase {
     if (needVerifyChecksum || totalLen % bytesPerChecksum == 0) {
       totalBytesToRead += checksumSize;
     }
-    // We pay another mem copy to first copy to a temp buffer and then to
+    // We first copy to a temp buffer and then to
     // final user buffer to reduce number of file system calls.
-    if (tempBuffer == null || tempBuffer.capacity() < totalBytesToRead) {
-      tempBuffer = ByteBuffer.allocate(totalBytesToRead);
-    } else {
-      tempBuffer.clear();
-    }
+    // We pay a new byte array allocation and another mem copy for it.
+    ByteBuffer tempBuffer = ByteBuffer.allocate(totalBytesToRead);
+
     IOUtils.readFileChannelFully(dataFileChannel, tempBuffer, 0,
         totalBytesToRead, true);
     tempBuffer.flip();

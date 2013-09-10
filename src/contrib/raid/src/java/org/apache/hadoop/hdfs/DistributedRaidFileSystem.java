@@ -443,15 +443,12 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       public Path path;
       // Offset within path where this block starts.
       public long actualFileOffset;
-      // Offset within the outer file where this block starts.
-      public long originalFileOffset;
       // Length of the block (length <= blk sz of outer file).
       public long length;
       public UnderlyingBlock(Path path, long actualFileOffset,
-          long originalFileOffset, long length) {
+          long length) {
         this.path = path;
         this.actualFileOffset = actualFileOffset;
-        this.originalFileOffset = originalFileOffset;
         this.length = length;
       }
     }
@@ -467,6 +464,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       private FSDataInputStream currentStream;
       private DecoderInputStream recoveryStream;
       private boolean useRecoveryStream;
+      private boolean ifLastReadUseRecovery;
       private UnderlyingBlock currentBlock;
       private byte[] oneBytebuff = new byte[1];
       private byte[] skipbuf = new byte[SKIP_BUF_SIZE];
@@ -494,17 +492,17 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         this.underlyingBlocks = new UnderlyingBlock[(int)numBlocks];
         for (int i = 0; i < numBlocks; i++) {
           long actualFileOffset = i * blockSize;
-          long originalFileOffset = i * blockSize;
           long length = Math.min(
-              blockSize, fileSize - originalFileOffset);
+              blockSize, fileSize - actualFileOffset);
           this.underlyingBlocks[i] = new UnderlyingBlock(
-              path, actualFileOffset, originalFileOffset, length);
+              path, actualFileOffset, length);
         }
         this.currentOffset = 0;
         this.currentBlock = null;
         this.buffersize = buffersize;
         this.conf = conf;
         this.lfs = lfs;
+        this.ifLastReadUseRecovery = false;
         
         // Initialize the "inner" conf, and cache this for all future uses.
         //Make sure we use DFS and not DistributedRaidFileSystem for unRaid.
@@ -560,12 +558,16 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
             (int)(currentOffset/blockSize):
               underlyingBlocks.length - 1;
         UnderlyingBlock block = underlyingBlocks[blockIdx];
+        
         // If the current path is the same as we want.
         if (currentBlock == block ||
             currentBlock != null && currentBlock.path == block.path) {
           // If we have a valid stream, nothing to do.
           if (currentStream != null) {
             currentBlock = block;
+            if (seek) {
+              currentStream.seek(currentOffset);
+            }
             return;
           }
         } else {
@@ -574,12 +576,10 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
 
         currentBlock = block;
         currentStream = lfs.fs.open(currentBlock.path, buffersize);
-        long offset = block.actualFileOffset +
-            (currentOffset - block.originalFileOffset);
         
         // we will not seek in the pread
         if (seek) {
-          currentStream.seek(offset);
+          currentStream.seek(currentOffset);
         }
       }
 
@@ -588,7 +588,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
        */
       private int blockAvailable() {
         return (int) (currentBlock.length -
-            (currentOffset - currentBlock.originalFileOffset));
+            (currentOffset - currentBlock.actualFileOffset));
       }
 
       @Override
@@ -638,6 +638,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       @Override
       public synchronized int read(byte[] b, int offset, int len) 
           throws IOException {
+        ifLastReadUseRecovery = false;
         if (currentOffset >= fileSize) {
           return -1;
         }
@@ -645,6 +646,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
         int limit = Math.min(blockAvailable(), len);
         int value;
         if (useRecoveryStream) {
+          ifLastReadUseRecovery = true;
           value = recoveryStream.read(b, offset, limit);
         } else {
           try{
@@ -664,6 +666,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       @Override
       public synchronized int read(long position, byte[] b, int offset, int len) 
           throws IOException {
+        ifLastReadUseRecovery = false;
         long oldPos = currentOffset;
         currentOffset = position;
         nextLocation = 0;
@@ -676,6 +679,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
           int limit = Math.min(blockAvailable(), len);
           int value;
           if (useRecoveryStream) {
+            ifLastReadUseRecovery = true;
             value = recoveryStream.read(b, offset, limit);
           } else {
             try{
@@ -766,7 +770,6 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
           throw new EOFException("Cannot seek to " + pos + ", file length is " + fileSize);
         }
         if (pos != currentOffset) {
-          closeCurrentStream();
           currentOffset = pos;
           openCurrentStream();
         }
@@ -788,6 +791,7 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       public void readFully(final long pos, byte[] b, int offset, int length) 
           throws IOException {
         long oldPos = currentOffset;
+        boolean ifRecovery = false;
         try {
           while (true) {
             // This loop retries reading until successful. Unrecoverable errors
@@ -796,6 +800,8 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
             long curPos = pos;
             while (length > 0) {
               int n = read(curPos, b, offset, length);
+              // There is data race here so value ifRecovery is best efforts.
+              ifRecovery |= this.ifLastReadUseRecovery;
               if (n < 0) {
                 throw new IOException("Premature EOF");
               }
@@ -804,6 +810,10 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
               curPos += n;
             }
             nextLocation = 0;
+
+            if (ifRecovery) {
+              ifLastReadUseRecovery = true;
+            }
             return;
           }
         } finally {
@@ -815,6 +825,10 @@ public class DistributedRaidFileSystem extends FilterFileSystem {
       public void readFully(long pos, byte[] b) throws IOException {
         readFully(pos, b, 0, b.length);
         nextLocation = 0;
+      }
+      
+      public boolean ifLastReadUseRecovery() {
+        return ifLastReadUseRecovery;
       }
 
       /**

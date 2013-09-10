@@ -108,7 +108,7 @@ public class TestRaidShellFsck {
     conf.set("raid.blockfix.classname", 
              "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
 
-    conf.set("raid.server.address", "localhost:0");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
     conf.set("mapred.raid.http.address", "localhost:0");
 
     conf.setInt("dfs.corruptfilesreturned.max", 500);
@@ -184,7 +184,7 @@ public class TestRaidShellFsck {
     args[1] = DIR_PATH;
 
   }
-  
+
   /**
    * Creates test file consisting of random data
    */
@@ -615,6 +615,9 @@ public class TestRaidShellFsck {
     throws Exception {
     LOG.info("testFileBlockAndParityBlockMissingHar2");
     setUp(true);
+    // Make sure all parity files are deleted
+    dfs.delete(new Path(RAID_DIR, FILE_PATH0.toString().substring(1)), true);
+    dfs.delete(new Path(RAID_DIR, FILE_PATH1.toString().substring(1)), true);
     waitUntilCorruptFileCount(dfs, 0);
     removeFileBlock(FILE_PATH0, 0, 0);
     removeFileBlock(FILE_PATH0, 1, 0);

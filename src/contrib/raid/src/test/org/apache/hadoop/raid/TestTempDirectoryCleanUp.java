@@ -85,8 +85,9 @@ public class TestTempDirectoryCleanUp extends TestCase {
     conf.set("dfs.block.replicator.classname",
         "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
 
-    conf.set("raid.server.address", "localhost:0");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
     conf.set("mapred.raid.http.address", "localhost:0");
+    conf.setInt(Encoder.RETRY_COUNT_PARTIAL_ENCODING_KEY, 1);
 
     // create a dfs and map-reduce cluster
     final int taskTrackers = 4;
@@ -186,18 +187,20 @@ public class TestTempDirectoryCleanUp extends TestCase {
       
       assertTrue("cnode is not DistRaidNode", cnode instanceof DistRaidNode);
       DistRaidNode dcnode = (DistRaidNode) cnode;
-
-      while (dcnode.jobMonitor.jobsMonitored() < 3 &&
-             System.currentTimeMillis() - start < MAX_WAITTIME) {
-        Thread.sleep(1000);
-      }
-      List<DistRaid> jobs = dcnode.jobMonitor.getRunningJobs();
-      for (DistRaid job: jobs) {
-        while (checkTempDirectories(job) == false) {
-          Thread.sleep(500);
-          LOG.info("Waiting for temp directory creation for " +
-              job.getJobID());
+      Set<DistRaid> jobSet = new HashSet<DistRaid>();
+      while (jobSet.size() < 3 && System.currentTimeMillis() - start < MAX_WAITTIME) {
+        List<DistRaid> jobs = dcnode.jobMonitor.getRunningJobs();
+        for (DistRaid job: jobs) {
+          if (jobSet.contains(job)) {
+            continue;
+          }
+          if (checkTempDirectories(job)) {
+            LOG.info("Detect new job " + job.getJobID());
+            jobSet.add(job);
+          }
         }
+        LOG.info("Waiting for 3 running jobs, now is " + jobSet.size() + " jobs");
+        Thread.sleep(1000);
       }
       
       while (dcnode.jobMonitor.runningJobsCount() > 0 &&
@@ -207,7 +210,7 @@ public class TestTempDirectoryCleanUp extends TestCase {
         Thread.sleep(1000);
       }
       
-      for (DistRaid job: jobs) {
+      for (DistRaid job: jobSet) {
         assertEquals("Temp directory for job " + job.getJobID() + 
             " should be deleted.", false, checkTempDirectories(job));
       }
@@ -241,29 +244,30 @@ public class TestTempDirectoryCleanUp extends TestCase {
       assertTrue("cnode is not DistRaidNode", cnode instanceof DistRaidNode);
       DistRaidNode dcnode = (DistRaidNode) cnode;
 
-      while (dcnode.jobMonitor.jobsMonitored() < 3 &&
-             System.currentTimeMillis() - start < MAX_WAITTIME) {
+      Set<DistRaid> jobSet = new HashSet<DistRaid>();
+      while (jobSet.size() < 3 && System.currentTimeMillis() - start < MAX_WAITTIME) {
+        List<DistRaid> jobs = dcnode.jobMonitor.getRunningJobs();
+        for (DistRaid job: jobs) {
+          if (jobSet.contains(job)) {
+            continue;
+          }
+          if (checkTempDirectories(job)) {
+            jobSet.add(job);
+            LOG.info("Kill job " + job.getJobID());
+            job.killJob();
+          }
+        }
+        LOG.info("Waiting for 3 running jobs, now is " + jobSet.size() + " jobs");
         Thread.sleep(1000);
       }
-      List<DistRaid> jobs = dcnode.jobMonitor.getRunningJobs();
-      // Kill jobs;
-      LOG.info("Wait temp directory creation and kill all the jobs");
-      for (DistRaid job: jobs) {
-        while (checkTempDirectories(job) == false) {
-          Thread.sleep(500);
-          LOG.info("Waiting for temp directory creation for " +
-              job.getJobID());
-        }
-        LOG.info("Kill job " + job.getJobID());
-        job.killJob();
-      }
+
       while (dcnode.jobMonitor.runningJobsCount() > 0 &&
           System.currentTimeMillis() - start < MAX_WAITTIME) {
         LOG.info("Waiting for zero running jobs: " +
             dcnode.jobMonitor.runningJobsCount());
         Thread.sleep(1000);
       }
-      for (DistRaid job: jobs) {
+      for (DistRaid job: jobSet) {
         assertEquals("Temp directory for job " + job.getJobID() + 
             " should be deleted.", false, checkTempDirectories(job));
       }

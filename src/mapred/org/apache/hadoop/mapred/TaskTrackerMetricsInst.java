@@ -56,6 +56,12 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
   private int timedoutTasks = 0;
   private int tasksFailedPing = 0;
   private long unaccountedMemory = 0;
+  private int  numDiskOutOfSpaceTasks = 0;
+
+  @Override
+  public synchronized void diskOutOfSpaceTask(TaskAttemptID t) {
+    ++numDiskOutOfSpaceTasks;
+  }
 
   /** Tree for checking the proc fs */
   private ProcfsBasedProcessTree processTree =
@@ -151,6 +157,7 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
         checkAndSetJvms();
       }
 
+      metricsRecord.setMetric("cgroup_memory_oom", tt.getCGroupOOM());
       metricsRecord.setMetric("maps_running", tt.getRunningMaps());
       metricsRecord.setMetric("reduces_running", tt.getRunningReduces());
       metricsRecord.setMetric("mapTaskSlots", (short)tt.getMaxActualMapTasks());
@@ -163,14 +170,27 @@ class TaskTrackerMetricsInst extends TaskTrackerInstrumentation
       metricsRecord.incrMetric("tasks_completed", numCompletedTasks);
       metricsRecord.incrMetric("tasks_failed_timeout", timedoutTasks);
       metricsRecord.incrMetric("tasks_failed_ping", tasksFailedPing);
+      metricsRecord.incrMetric("tasks_disk_out_of_space", 
+          numDiskOutOfSpaceTasks);
       metricsRecord.setMetric("unaccounted_memory", unaccountedMemory);
+      metricsRecord.incrMetric("tasks_failed_to_add_cgroup", tt.getAndResetNumFailedToAddTaskToCGroup());
+      metricsRecord.incrMetric("tasks_saved_by_cgroup", tt.getAndResetAliveTaskNumInCGroup());
+      metricsRecord.setMetric("rss_memory_usage", tt.getTaskTrackerRSSMem());
+      metricsRecord.incrMetric("tasks_cpu_saved_by_cgroup", tt.getAndResetAliveTasksCPUMSecs());
+      
+      for (int index = 0; index <tt.getKilledTaskRssBucketsNum(); ++ index) {
+        String metricKey = "tasks_killed_group_by_rss_" + index;
+        metricsRecord.incrMetric(metricKey, tt.getAndRestNumOfKilledTasksByRssBucket(index));
+      }
 
       numCompletedMapTasks = 0;
       numCompletedReduceTasks = 0;
       numCompletedTasks = 0;
       timedoutTasks = 0;
       tasksFailedPing = 0;
+      numDiskOutOfSpaceTasks = 0;
     }
-      metricsRecord.update();
+    
+    metricsRecord.update();
   }
 }

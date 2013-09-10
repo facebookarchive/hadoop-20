@@ -383,8 +383,8 @@ public class TestFsck extends TestCase {
 
       // intentionally corrupt NN data structure
       INodeFile node = (INodeFile) cluster.getNameNode().namesystem.dir.rootDir.getNode(fileName);
-      assertEquals(node.blocks.length, 1);
-      node.blocks[0].setNumBytes(-1L);  // set the block length to be negative
+      assertEquals(node.getBlocks().length, 1);
+      node.getBlocks()[0].setNumBytes(-1L);  // set the block length to be negative
 
       // run fsck and expect a failure with -1 as the error code
       String outStr = runFsck(conf, -1, true, fileName);

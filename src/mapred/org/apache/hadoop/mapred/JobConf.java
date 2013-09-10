@@ -433,6 +433,19 @@ public class JobConf extends Configuration {
     checkAndWarnDeprecation();
   }
 
+  /** Construct a map/reduce configuration.
+   *
+   * @param config a Configuration-format XML job description file.
+   */
+  public JobConf(Path config, Path bigParamPath, FileSystem localFs, int threshold) {
+    super();
+    this.bigParamPath = bigParamPath;
+    this.localFs = localFs;
+    this.bigParamThreshold = threshold;
+    addResource(config);
+    checkAndWarnDeprecation();
+  }
+
   /** A new map/reduce configuration where the behavior of reading from the
    * default resources can be turned off.
    * <p/>
@@ -1508,6 +1521,22 @@ public class JobConf extends Configuration {
    */
   public int getMaxTaskFailuresPerTracker() {
     return getInt(MAPRED_MAX_TRACKER_FAILURES_PROPERTY, 4);
+  }
+  
+  /** The Child class used by TaskRunner */
+  public static final String TASK_RUNNER_CHILD_CLASS_CONF =
+      "mapred.taskrunner.child.class";
+
+  /** Default Child class used by TaskRunner */
+  public static final String TASK_RUNNER_CHILD_CLASS_DEFAULT =
+      Child.class.getName();
+
+  /**
+   * Returns name of Child class used by TaskRunner
+   * @return name of class
+   */
+  public String getTaskRunnerChildClassName() {
+    return get(TASK_RUNNER_CHILD_CLASS_CONF, TASK_RUNNER_CHILD_CLASS_DEFAULT);
   }
 
   /**

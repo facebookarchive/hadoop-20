@@ -31,6 +31,7 @@ import org.apache.hadoop.fs.FileStatus;
 public class APITrace {
   private static final Log API_TRACE_LOG = LogFactory.getLog(APITrace.class);
   private static final long baseTime = System.nanoTime();
+  private static AtomicLong nextEventId = new AtomicLong(1);
   private static AtomicLong nextStreamId = new AtomicLong(1);
   private static String pid = getPid();
 
@@ -130,6 +131,7 @@ public class APITrace {
     // append universal fields (i.e., ones that occur for every call)
     StringBuilder line = new StringBuilder();
     line.append(pid + ",");
+    line.append(nextEventId.getAndIncrement() + ",");
     line.append(entryTime + ",");
     line.append(elapsed + ",");
     line.append(callIndex + ",");
@@ -164,6 +166,12 @@ public class APITrace {
     } else if (val instanceof FileStatus[]) {
       FileStatus stat[] = (FileStatus[])val;
       return Integer.toString(stat.length);
+    } else if (val instanceof Long) {
+      return Long.toString((Long)val);
+    } else if (val instanceof Integer) {
+      return Integer.toString((Integer)val);
+    } else if (val instanceof Short) {
+      return Integer.toString((Short)val);
     } else {
       try {
         return "#"+SimpleBase64.encode(val.toString().getBytes("UTF-8"));

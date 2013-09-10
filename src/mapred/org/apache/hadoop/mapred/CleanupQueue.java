@@ -20,6 +20,7 @@ package org.apache.hadoop.mapred;
 
 import java.io.IOException;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -47,6 +48,34 @@ class CleanupQueue {
       if (cleanupThread == null) {
         cleanupThread = new PathCleanupThread();
       }
+    }
+  }
+  
+  /**
+   * Force to clean the all path, it should be called when task tracker is shut down
+   * Now we only called it in MiniCoronaCluster to make sure the unit test run in a clean
+   * fixture
+   */
+  public void forceClean() {
+    while(true) {
+      PathDeletionContext context = null;
+      try {
+        context = cleanupThread.queue.poll(50L, TimeUnit.MILLISECONDS);
+        if (context == null) {
+          return;
+        }
+        if (!deletePath(context)) {
+          LOG.warn("forceClean:Unable to delete path " + context.fullPath);
+        }
+        else {
+          LOG.info("foceClean DELETED " + context.fullPath);
+        }
+        
+      } catch (InterruptedException e) {
+        return;
+      } catch (Exception e) {
+        LOG.warn("Error deleting path " + context.fullPath + ": " + e);
+      } 
     }
   }
 
@@ -97,7 +126,7 @@ class CleanupQueue {
   private static class PathCleanupThread extends Thread {
 
     // cleanup queue which deletes files/directories of the paths queued up.
-    private LinkedBlockingQueue<PathDeletionContext> queue =
+    protected LinkedBlockingQueue<PathDeletionContext> queue =
       new LinkedBlockingQueue<PathDeletionContext>();
 
     public PathCleanupThread() {

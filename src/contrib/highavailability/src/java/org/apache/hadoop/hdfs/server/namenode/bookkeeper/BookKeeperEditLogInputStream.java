@@ -22,12 +22,16 @@ import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.namenode.EditLogFileInputStream;
 import org.apache.hadoop.hdfs.server.namenode.EditLogInputStream;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLogLoader;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogLoader.PositionTrackingInputStream;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.Reader;
 import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
+import org.apache.hadoop.hdfs.server.namenode.bookkeeper.metadata.EditLogLedgerMetadata;
+import org.apache.hadoop.io.IOUtils;
 
 import java.io.BufferedInputStream;
 import java.io.DataInputStream;
@@ -44,7 +48,7 @@ public class BookKeeperEditLogInputStream extends EditLogInputStream {
   private static final Log LOG =
       LogFactory.getLog(BookKeeperEditLogInputStream.class);
 
-  private final BookKeeperJournalManager journalManager;
+  private final LedgerHandleProvider ledgerProvider;
 
   private final long ledgerId;
   private final long firstTxId;
@@ -54,7 +58,7 @@ public class BookKeeperEditLogInputStream extends EditLogInputStream {
   // The underlying input stream implementation that abstracts away reading
   // from a BookKeeper ledger into a streaming interface as well as "rewinding"
   // back to either the beginning or the last known position
-  private final BookKeeperJournalInputStream journalInputStream;
+  private BookKeeperJournalInputStream journalInputStream;
   private PositionTrackingInputStream tracker; // Tracks reader position
   @VisibleForTesting
   BufferedInputStream bin; // Buffers reading from journalInputStream
@@ -62,6 +66,8 @@ public class BookKeeperEditLogInputStream extends EditLogInputStream {
 
   @VisibleForTesting
   int logVersion;
+  private final long firstBookKeeperEntry;
+  private final boolean inProgress;
 
   /**
    * Exception indicating that the header of a ledger containing an edit
@@ -85,7 +91,7 @@ public class BookKeeperEditLogInputStream extends EditLogInputStream {
    * BookKeeper entry id is different from an HDFS transaction id: the entry id
    * is specific to BookKeeper itself and not related to the HDFS transaction
    * id.
-   * @param journalManager {@link BookKeeperJournalManager} instance used for
+   * @param ledgerProvider {@link BookKeeperJournalManager} instance used for
    *                       opening and re-opening ledgers based on the id
    * @param ledgerId BookKeeper specific id of the ledger. This is read from
    *                 ZooKeeper
@@ -98,21 +104,26 @@ public class BookKeeperEditLogInputStream extends EditLogInputStream {
    *                 progress
    * @throws IOException
    */
-  public BookKeeperEditLogInputStream(BookKeeperJournalManager journalManager,
+  public BookKeeperEditLogInputStream(LedgerHandleProvider ledgerProvider,
       long ledgerId,
       long firstBookKeeperEntry,
       long firstTxId,
-      long lastTxId) throws IOException {
+      long lastTxId,
+      boolean inProgress) throws IOException {
     if (firstBookKeeperEntry < 0) {
       throw new IllegalArgumentException("Invalid first BookKeeper entry id to read: " +
           firstBookKeeperEntry + ", cannot be < 0!");
     }
-
-    this.journalManager = journalManager;
+    this.firstBookKeeperEntry = firstBookKeeperEntry;
+    this.ledgerProvider = ledgerProvider;
     this.ledgerId = ledgerId;
     this.firstTxId = firstTxId;
     this.lastTxId = lastTxId;
-    LedgerHandle ledger = journalManager.openForReading(ledgerId);
+    this.inProgress = inProgress;
+  }
+
+  public void init() throws IOException {
+    LedgerHandle ledger = ledgerProvider.openForReading(ledgerId);
     if (!isInProgress() && firstBookKeeperEntry > ledger.getLastAddConfirmed()) {
       // ledger.getLastAddConfirmed() returns the last quorum-acknowledged entry
       // id in the ledger. Unless the segment is in-progress, we should throw
@@ -135,7 +146,7 @@ public class BookKeeperEditLogInputStream extends EditLogInputStream {
     }
     reader = new Reader(in, logVersion);
     LOG.info("Reading from ledger id " + ledgerId +
-        ", starting with book keeper entry id " + ledger +
+        ", starting with book keeper entry id " + firstBookKeeperEntry +
         ", log version " + logVersion +
         ", first txn id " +
         firstTxId +  (isInProgress() ?
@@ -174,42 +185,73 @@ public class BookKeeperEditLogInputStream extends EditLogInputStream {
     return logVersion;
   }
 
+  public static FSEditLogLoader.EditLogValidation validateEditLog(
+      LedgerHandleProvider ledgerProvider,
+      EditLogLedgerMetadata ledgerMetadata) throws IOException {
+    BookKeeperEditLogInputStream in;
+    try {
+      in = new BookKeeperEditLogInputStream(ledgerProvider,
+          ledgerMetadata.getLedgerId(), 0, ledgerMetadata.getFirstTxId(),
+          ledgerMetadata.getLastTxId(), ledgerMetadata.getLastTxId() == -1);
+    } catch (LedgerHeaderCorruptException e) {
+      LOG.warn("Log at ledger id" + ledgerMetadata.getLedgerId() +
+          " has no valid header", e);
+      return new FSEditLogLoader.EditLogValidation(0,
+          HdfsConstants.INVALID_TXID, HdfsConstants.INVALID_TXID, true);
+    }
+
+    try {
+      return FSEditLogLoader.validateEditLog(in);
+    } finally {
+      IOUtils.closeStream(in);
+    }
+  }
+
   /**
    * Returns true if the segment is in progress from the reader point of view
    * at the time of instantiation.
    */
-  private boolean isInProgress() {
-    return lastTxId == -1;
+  @Override
+  public boolean isInProgress() {
+    return inProgress;
   }
 
   @Override
-  public long getFirstTxId() throws IOException {
+  public long getFirstTxId() {
     return firstTxId;
   }
 
   @Override
-  public long getLastTxId() throws IOException {
+  public long getLastTxId() {
     return lastTxId;
   }
 
   @Override
   public void close() throws IOException {
+    checkInitialized();
+
     // Let JournalInputStream handle cleanup
     journalInputStream.close();
   }
 
   @Override
-  public FSEditLogOp readOp() throws IOException {
-    return reader.readOp();
+  public FSEditLogOp nextOp() throws IOException {
+    checkInitialized();
+
+    return reader.readOp(false);
   }
 
   @Override
   public int getVersion() throws IOException {
+    checkInitialized();
+
     return logVersion;
   }
 
   @Override
   public long getPosition() throws IOException {
+    checkInitialized();
+
     long pos = tracker.getPos();
     journalInputStream.savePosition(pos);
     return pos;
@@ -226,22 +268,31 @@ public class BookKeeperEditLogInputStream extends EditLogInputStream {
    * @return The size of the ledger in bytes
    */
   @Override
-  public long length() {
+  public long length() throws IOException {
+    checkInitialized();
+
     return journalInputStream.getLedgerLength();
   }
 
+  public synchronized void checkInitialized() throws IOException {
+    if (journalInputStream == null) {
+      init();
+    }
+  }
+
   /**
-   * Random seeking is not supported, but we can refresh to the
-   * last known position.
+   * Refresh, preferably to a known position
    * @see EditLogInputStream#refresh(long)
    * @see BookKeeperJournalInputStream#position(long)
    */
   @Override
-  public void refresh(long position) throws IOException {
+  public void refresh(long position, long skippedUntilTxid) throws IOException {
+    checkInitialized();
+
     if (isInProgress()) {
       // If a ledger is in progress, re-open it for reading in order
       // to determine the correct bounds of the ledger.
-      LedgerHandle ledger = journalManager.openForReading(ledgerId);
+      LedgerHandle ledger = ledgerProvider.openForReading(ledgerId);
       journalInputStream.resetLedger(ledger);
     }
     // Try to set the underlying stream to the specified position
@@ -266,10 +317,24 @@ public class BookKeeperEditLogInputStream extends EditLogInputStream {
   public long getReadChecksum() {
     return reader.getChecksum();
   }
-
+  
   @Override
   public JournalType getType() {
     return JournalType.EXTERNAL;
+  }
+
+  @Override
+  public String toString() {
+    return "BookKeeperEditLogInputStream{" +
+        "ledgerId=" + ledgerId +
+        ", firstTxId=" + firstTxId +
+        ", lastTxId=" + lastTxId +
+        ", journalInputStream=" + journalInputStream +
+        ", tracker=" + tracker +
+        ", bin=" + bin +
+        ", reader=" + reader +
+        ", logVersion=" + logVersion +
+        '}';
   }
 }
 

@@ -30,6 +30,7 @@ import org.apache.hadoop.mapred.Counters.Counter;
 import org.apache.hadoop.mapred.IFile.Writer;
 import org.apache.hadoop.mapred.MemoryBlock.KeyValuePairIterator;
 import org.apache.hadoop.mapred.Task.TaskReporter;
+import org.apache.hadoop.util.LexicographicalComparerHolder;
 import org.apache.hadoop.util.PriorityQueue;
 
 class ReducePartition<K extends BytesWritable, V extends BytesWritable> extends

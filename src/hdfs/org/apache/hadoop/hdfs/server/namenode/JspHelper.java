@@ -25,9 +25,8 @@ import java.lang.management.MemoryMXBean;
 import java.lang.management.MemoryUsage;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.net.URI;
-import java.net.URISyntaxException;
-import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -37,8 +36,6 @@ import java.util.Random;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.Arrays;
-import java.util.Map;
-
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.jsp.JspWriter;
 
@@ -51,21 +48,21 @@ import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.*;
-import org.apache.hadoop.hdfs.DFSUtil;
 
 public class JspHelper {
+  public static final String CURRENT_CONF = "current.conf";
   final static public String WEB_UGI_PROPERTY_NAME = "dfs.web.ugi";
   final static public String NAMENODE_ADDRESS = "nnaddr";
+  public static final int RAID_UI_CONNECT_TIMEOUT = 1000;
+  public static final int RAID_UI_READ_TIMEOUT = 2000;
 
   static FSNamesystem fsn = null; // set at time of creation of FSNamesystem
   public static final Configuration conf = new Configuration();
@@ -315,42 +312,46 @@ public class JspHelper {
     if (missingBlock > 0) {
       return colTxt(1) + "Number of Missing Blocks " + 
           colTxt(2) + " :" + colTxt(3) +
-          "<a class=\"warning\" href=\"/corrupt_files.jsp\">" +
+          "<a class=\"warning\" href=\"corrupt_files.jsp\">" +
           missingBlock + "</a>";
     } else {
       return "";
     }
   }
   
-  public static void generateWarningText(JspWriter out, FSNamesystem fsn) {
+  public static String getRaidUIContentWithTimeout(final String raidHttpUrl)
+      throws Exception {
+    InetSocketAddress raidInfoSocAddr =
+    NetUtils.createSocketAddr(raidHttpUrl);
+    return DFSUtil.getHTMLContentWithTimeout(
+       new URI("http", null, raidInfoSocAddr.getAddress().getHostAddress(),
+               raidInfoSocAddr.getPort(), "/corruptfilecounter", null,
+               null).toURL(), RAID_UI_CONNECT_TIMEOUT, RAID_UI_READ_TIMEOUT
+       );
+  }
+  
+  public static String generateWarningText(FSNamesystem fsn) {
     // Ideally this should be displayed in RED
-    try {
-      Long missingBlocks = fsn.getMissingBlocksCount();
-      if (missingBlocks > 0) {
-        out.print("<b>");
-        String raidHttpUrl = fsn.getRaidHttpUrl(); 
-        if (raidHttpUrl != null) {
-          try {
-            HttpServer.LOG.info("Raidnode http address:" + raidHttpUrl);
-            InetSocketAddress raidInfoSocAddr =
-                NetUtils.createSocketAddr(raidHttpUrl);
-            out.print(DFSUtil.getHTMLContent(
-                new URI("http", null, raidInfoSocAddr.getHostName(),
-                    raidInfoSocAddr.getPort(), "/corruptfilecounter", null,
-                    null)
-                ));
-          } catch (IOException e) {
-            HttpServer.LOG.error(e);
-          } catch (URISyntaxException e) {
-            HttpServer.LOG.error(e);
-          }
+    StringBuilder sb = new StringBuilder();
+    sb.append("<b>");
+    String raidHttpUrl = fsn.getRaidHttpUrl(); 
+    if (raidHttpUrl != null) {
+      try {
+        String raidUIContent = getRaidUIContentWithTimeout(raidHttpUrl);
+        if (raidUIContent != null) {
+          sb.append(raidUIContent);
         }
-        out.print("<br></b>");
+      } catch (SocketTimeoutException ste) {
+        HttpServer.LOG.error("Fail to fetch raid ui " + raidHttpUrl, ste);
+        sb.append(JspHelper.getHTMLLinksText(raidHttpUrl, "Raidnode didn't response in " +
+          (RAID_UI_CONNECT_TIMEOUT + RAID_UI_READ_TIMEOUT) + "ms"));
+      } catch (Exception e) {
+        HttpServer.LOG.error("Fail to fetch raid ui " + raidHttpUrl, e);
+        sb.append(JspHelper.getHTMLLinksText(raidHttpUrl, "Raidnode is unreachable"));
       }
-      out.println();
-    } catch (IOException ioe) {
-      HttpServer.LOG.error(ioe);
     }
+    sb.append("<br></b>\n");
+    return sb.toString();
   }
   
   public String getInodeLimitText() {

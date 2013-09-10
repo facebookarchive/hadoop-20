@@ -48,5 +48,30 @@
       name="servlet-api-2.5"
       rev="${servlet-api-2.5.version}"
       conf="common->default"/>
+    <dependency org="org.codehaus.jackson"
+      name="jackson-mapper-asl"
+      rev="1.7.9"
+      conf="common->default"/>
+    <dependency org="org.mockito"
+      name="mockito-all"
+      rev="${mockito-all.version}"
+      conf="common->master"/>
+    <dependency org="org.apache.zookeeper"
+      name="zookeeper"
+      rev="3.4.3"
+      conf="common->default"/>
+    <!-- swift -->
+    <dependency org="com.facebook.swift"
+      name="swift-codec"
+      rev="${swift.version}"
+      conf="common->default"/>
+    <dependency org="com.facebook.swift"
+      name="swift-service"
+      rev="${swift.version}"
+      conf="common->default"/>
+    <dependency org="com.facebook.swift"
+      name="swift-annotations"
+      rev="${swift.version}"
+      conf="common->default"/>
     </dependencies>
 </ivy-module>

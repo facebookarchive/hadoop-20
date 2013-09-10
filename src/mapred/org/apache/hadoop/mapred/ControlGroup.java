@@ -72,6 +72,7 @@ public abstract class ControlGroup {
     public static final String MEM_MOVE_CHARGE_AT_IMMIGRATE = "memory.move_charge_at_immigrate";
     public static final String MEM_OOM_CONTROL = "memory.oom_control";
     public static final String MEM_NUMA_STAT = "memory.numa_stat";
+    public static final String MEM_RSS_IN_BYTES = "rss";
     
     public static final long MEM_LIMIT_IN_BYTES_DISABLE = -1;
     
@@ -104,9 +105,39 @@ public abstract class ControlGroup {
     public long getMemoryUsage() {
       return getLongParameter(MEM_USAGE_IN_BYTES);
     }
+    
+    public long getMaxMemoryUsage() {
+      return getLongParameter(MEM_MAX_USAGE_IN_BYTES);
+    }
    
     public long getMemoryUsageLimit() {
       return getLongParameter(MEM_LIMIT_IN_BYTES);
+    }
+    
+    public long getRSSMemoryUsage() {
+      String [] kvPairs = this.getListParameter(MEM_STAT);
+      if (kvPairs == null) {
+        return 0;
+      }
+      
+      for (String kvPair: kvPairs) {
+        String [] kv = kvPair.split("\\s+");
+        long ret;
+        if (kv.length >= 2 &&
+            kv[0].trim().compareToIgnoreCase(MEM_RSS_IN_BYTES) == 0) {
+          try {
+            ret = Long.parseLong(kv[1].trim());
+          }
+          catch (NumberFormatException ne) {
+            LOG.debug("Error reading parameter "+kv[1]
+                +": \"java.lang.NumberFormatException: "+ne.getMessage()+"\"");
+            ret = 0;
+          }
+          return ret;
+        }
+      }
+      
+      return 0;
     }
    
     public void setMemoryUsageLimit(long value) {
@@ -290,7 +321,7 @@ public abstract class ControlGroup {
       ret = Long.parseLong(getStringParameter(parameter).trim());
     }
     catch (NumberFormatException ne) {
-      LOG.warn("Error reading parameter "+parameter
+      LOG.debug("Error reading parameter "+parameter
           +": \"java.lang.NumberFormatException: "+ne.getMessage()+"\"");
       ret = 0;
     }
@@ -310,7 +341,7 @@ public abstract class ControlGroup {
     try {
       ret = FileUtils.readFileToString(new File(this.path, parameter));
     } catch (IOException e) {
-      LOG.warn("Could not retrieve a parameter (" + parameter + ") @ "+path+": \""+e.getMessage()+"\"");
+      LOG.debug("Could not retrieve a parameter (" + parameter + ") @ "+path+": \""+e.getMessage()+"\"");
       ret = "";
     }
     return ret;

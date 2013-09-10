@@ -46,7 +46,7 @@ import org.apache.hadoop.util.InjectionHandler;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
-import org.mockito.internal.verification.api.VerificationMode;
+import org.mockito.verification.VerificationMode;
 
 public class TestEditLogJournalFailures {
   

@@ -38,7 +38,6 @@ import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode.ServicePair;
-import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecord;
 import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecoveryTimeoutException;
 import org.apache.hadoop.hdfs.server.datanode.DataNode.KeepAliveHeartbeater;
 import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
@@ -101,6 +100,10 @@ public class OfferService implements Runnable {
   // after clear primary is called, we will no longer delay any
   // incremental block reports
   private boolean donotDelayIncrementalBlockReports = false;
+  
+  // indicate that this offer service received CLEAR PRIMARY
+  // command, which means failover is in progress
+  private boolean clearPrimaryCommandProcessed = false;
 
   private final long fullBlockReportDelay;
 
@@ -240,8 +243,16 @@ public class OfferService implements Runnable {
           //the primary can't switch to standby
           throw new IOException("Primary started acting as standby");
         } else if (!isPrimaryCached && failed == null) {
-          //failover - we need to refresh our knowledge
-          this.clearPrimary();
+          String msg = "Received null response from standby for incremental"
+              + " block report. ";
+          if (clearPrimaryCommandProcessed) {
+            LOG.info(msg + "Failover is in progress"
+                + " - will not clear primary again");
+          } else {
+            LOG.info(msg + "Standby is acting as primary. Clearing primary");
+            // failover - we need to refresh our knowledge
+            this.clearPrimary();
+          }
         }
       } catch (Exception e) {
         processFailedBlocks(
@@ -306,10 +317,11 @@ public class OfferService implements Runnable {
                                                            this.servicePair.namespaceId),
                                                          anode.xmitsInProgress.get(),
                                                          anode.getXceiverCount());
-          this.servicePair.lastBeingAlive = AvatarDataNode.now();
+          long cmdTime = AvatarDataNode.now();
+          this.servicePair.lastBeingAlive = cmdTime;
           LOG.debug("Sent heartbeat at " + this.servicePair.lastBeingAlive + " to " + namenodeAddress);
           myMetrics.heartbeats.inc(AvatarDataNode.now() - startTime);
-          if (!processCommand(cmds))
+          if (!processCommand(cmds, cmdTime))
             continue;
         }
 
@@ -403,7 +415,7 @@ public class OfferService implements Runnable {
                                  anode.blockReportInterval * anode.blockReportInterval;
             }
             if (cmd != null) {
-              processCommand(new DatanodeCommand[] { cmd });
+              processCommand(new DatanodeCommand[] { cmd }, brStartTime);
             }
           }
         }
@@ -520,7 +532,8 @@ public class OfferService implements Runnable {
       DatanodeProtocol.DNA_REGISTER,
       DatanodeProtocols.DNA_CLEARPRIMARY, 
       DatanodeProtocols.DNA_BACKOFF,
-      DatanodeProtocols.DNA_RETRY 
+      DatanodeProtocols.DNA_RETRY, 
+      DatanodeProtocols.DNA_PREPAREFAILOVER
   };
 
   private static boolean isValidStandbyCommand(DatanodeCommand cmd) {
@@ -554,7 +567,8 @@ public class OfferService implements Runnable {
    * @param cmds an array of datanode commands
    * @return true if further processing may be required or false otherwise.
    */
-  private boolean processCommand(DatanodeCommand[] cmds) throws InterruptedException {
+  private boolean processCommand(DatanodeCommand[] cmds, long processStartTime)
+      throws InterruptedException {
     if (cmds != null) {
       // at each heartbeat the standby offer service will talk to ZK!
       boolean switchedFromStandbyToPrimary = checkFailover();
@@ -576,7 +590,7 @@ public class OfferService implements Runnable {
                 + " from standby " + this.namenodeAddress);
             continue;
           } 
-          if (processCommand(cmd) == false) {
+          if (processCommand(cmd, processStartTime) == false) {
             return false;
           }
         } catch (IOException ioe) {
@@ -597,7 +611,8 @@ public class OfferService implements Runnable {
    * @return true if further processing may be required or false otherwise.
    * @throws IOException
    */
-  private boolean processCommand(DatanodeCommand cmd) throws IOException, InterruptedException {
+  private boolean processCommand(DatanodeCommand cmd, long processStartTime)
+      throws IOException, InterruptedException {
     if (cmd == null)
       return true;
     final BlockCommand bcmd = cmd instanceof BlockCommand? (BlockCommand)cmd: null;
@@ -644,6 +659,7 @@ public class OfferService implements Runnable {
               .processEventIO(InjectionEvent.OFFERSERVICE_BEFORE_REGISTRATION);
           servicePair.register(namenode, namenodeAddress, true);
           firstBlockReportSent = false;
+          cancelPrepareFailover();
           scheduleBlockReport(0);
         } catch (IOException e) {
           LOG.warn("Registration failed, will restart offerservice threads..",
@@ -676,7 +692,8 @@ public class OfferService implements Runnable {
       servicePair.processUpgradeCommand((UpgradeCommand)cmd);
       break;
     case DatanodeProtocol.DNA_RECOVERBLOCK:
-      anode.recoverBlocks(servicePair.namespaceId, bcmd.getBlocks(), bcmd.getTargets());
+      anode.recoverBlocks(servicePair.namespaceId, bcmd.getBlocks(),
+          bcmd.getTargets(), processStartTime);
       break;
     case DatanodeProtocols.DNA_BACKOFF:
       // We can get a BACKOFF request as a response to a full block report.
@@ -687,6 +704,10 @@ public class OfferService implements Runnable {
       InjectionHandler
           .processEventIO(InjectionEvent.OFFERSERVICE_BEFORE_CLEARPRIMARY);
       retValue = clearPrimary();
+      this.clearPrimaryCommandProcessed = true;
+      break;
+    case DatanodeProtocols.DNA_PREPAREFAILOVER:
+      prepareFailover();
       break;
     case DatanodeProtocols.DNA_RETRY:
       // We will get a RETRY request as a response to only a full block report.
@@ -711,6 +732,28 @@ public class OfferService implements Runnable {
                 + " from " + namenodeAddress);
     }
     return retValue;
+  }
+  
+  /**
+   * Take actions in preparation for failover.
+   */
+  private void prepareFailover() {
+    LOG.info("PREPARE FAILOVER requested by : " + this.avatarnodeAddress);
+    // we should start sending incremental block reports and block
+    // reports normally
+    setBackoff(false);
+    this.donotDelayIncrementalBlockReports = true;
+    InjectionHandler.processEvent(InjectionEvent.OFFERSERVICE_PREPARE_FAILOVER,
+        nsRegistration.toString());
+  }
+
+  /**
+   * Cancel prepare failover behavior if any. This should be called when we
+   * re-register, which means that somethign went wrong, and we are reconnecting
+   * to a node within the same offerservice.
+   */
+  private void cancelPrepareFailover() {
+    this.donotDelayIncrementalBlockReports = false;
   }
 
   /**

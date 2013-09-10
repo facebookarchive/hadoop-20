@@ -57,6 +57,9 @@ public class DistRaid {
   public static final String MAX_MAPS_PER_NODE_KEY = "hdfs.raid.max.maps.per.node";
   public static final int DEFAULT_MAX_FAILURE_RETRY = 3;
   public static final String MAX_FAILURE_RETRY_KEY = "hdfs.raid.max.failure.retry";
+  public static final String SLEEP_TIME_BETWEEN_RETRY_KEY =
+      "hdfs.raid.sleep.time.between.retry";
+  public static final long DEFAULT_SLEEP_TIME_BETWEEN_RETRY = 1000L;
   private static long opPerMap = DEFAULT_OP_PER_MAP;
   private static int maxMapsPerNode = DEFAULT_MAX_MAPS_PER_NODE;
   
@@ -295,8 +298,11 @@ public class DistRaid {
         PolicyInfo policy, Statistics st, Reporter reporter)
             throws IOException {
       String s = "FAIL: " + policy + ", " + key + " ";
+      long sleepTimeBetwRetry = jobconf.getLong(SLEEP_TIME_BETWEEN_RETRY_KEY,
+                                            DEFAULT_SLEEP_TIME_BETWEEN_RETRY);
       EncodingCandidate ec = EncodingCandidate.getEncodingCandidate(key, jobconf);
       for (int i = 0; i < retryNum; i++) {
+        LOG.info("The " + i + "th attempt: " + s);
         if (ec.srcStat == null) {
           LOG.info("Raiding Candidate doesn't exist, NO_ACTION");
           return false;
@@ -313,6 +319,11 @@ public class DistRaid {
             throw new IOException(s, e);
           }
           ec.refreshFile(jobconf);
+          try {
+            Thread.sleep(sleepTimeBetwRetry);
+          } catch (InterruptedException ie) {
+            throw new IOException(ie);
+          }
         }
       }
       throw new IOException(s);

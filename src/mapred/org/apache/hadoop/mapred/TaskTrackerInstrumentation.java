@@ -49,6 +49,8 @@ class TaskTrackerInstrumentation  {
   public void timedoutTask(TaskAttemptID t) { }
   
   public void taskFailedPing(TaskAttemptID t) { }
+  
+  public void diskOutOfSpaceTask(TaskAttemptID t) {}
 
   /**
    * Called just before task attempt t starts.

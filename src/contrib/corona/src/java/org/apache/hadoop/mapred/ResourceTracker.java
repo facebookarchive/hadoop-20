@@ -41,7 +41,30 @@ import org.apache.hadoop.corona.Utilities;
 public class ResourceTracker {
   public static final Log LOG = LogFactory.getLog(ResourceTracker.class);
 
-  AtomicInteger resourceRequestId = new AtomicInteger();
+  /** Highest integer that won't be used for request/grant ids */
+  public static final int START_REQUEST_ID = 0;
+  /** Null grant id is an id of non-existing grant, for restoring JT state */
+  public static Integer NONE_GRANT_ID = new Integer(START_REQUEST_ID - 1);
+
+  /**
+   * Determines whether given id represents non-existing resource grant.
+   * @param id an id to check
+   * @return true if resource with given id can't exist
+   */
+  public static boolean isNoneGrantId(Integer id) {
+    return NONE_GRANT_ID.equals(id);
+  }
+
+  /**
+   * Returns id representing non-existing resource grant.
+   * @return id id of resource grant
+   */
+  public static Integer getNoneGrantId() {
+    return NONE_GRANT_ID;
+  }
+
+  /** Keeps last (possibly) assigned resource id */
+  AtomicInteger resourceRequestId = new AtomicInteger(START_REQUEST_ID);
 
   static ComputeSpecs stdMapSpec() {
     short numCpus = 1;
@@ -62,6 +85,8 @@ public class ResourceTracker {
     return spec;
   }
 
+  //This tracks all resources registered and not released in resource tracker,
+  // also those not sent to CM
   HashMap<Integer, ResourceRequest> requestMap =
     new HashMap<Integer, ResourceRequest>();
   // This tracks all resource requests sent to the Cluster Manager.
@@ -311,6 +336,17 @@ public class ResourceTracker {
   public InetAddress getTrackerAddr(String trackerName) {
     synchronized(lockObject) {
       return trackerAddress.get(trackerName);
+    }
+  }
+  
+  /**
+   * Updates mapping between tracker names and adresses
+   * @param trackerName name of tracker
+   * @param addr address of the tracker
+   */
+  public void updateTrackerAddr(String trackerName, InetAddress addr) {
+    synchronized (lockObject) {
+      trackerAddress.put(trackerName, addr);
     }
   }
 

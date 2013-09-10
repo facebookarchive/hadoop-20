@@ -25,6 +25,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.DFSClient;
@@ -35,6 +38,7 @@ import org.apache.hadoop.io.WritableFactory;
 /**
  * Collection of blocks with their locations and the file length.
  */
+@ThriftStruct
 public class LocatedBlocks implements Writable {
   public static final Log LOG = LogFactory.getLog(LocatedBlocks.class);
   private long fileLength;
@@ -61,16 +65,24 @@ public class LocatedBlocks implements Writable {
     underConstruction = false;
   }
 
-  public LocatedBlocks(long flength, List<LocatedBlock> blks,
-      boolean isUnderConstuction) {
-    fileLength = flength;
-    blocks = blks;
+  @ThriftConstructor
+  public LocatedBlocks(@ThriftField(1) long fileLength,
+      @ThriftField(2) List<LocatedBlock> locatedBlocks,
+      @ThriftField(3) boolean isUnderConstuction) {
+    this.fileLength = fileLength;
+    blocks = locatedBlocks;
     underConstruction = isUnderConstuction;
+  }
+
+  /** Shallow copy constructor */
+  public <V extends LocatedBlocks> LocatedBlocks(V other) {
+    this(other.getFileLength(), other.getLocatedBlocks(), other.isUnderConstruction());
   }
 
   /**
    * Get located blocks.
    */
+  @ThriftField(2)
   public List<LocatedBlock> getLocatedBlocks() {
     return blocks;
   }
@@ -92,6 +104,7 @@ public class LocatedBlocks implements Writable {
   /**
    *
    */
+  @ThriftField(1)
   public long getFileLength() {
     return this.fileLength;
   }
@@ -100,6 +113,7 @@ public class LocatedBlocks implements Writable {
    * Return true if the file was under construction when
    * this LocatedBlocks was constructed, false otherwise.
    */
+  @ThriftField(3)
   public boolean isUnderConstruction() {
     return underConstruction;
   }

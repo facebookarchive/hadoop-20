@@ -1082,6 +1082,15 @@ class TaskInProgress {
     if (skipping || !isRunnable() || !isRunning() || 
         completes != 0 || isOnlyCommitPending() ||
         activeTasks.size() > MAX_TASK_EXECS) {
+      if (isMapTask() ? job.shouldLogCannotspeculativeMaps() :
+            job.shouldLogCannotspeculativeReduces()) {
+           LOG.info("Task "+ getTIPId() + " cannot be speculated because of " 
+               + "skipping = "+ skipping + " isRunnable() = "+ isRunnable() 
+               + " isRunning() = "+ isRunning() + " completes = " + completes
+               + " isOnlyCommitPending() = "+ isOnlyCommitPending()  
+               + " activetask-size = "+ activeTasks.size() 
+               + " MAX_TASK_EXECS = " + MAX_TASK_EXECS);
+      }
       return false;
     }
 
@@ -1091,6 +1100,11 @@ class TaskInProgress {
 
     // no speculation for first few seconds
     if (currentTime - lastDispatchTime < speculativeLag) {
+      if (isMapTask() ? job.shouldLogCannotspeculativeMaps() :
+            job.shouldLogCannotspeculativeReduces()) {
+           LOG.info("Task "+ getTIPId() + " cannot be speculated because of "
+               + "no speculation for first few seconds");
+      }
       return false;
     }
 
@@ -1098,6 +1112,14 @@ class TaskInProgress {
     // the acceptable duration allowed for each task - do not speculate
     if ((maxProgressRateForSpeculation > 0) &&
         (progressRate > maxProgressRateForSpeculation)) {
+      if (isMapTask() ? job.shouldLogCannotspeculativeMaps() :
+            job.shouldLogCannotspeculativeReduces()) {
+           LOG.info("Task "+ getTIPId() +" cannot be speculated because "
+               + "the task progress rate is fast enough to complete."
+               + " maxProgressRateForSpeculation = " 
+               + maxProgressRateForSpeculation
+               + " and progressRate = " + progressRate);
+      }
       return false;
     }
 
@@ -1109,7 +1131,6 @@ class TaskInProgress {
       }
       return true;
     }
-
     if (useProcessingRateForSpeculation) {
       return canBeSpeculatedUsingProcessingRate(currentTime);
     } else {
@@ -1118,7 +1139,6 @@ class TaskInProgress {
   }
   
   boolean canBeSpeculatedUsingProgressRate(long currentTime) {
-    
     DataStatistics taskStats = job.getRunningTaskStatistics(isMapTask());
 
     if (LOG.isDebugEnabled()) {
@@ -1140,9 +1160,17 @@ class TaskInProgress {
     // more meaningful number.
     maxDiff = Math.min(maxDiff, taskStats.mean() * job.getStddevMeanRatioMax());
     boolean canBeSpeculated = (taskStats.mean() - progressRate > maxDiff);
+    
     if (canBeSpeculated) {
       LOG.info("Task " + getTIPId() + " can be speculated with progressRate = "
           + progressRate + " and taskStats = " + taskStats);
+    }else{
+      if (isMapTask() ? job.shouldLogCannotspeculativeMaps() :
+            job.shouldLogCannotspeculativeReduces()) {
+           LOG.info("Task "+ getTIPId() + " cannot be speculated with progressRate = "
+           + progressRate + " and taskStats = " + taskStats
+           + " and maxDiff = "+ maxDiff);
+      }
     }
     return canBeSpeculated;
   }
@@ -1616,6 +1644,10 @@ class TaskInProgress {
 
   TreeMap<TaskAttemptID, String> getActiveTasks() {
     return activeTasks;
+  }
+
+  TreeMap<TaskAttemptID, String> getActiveTasksCopy() {
+    return new TreeMap<TaskAttemptID, String>(activeTasks);
   }
 
   int getNumSlotsRequired() {

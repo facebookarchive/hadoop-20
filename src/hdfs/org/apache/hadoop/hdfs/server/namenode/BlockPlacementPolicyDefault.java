@@ -23,6 +23,7 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy.NotEnoughReplicasException;
 import org.apache.hadoop.net.DNSToSwitchMapping;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.Node;
@@ -44,6 +45,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
   protected NetworkTopology clusterMap;
   private FSClusterStats stats;
   private int attemptMultiplier = 0;
+  private int minBlocksToWrite = FSConstants.MIN_BLOCKS_FOR_WRITE;
 
   BlockPlacementPolicyDefault(Configuration conf,  FSClusterStats stats,
                            NetworkTopology clusterMap) {
@@ -58,10 +60,13 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
       NetworkTopology clusterMap, HostsFileReader hostsReader,
       DNSToSwitchMapping dnsToSwitchMapping, FSNamesystem ns) {
     this.considerLoad = conf.getBoolean("dfs.replication.considerLoad", true);
+    this.minBlocksToWrite = conf.getInt("dfs.replication.minBlocksToWrite",
+                                        FSConstants.MIN_BLOCKS_FOR_WRITE);                                        
     this.stats = stats;
     this.clusterMap = clusterMap;
     Configuration newConf = new Configuration();
     this.attemptMultiplier = newConf.getInt("dfs.replication.attemptMultiplier", 200);
+    FSNamesystem.LOG.info("Value for min blocks to write " + this.minBlocksToWrite);
   }
 
   @Override
@@ -213,6 +218,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     }
       
     int numOfResults = results.size();
+    boolean inClusterWriter = writer != null;
     if (writer == null && !newBlock) {
       writer = results.get(0);
     }
@@ -239,9 +245,14 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
         if (clusterMap.isOnSameRack(results.get(0), results.get(1))) {
           choose2ndRack(writer, excludedNodes,
               blocksize, maxNodesPerRack, results);
-        } else if (newBlock){
-          chooseLocalRack(results.get(1), excludedNodes, blocksize, 
+        } else if (newBlock) {
+          if (inClusterWriter) {
+            place3rdReplicaForInClusterWriter(
+                excludedNodes, blocksize, maxNodesPerRack, results);
+          } else {
+            chooseLocalRack(results.get(1), excludedNodes, blocksize, 
                           maxNodesPerRack, results);
+          }
         } else {
           chooseLocalRack(writer, excludedNodes, blocksize,
                           maxNodesPerRack, results);
@@ -257,6 +268,26 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
                + numOfReplicas);
     }
     return writer;
+  }
+  
+  /**
+   * Place the third replica for a new block when the writer is 
+   * in the HDFS cluster and first two replicas are in the same rack
+   * The default policy places the third replica on the same rack
+   * as the 2nd replica
+   * 
+   * @param excludedNodes exluded nodes
+   * @param blocksize blocksize
+   * @param maxNodesPerRack max number of nodes per rack
+   * @param results chosen nodes
+   * @throws NotEnoughReplicasException
+   */
+  protected void place3rdReplicaForInClusterWriter(
+      HashMap<Node, Node> excludedNodes, long blocksize,
+      int maxNodesPerRack,List<DatanodeDescriptor> results
+      ) throws NotEnoughReplicasException {
+    chooseLocalRack(results.get(1), excludedNodes, blocksize, 
+        maxNodesPerRack, results);
   }
     
   /* choose <i>localMachine</i> as the target.
@@ -385,6 +416,10 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     while(numOfAvailableNodes > 0) {
       DatanodeDescriptor chosenNode = 
         (DatanodeDescriptor)(clusterMap.chooseRandom(nodes));
+      
+      if (chosenNode == null) {
+        break;  // no more node to choose, cluster topology must be changed
+      }
 
       Node oldNode = excludedNodes.put(chosenNode, chosenNode);
       if (oldNode == null) { // choosendNode was not in the excluded list
@@ -459,9 +494,9 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     }
 
     long remaining = node.getRemaining() - 
-                     (node.getBlocksScheduled() * blockSize); 
+                     (node.getBlocksScheduled() * blockSize);
     // check the remaining capacity of the target machine
-    if (blockSize* FSConstants.MIN_BLOCKS_FOR_WRITE>remaining) {
+    if (blockSize* this.minBlocksToWrite>remaining) {
       if (logr.isDebugEnabled()) {
         logr.debug("Node "+ NodeBase.getPath(node) +
                 " is not chosen because the node does not have enough space" +
@@ -531,7 +566,14 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     return minRacks - racks.size();
   }
 
-  /** {@inheritDoc} */
+  /**
+   * The algorithm is first to pick a node with least free space from nodes
+   * that are on a rack holding more than one replicas of the block.
+   * So removing such a replica won't remove a rack.
+   * If no such a node is available,
+   * then pick a node with least free space
+   * {@inheritDoc}
+   */
   public DatanodeDescriptor chooseReplicaToDelete(FSInodeInfo inode,
                                                  Block block,
                                                  short replicationFactor,

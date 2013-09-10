@@ -42,6 +42,7 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.StaticMapping;
 import org.apache.hadoop.security.UnixUserGroupInformation;
+import org.apache.hadoop.util.CoronaFailureEventInjector;
 
 /**
  * This class creates a single-process Map-Reduce cluster for junit testing.
@@ -60,6 +61,7 @@ public class MiniCoronaCluster {
   private final String namenode;
   private final UnixUserGroupInformation ugi;
   private final ProxyJobTracker pjt;
+  private CoronaFailureEventInjector rjtFailureInjector;
 
   /**
    * Create MiniCoronaCluster with builder pattern.
@@ -75,6 +77,8 @@ public class MiniCoronaCluster {
     private String[] racks = null;
     private String[] hosts = null;
     private final UnixUserGroupInformation ugi = null;
+    // for failure emulator to remote job tracker
+    private CoronaFailureEventInjector rjtFailureInjector = null;
 
     public Builder namenode(String val) {
       this.namenode = val;
@@ -98,6 +102,10 @@ public class MiniCoronaCluster {
     }
     public Builder hosts(String[] val) {
       this.hosts = val;
+      return this;
+    }
+    public Builder rjtFailureInjector(CoronaFailureEventInjector rjtFailureInjector) {
+      this.rjtFailureInjector = rjtFailureInjector;
       return this;
     }
     public MiniCoronaCluster build() throws IOException {
@@ -125,10 +133,15 @@ public class MiniCoronaCluster {
     // getFreePort() in MiniCoronaCluster
     this.conf.set(CoronaConf.PROXY_JOB_TRACKER_THRIFT_ADDRESS, "localhost:"
         + MiniDFSCluster.getFreePort());
-    pjt = ProxyJobTracker.startProxyTracker(new CoronaConf(conf));
+    // Because we change to get system dir from ProxyJobTracker,
+    // we need to tell the proxy job tracker which sysFs to use
+    CoronaConf pjtConf = new CoronaConf(conf);
+    FileSystem.setDefaultUri(pjtConf, namenode);
+    pjt = ProxyJobTracker.startProxyTracker(pjtConf);
     this.proxyJobTrackerPort = pjt.getRpcPort();
     configureJobConf(conf, builder.namenode, clusterManagerPort,
-      proxyJobTrackerPort, builder.ugi);
+      proxyJobTrackerPort, builder.ugi, null);
+    this.rjtFailureInjector = builder.rjtFailureInjector;
     for (int i = 0; i < builder.numTaskTrackers; ++i) {
       String host = builder.hosts == null ?
           "host" + i + ".foo.com" : builder.hosts[i];
@@ -166,7 +179,7 @@ public class MiniCoronaCluster {
       }
     }
     TaskTrackerRunner taskTracker;
-    taskTracker = new TaskTrackerRunner(idx, numDir, host, conf);
+    taskTracker = new TaskTrackerRunner(idx, numDir, host, conf, rjtFailureInjector);
     addTaskTracker(taskTracker);
   }
 
@@ -198,13 +211,13 @@ public class MiniCoronaCluster {
       conf = new JobConf();
     }
     configureJobConf(conf, namenode, clusterManagerPort, proxyJobTrackerPort,
-      ugi);
+      ugi, this.conf.get(CoronaConf.PROXY_JOB_TRACKER_THRIFT_ADDRESS));
     return conf;
   }
 
   static void configureJobConf(JobConf conf, String namenode,
       int clusterManagerPort, int proxyJobTrackerPort,
-      UnixUserGroupInformation ugi) {
+      UnixUserGroupInformation ugi,String proxyJobTrackerThriftAddr) {
     FileSystem.setDefaultUri(conf, namenode);
     conf.set(CoronaConf.CM_ADDRESS,
                "localhost:" + clusterManagerPort);
@@ -220,6 +233,11 @@ public class MiniCoronaCluster {
       conf.set("mapred.system.dir", "/mapred/system");
       UnixUserGroupInformation.saveToConf(conf,
           UnixUserGroupInformation.UGI_PROPERTY_NAME, ugi);
+    }
+    // We change the logic to get SystemDir by calling thrift API from proxyJobTracker
+    // So we need to set this value for job client
+    if (proxyJobTrackerThriftAddr != null) {
+      conf.set(CoronaConf.PROXY_JOB_TRACKER_THRIFT_ADDRESS, proxyJobTrackerThriftAddr);
     }
     // for debugging have all task output sent to the test output
     JobClient.setTaskOutputFilter(conf, JobClient.TaskStatusFilter.ALL);
@@ -238,7 +256,7 @@ public class MiniCoronaCluster {
     int numDir;
 
     TaskTrackerRunner(int trackerId, int numDir, String hostname,
-        JobConf inputConf) throws IOException {
+        JobConf inputConf, CoronaFailureEventInjector rjtFailureEventInjector) throws IOException {
       this.trackerId = trackerId;
       this.numDir = numDir;
       localDirs = new String[numDir];
@@ -271,6 +289,7 @@ public class MiniCoronaCluster {
       LOG.info("mapred.local.dir is " +  localPath);
       try {
         tt = new CoronaTaskTracker(conf);
+        tt.setJTFailureEventInjector(rjtFailureEventInjector);
         isInitialized = true;
       } catch (Throwable e) {
         isDead = true;
@@ -304,6 +323,7 @@ public class MiniCoronaCluster {
       if (tt != null) {
         try {
           tt.shutdown();
+          tt.forceCleanTaskDir();
         } catch (Throwable e) {
           LOG.error("task tracker " + trackerId +
               " could not shut down", e);

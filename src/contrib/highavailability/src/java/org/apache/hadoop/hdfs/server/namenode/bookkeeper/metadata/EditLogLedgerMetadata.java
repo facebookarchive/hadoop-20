@@ -19,6 +19,7 @@ package org.apache.hadoop.hdfs.server.namenode.bookkeeper.metadata;
 
 import com.google.common.base.Objects;
 import com.google.common.base.Preconditions;
+import com.google.common.collect.ComparisonChain;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.namenode.bookkeeper.BookKeeperEditLogInputStream;
 
@@ -53,7 +54,7 @@ public class EditLogLedgerMetadata implements Comparable<EditLogLedgerMetadata> 
       long ledgerId,
       long firstTxId,
       long lastTxId) {
-    Preconditions.checkArgument(firstTxId > 0);
+    Preconditions.checkArgument(firstTxId >= 0);
     Preconditions.checkArgument(lastTxId >= -1);
     if (lastTxId > -1 && lastTxId < firstTxId) {
         throw new IllegalArgumentException("Ledger can not be empty!");
@@ -62,6 +63,17 @@ public class EditLogLedgerMetadata implements Comparable<EditLogLedgerMetadata> 
     this.ledgerId = ledgerId;
     this.firstTxId = firstTxId;
     this.lastTxId = lastTxId;
+  }
+
+  /**
+   * Creates a new EditLogLedgerMetadata instance that represents the current
+   * instance that has been finalized with the specified last transaction id
+   * @param lastTxId The last transaction id in the finalized ledger
+   * @return Instance representing the finalized ledger
+   */
+  public EditLogLedgerMetadata finalizeWithLastTxId(long lastTxId) {
+    return new EditLogLedgerMetadata(this.logVersion, this.ledgerId,
+        this.firstTxId, lastTxId);
   }
 
   /**

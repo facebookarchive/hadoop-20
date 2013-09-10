@@ -22,6 +22,9 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.io.UTF8;
 import org.apache.hadoop.io.WritableComparable;
 
@@ -31,6 +34,7 @@ import org.apache.hadoop.io.WritableComparable;
  * which it currently represents.
  * 
  */
+@ThriftStruct
 public class DatanodeID implements WritableComparable<DatanodeID> {
   public static final DatanodeID[] EMPTY_ARRAY = {}; 
 
@@ -59,14 +63,15 @@ public class DatanodeID implements WritableComparable<DatanodeID> {
   
   /**
    * Create DatanodeID
-   * @param nodeName (hostname:portNumber) 
+   * @param name (hostname:portNumber)
    * @param storageID data storage ID
    * @param infoPort info server port 
    * @param ipcPort ipc server port
    */
-  public DatanodeID(String nodeName, String storageID,
-      int infoPort, int ipcPort) {
-    this.name = nodeName;
+  @ThriftConstructor
+  public DatanodeID(@ThriftField(1) String name, @ThriftField(2) String storageID,
+      @ThriftField(3) int infoPort, @ThriftField(4) int ipcPort) {
+    this.name = name;
     this.storageID = storageID;
     this.infoPort = infoPort;
     this.ipcPort = ipcPort;
@@ -75,6 +80,7 @@ public class DatanodeID implements WritableComparable<DatanodeID> {
   /**
    * @return hostname:portNumber.
    */
+  @ThriftField(1)
   public String getName() {
     return name;
   }
@@ -82,6 +88,7 @@ public class DatanodeID implements WritableComparable<DatanodeID> {
   /**
    * @return data storage ID.
    */
+  @ThriftField(2)
   public String getStorageID() {
     return this.storageID;
   }
@@ -89,6 +96,7 @@ public class DatanodeID implements WritableComparable<DatanodeID> {
   /**
    * @return infoPort (the port at which the HTTP server bound to)
    */
+  @ThriftField(3)
   public int getInfoPort() {
     if (infoPort < 0)
       return 50075; // default port
@@ -98,6 +106,7 @@ public class DatanodeID implements WritableComparable<DatanodeID> {
   /**
    * @return ipcPort (the port at which the IPC server bound to)
    */
+  @ThriftField(4)
   public int getIpcPort() {
     return ipcPort;
   }
@@ -187,5 +196,16 @@ public class DatanodeID implements WritableComparable<DatanodeID> {
     // So chop off the first two bytes (and hence the signed bits) before 
     // setting the field.
     this.infoPort = in.readShort() & 0x0000ffff;
+  }
+
+  public static void write(DataOutput out, DatanodeID elem) throws IOException {
+    DatanodeID node = new DatanodeID(elem);
+    node.write(out);
+  }
+
+  public static DatanodeID read(DataInput in) throws IOException {
+    DatanodeID node = new DatanodeID();
+    node.readFields(in);
+    return node;
   }
 }

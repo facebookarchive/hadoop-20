@@ -389,7 +389,7 @@ public class TestServerDispatcher {
     
     @Override
     public void handleNotification(NamespaceNotification notification,
-        long serverId) throws InvalidServerIdException, TException {
+        String serverId) throws InvalidServerIdException, TException {
       float randomVal = generator.nextFloat();
 
       if (randomVal < failChance) {

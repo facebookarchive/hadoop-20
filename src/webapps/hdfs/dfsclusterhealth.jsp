@@ -228,7 +228,7 @@
   ClusterStatus cInfo = clusterhealthjsp.generateClusterHealthReport();
 %>
 <%@page import="java.net.InetSocketAddress"%><html>
-<link rel="stylesheet" type="text/css" href="/static/hadoop.css">
+<link rel="stylesheet" type="text/css" href="static/hadoop.css">
 <title>HDFS Cluster <%= nn.getClusterName() %></title>
 <body>
 <h1>Cluster <%= nn.getClusterName() %> Summary</h1>

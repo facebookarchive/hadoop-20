@@ -42,6 +42,7 @@ import org.apache.hadoop.fs.HarFileSystem;
 import org.apache.hadoop.fs.PositionedReadable;
 import org.apache.hadoop.fs.Seekable;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
 import org.apache.hadoop.hdfs.DistributedRaidFileSystem;
@@ -99,17 +100,22 @@ public class RaidUtils {
     public final ParityFilePair parityPair;
     public final int parityBlocksPerStripe;
   }
+  
+  public static RaidInfo getFileRaidInfo(final FileStatus stat,
+      Configuration conf) throws IOException {
+    return getFileRaidInfo(stat, conf, false);
+  }
 
   /**
    * returns the raid for a given file
    */
   public static RaidInfo getFileRaidInfo(final FileStatus stat, 
-      Configuration conf)
+      Configuration conf, boolean skipHarChecking)
     throws IOException {
     // now look for the parity file
     ParityFilePair ppair = null;
     for (Codec c : Codec.getCodecs()) {
-      ppair = ParityFilePair.getParityFile(c, stat, conf);
+      ppair = ParityFilePair.getParityFile(c, stat, conf, skipHarChecking);
       if (ppair != null) {
         return new RaidInfo(c, ppair, c.parityLength);
       }
@@ -119,14 +125,14 @@ public class RaidUtils {
   
   public static void collectFileCorruptBlocksInStripe(
       final DistributedFileSystem dfs, 
-      final RaidInfo raidInfo, final Path filePath, 
+      final RaidInfo raidInfo, final FileStatus fileStatus, 
       final Map<Integer, Integer> corruptBlocksPerStripe)
           throws IOException {
     // read conf
     final int stripeBlocks = raidInfo.codec.stripeLength;
 
     // figure out which blocks are missing/corrupted
-    final FileStatus fileStatus = dfs.getFileStatus(filePath);
+    final Path filePath = fileStatus.getPath();
     final long blockSize = fileStatus.getBlockSize();
     final long fileLength = fileStatus.getLen();
     final long fileLengthInBlocks = RaidNode.numBlocks(fileStatus); 
@@ -161,15 +167,15 @@ public class RaidUtils {
   public static void collectDirectoryCorruptBlocksInStripe(
       final Configuration conf,
       final DistributedFileSystem dfs, 
-      final RaidInfo raidInfo, final Path filePath, 
+      final RaidInfo raidInfo, final FileStatus fileStatus, 
       Map<Integer, Integer> corruptBlocksPerStripe)
           throws IOException {
     final int stripeSize = raidInfo.codec.stripeLength;
-    final FileStatus fileStatus = dfs.getFileStatus(filePath);
+    final Path filePath = fileStatus.getPath();
     final BlockLocation[] fileBlocks = 
       dfs.getFileBlockLocations(fileStatus, 0, fileStatus.getLen());
     LocationPair lp = StripeReader.getBlockLocation(raidInfo.codec, dfs,
-        filePath, 0, conf);
+        filePath, 0, conf, raidInfo.parityPair.getListFileStatus());
     int startBlockIdx = lp.getStripeIdx() * stripeSize +
         lp.getBlockIdxInStripe();
     int startStripeIdx = lp.getStripeIdx();
@@ -183,9 +189,9 @@ public class RaidUtils {
     checkParityBlocks(filePath, allCorruptBlocksPerStripe, blockSize,
         startStripeIdx, endStripeIdx,
         RaidNode.numStripes(numBlocks, stripeSize), raidInfo);
-    DirectoryStripeReader sReader = (DirectoryStripeReader)
-        StripeReader.getStripeReader(raidInfo.codec,
-        conf, blockSize, dfs, lp.getStripeIdx(), fileStatus);
+    DirectoryStripeReader sReader = new DirectoryStripeReader(conf,
+        raidInfo.codec, dfs, lp.getStripeIdx(), -1L, filePath.getParent(),
+        lp.getListFileStatus());
     // Get the corrupt block information for all stripes related to the file
     while (sReader.getCurrentStripeIdx() < endStripeIdx) {
       int stripe = (int)sReader.getCurrentStripeIdx();
@@ -228,15 +234,10 @@ public class RaidUtils {
                                           final long numStripes,
                                           final RaidInfo raidInfo) 
     throws IOException {
-
-
-    final String parityPathStr = raidInfo.parityPair.getPath().toUri().
-      getPath();
     FileSystem parityFS = raidInfo.parityPair.getFileSystem();
     
     // get parity file metadata
-    FileStatus parityFileStatus = parityFS.
-      getFileStatus(new Path(parityPathStr));
+    FileStatus parityFileStatus = raidInfo.parityPair.getFileStatus(); 
     long parityFileLength = parityFileStatus.getLen();
 
     if (parityFileLength != numStripes * raidInfo.parityBlocksPerStripe *
@@ -547,30 +548,6 @@ public class RaidUtils {
     }
   }
 
-  static int getDataTransferProtocolVersion(Configuration conf) throws IOException {
-    FileSystem fs = new Path(Path.SEPARATOR).getFileSystem(conf);
-    if (!(fs instanceof DistributedFileSystem)) {
-      throw new IOException("Configured filesystem is not instance of " + DistributedFileSystem.class);
-    }
-    DistributedFileSystem dfs = (DistributedFileSystem) fs;
-    return dfs.getClient().namenode.getDataTransferProtocolVersion();
-  }
-  
-  static DistributedFileSystem convertToDFS(FileSystem fs) throws IOException {
-    if (fs instanceof DistributedFileSystem) {
-      return (DistributedFileSystem)fs;
-    } else if (fs instanceof FilterFileSystem) {
-      FileSystem underlyingFs = ((FilterFileSystem)fs).getRawFileSystem();
-      if (!(underlyingFs instanceof DistributedFileSystem)) {
-        throw new IOException("Given filesystem cannot convert to DistributedFileSystem" +
-            fs.getClass().getName());
-      }
-      return (DistributedFileSystem)underlyingFs;
-    }
-    throw new IOException("Given filesystem cannot convert to DistributedFileSystem" +
-        fs.getClass().getName());
-  }
-  
   private static int computeMaxMissingBlocks() {
     int max = 0;
     for (Codec codec : Codec.getCodecs()) {

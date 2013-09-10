@@ -106,6 +106,8 @@ public class CorruptReplicasMap{
    * @return collection of nodes. Null if does not exists
    */
   Collection<DatanodeDescriptor> getNodes(Block blk) {
+    if (corruptReplicasMap.size() == 0)
+      return null;
     return corruptReplicasMap.get(blk);
   }
 

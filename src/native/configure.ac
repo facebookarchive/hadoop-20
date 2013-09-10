@@ -56,10 +56,8 @@ if test $JAVA_HOME != ""
 then
   JNI_LDFLAGS="-L$JAVA_HOME/jre/lib/$OS_ARCH/server"
 fi
-ldflags_bak=$LDFLAGS
 LDFLAGS="$LDFLAGS $JNI_LDFLAGS"
 AC_CHECK_LIB([jvm], [JNI_GetCreatedJavaVMs])
-LDFLAGS=$ldflags_bak
 AC_SUBST([JNI_LDFLAGS])
 
 # Checks for header files.
@@ -92,6 +90,10 @@ dnl Check for lzma headers
 AC_CHECK_HEADERS([lzma/lzma.h], AC_COMPUTE_NEEDED_DSO(lzma,HADOOP_LZMA_LIBRARY), AC_MSG_ERROR(lzma headers were not found... native-hadoop library needs lzma to build. Please install the requisite lzma-4.999.5alpha development package.
 ))
 
+dnl Check for lz4 headers
+AC_CHECK_HEADERS([lz4/lz4.h], AC_COMPUTE_NEEDED_DSO(lz4,HADOOP_LZ4_LIBRARY), AC_MSG_ERROR(lz4 headers were not found... native-hadoop library needs lz4 to build. Please install the requisite lz4 development package.
+))
+
 dnl check for posix_fadvise
 AC_CHECK_HEADERS(fcntl.h, [AC_CHECK_FUNCS(posix_fadvise)])
 
@@ -111,6 +113,7 @@ AC_CONFIG_FILES([Makefile
                  src/org/apache/hadoop/io/compress/snappy/Makefile
                  src/org/apache/hadoop/io/compress/zlib/Makefile
                  src/org/apache/hadoop/io/compress/lzma/Makefile
+                 src/org/apache/hadoop/io/compress/lz4/Makefile
                  src/org/apache/hadoop/syscall/Makefile
                  lib/Makefile])
 AC_OUTPUT

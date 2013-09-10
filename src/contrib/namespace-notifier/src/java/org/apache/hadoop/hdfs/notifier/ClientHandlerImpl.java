@@ -17,12 +17,15 @@
  */
 package org.apache.hadoop.hdfs.notifier;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.thrift.TException;
 
 public class ClientHandlerImpl implements ClientHandler.Iface {
-  public static final Log LOG = LogFactory.getLog(NamespaceNotifierClient.class);
+  public static final Log LOG = LogFactory.getLog(ClientHandlerImpl.class);
   
   NamespaceNotifierClient client;
   
@@ -33,14 +36,14 @@ public class ClientHandlerImpl implements ClientHandler.Iface {
   
   @Override
   public void handleNotification(NamespaceNotification notification,
-      long serverId) throws InvalidServerIdException, TException {
+      String serverId) throws InvalidServerIdException, TException {
     if (LOG.isDebugEnabled()) {
       LOG.debug(client.listeningPort + ": Received " +
           NotifierUtils.asString(notification) + " from " +
           "server " + serverId);
     }
     
-    if (serverId != client.connectionManager.serverId) {
+    if (!serverId.equals(client.connectionManager.serverId)) {
       LOG.warn(client.listeningPort + ": Received notification, but not " +
           "connected to server " + serverId +
           ". Answering with InvalidServerIdException");
@@ -48,13 +51,26 @@ public class ClientHandlerImpl implements ClientHandler.Iface {
     }
     
     String eventPath = NotifierUtils.getBasePath(notification);
-    NamespaceEventKey eventKey = new NamespaceEventKey(eventPath,
-        notification.type);
-    if (client.watchedEvents.get(eventKey) == notification.txId) {
-      LOG.warn(client.listeningPort + ": Received duplicate for txId=" +
-          notification.txId);
+    List<String> allAncestorPath = NotifierUtils.getAllAncestors(eventPath);
+    List<NamespaceEventKey> ancestorKeys = new ArrayList<NamespaceEventKey>();
+    for (String ancestorPath : allAncestorPath) {
+      NamespaceEventKey eventKey = new NamespaceEventKey(ancestorPath,
+          notification.type);
+      if (client.watchedEvents.containsKey(eventKey)) {
+        ancestorKeys.add(eventKey);
+      }
     }
-    else {
+    
+    boolean duplicated = false;
+    for (NamespaceEventKey eventKey : ancestorKeys) {
+      if (client.watchedEvents.get(eventKey) == notification.txId) {
+        duplicated = true;
+        LOG.warn(client.listeningPort + ": Received duplicate for txId=" +
+            notification.txId);
+        break;
+      }
+    }
+    if (!duplicated) {
       try {
         client.watcher.handleNamespaceNotification(notification);
       } catch (Exception e) {
@@ -62,7 +78,9 @@ public class ClientHandlerImpl implements ClientHandler.Iface {
             ": wather.handleNamespaceNotification failed", e);
         throw new TException(e);
       }
-      client.watchedEvents.put(eventKey, notification.txId);
+      for (NamespaceEventKey eventKey : ancestorKeys) {
+        client.watchedEvents.put(eventKey, notification.txId);
+      }
     }
     
     client.connectionManager.tracker.messageReceived();
@@ -70,11 +88,11 @@ public class ClientHandlerImpl implements ClientHandler.Iface {
 
   
   @Override
-  public void heartbeat(long serverId) throws InvalidServerIdException,
+  public void heartbeat(String serverId) throws InvalidServerIdException,
       TException {
     LOG.info(client.listeningPort + ": Received heartbeat from server " +
         serverId);
-    if (serverId != client.connectionManager.serverId) {
+    if (!serverId.equals(client.connectionManager.serverId)) {
       LOG.warn(client.listeningPort + ": Not connected to server " + serverId +
           ". Answering with InvalidServerIdException");
       throw new InvalidServerIdException();
@@ -85,7 +103,7 @@ public class ClientHandlerImpl implements ClientHandler.Iface {
   
   
   @Override
-  public void registerServer(long clientId, long serverId, long token)
+  public void registerServer(long clientId, String serverId, long token)
       throws InvalidTokenException, TException {
     LOG.info(client.listeningPort + ": registerServer called with clientId=" +
         clientId + " serverId=" + serverId + " token=" + token);

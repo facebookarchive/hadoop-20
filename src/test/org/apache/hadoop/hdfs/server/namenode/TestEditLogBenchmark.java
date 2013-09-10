@@ -69,11 +69,15 @@ public class TestEditLogBenchmark extends TestCase {
 
       for (int i = 0; i < numLoops; i++) {
         INodeFileUnderConstruction inode = new INodeFileUnderConstruction(
-                            p, replication, blockSize, 0, "", "", null);
+            namesystem.dir.allocateNewInodeId(), p, replication, blockSize, 0, "", "", null);
         for(int b = 0; b < 3; b++) {
           Block block = new Block(NUM_THREADS * threadid + b);
           BlocksMap.BlockInfo bi = new BlocksMap.BlockInfo(block, 3);
-          inode.addBlock(bi);
+          try {
+            inode.storage.addBlock(bi);
+          } catch (IOException ioe) {
+            LOG.error("Cannot add block", ioe);
+          }
         }
         FsPermission perm = new FsPermission((short)0);
         try {
@@ -89,7 +93,8 @@ public class TestEditLogBenchmark extends TestCase {
           editLog.logSetQuota(name, 1, 1); sync();
           editLog.logTimes(name, 0, 0); sync();
           editLog.logSetPermissions(name, perm); sync();
-          editLog.logConcat(name, new String[] { name, name, name }, i); sync();         
+          editLog.logConcat(name, new String[] { name, name, name }, i); 
+          editLog.logMerge(name, name, "xor", new int[] { 1, 1, 1 }, i); sync();
         } catch (IOException e) {
           throw new RuntimeException(e);
         }

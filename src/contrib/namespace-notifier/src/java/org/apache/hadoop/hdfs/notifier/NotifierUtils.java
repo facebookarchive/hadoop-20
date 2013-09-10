@@ -20,8 +20,12 @@ package org.apache.hadoop.hdfs.notifier;
 import java.io.File;
 import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Properties;
 
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
@@ -81,28 +85,57 @@ public class NotifierUtils {
   
   
   public static String getBasePath(NamespaceNotification notification) {
+    String basePath = notification.path.substring(0,
+        notification.path.lastIndexOf(Path.SEPARATOR));
+    if (basePath.trim().length() == 0) {
+      basePath = Path.SEPARATOR;
+    }
+    
     switch (EventType.fromByteValue(notification.getType())) {
       case FILE_ADDED:
-        String basePath = notification.path.substring(0,
-            notification.path.lastIndexOf('/'));
-        if (basePath.trim().length() == 0) {
-          return "/";
-        }
-        return basePath;
       case FILE_CLOSED:
       case NODE_DELETED:
-        return notification.path;
+      case DIR_ADDED:
+        return basePath;
       default:
         return null;
     }
   }
-
+  
+  /**
+   * return all the ancestors of the given path, include itself.
+   * @param eventPath
+   * @return
+   */
+  public static List<String> getAllAncestors(String eventPath) {
+    // check if the path is valid.
+    if (eventPath == null || !eventPath.startsWith(Path.SEPARATOR)) {
+      return null;
+    }
+    
+    if (eventPath.equals(Path.SEPARATOR)) {
+      return Arrays.asList(Path.SEPARATOR);
+    }
+    
+    List<String> ancestors = new ArrayList<String>();
+    while (eventPath.length() > 0) {
+      ancestors.add(eventPath);
+      eventPath = eventPath.substring(0, eventPath.lastIndexOf(Path.SEPARATOR));
+    }
+    // add the root directory
+    ancestors.add(Path.SEPARATOR);
+    
+    return ancestors;
+  }
   
   public static String getAdditionalPath(NamespaceNotification notification) {
     switch (EventType.fromByteValue(notification.getType())) {
       case FILE_ADDED:
+      case FILE_CLOSED:
+      case NODE_DELETED:
+      case DIR_ADDED:
         return notification.path.substring(
-            notification.path.lastIndexOf('/') + 1,
+            notification.path.lastIndexOf(Path.SEPARATOR) + 1,
             notification.path.length());
       default:
         return null;

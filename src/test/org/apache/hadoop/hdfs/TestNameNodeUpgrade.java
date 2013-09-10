@@ -13,7 +13,7 @@ import junit.framework.TestCase;
 
 public class TestNameNodeUpgrade extends TestCase {
   {
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+    DataNode.LOG.getLogger().setLevel(Level.ALL);
     ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)NameNode.LOG).getLogger().setLevel(Level.ALL);
   }

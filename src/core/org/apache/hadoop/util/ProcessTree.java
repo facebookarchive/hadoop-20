@@ -267,6 +267,21 @@ public class ProcessTree {
     return (shexec.getExitCode() == 0 ? true : false);
   }
   
+  public static void doStackTrace(String pid) {
+    ShellCommandExecutor shexec = null;
+    try {
+      String[] args = { "kill", "-QUIT", pid };
+      shexec = new ShellCommandExecutor(args);
+      shexec.execute();
+    } catch (ExitCodeException ee) {
+      return;
+    } catch (IOException ioe) {
+      LOG.warn("Error executing shell command "
+          + Arrays.toString(shexec.getExecString()) + ioe);
+      return;
+    }
+  }
+  
   /**
    * Is the process group with  still alive?
    * 

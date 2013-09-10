@@ -60,7 +60,7 @@ import static org.mockito.Mockito.doAnswer;
  */
 public class TestReadSlowDataNode extends TestCase {
   {
-    ((Log4JLogger) DataNode.LOG).getLogger().setLevel(Level.ALL);
+    DataNode.LOG.getLogger().setLevel(Level.ALL);
     ((Log4JLogger) DFSClient.LOG).getLogger().setLevel(Level.ALL);
   }
 
@@ -119,13 +119,15 @@ public class TestReadSlowDataNode extends TestCase {
   public void testSlowDn() throws IOException, SecurityException,
       NoSuchFieldException, IllegalArgumentException, IllegalAccessException {
     Configuration conf = new Configuration();
+    conf.setLong("dfs.bytes.to.check.read.speed", 128 * 1024);
     conf.setLong("dfs.min.read.speed.bps", 1024 * 200);
-
+    conf.setBoolean("dfs.read.switch.for.slow", true);
+    
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs = cluster.getFileSystem();
     FSDataInputStream in = null;
     try {
-
+      
       // create a new file, write to it and close it.
       //
       Path file1 = new Path("/filestatus.dat");
@@ -144,7 +146,6 @@ public class TestReadSlowDataNode extends TestCase {
       blockReader.setArtificialSlowdown(1000);
       blockReader.isReadLocal = false;
       blockReader.isReadRackLocal = false;
-      blockReader.ENABLE_THROW_FOR_SLOW = true;
       for (int i = 0; i < 1024; i++) {
         in.readByte();
       }

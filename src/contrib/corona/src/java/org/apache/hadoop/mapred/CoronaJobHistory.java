@@ -20,6 +20,7 @@ package org.apache.hadoop.mapred;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -28,11 +29,12 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.mapred.JobHistory.JobHistoryFilesManager;
 import org.apache.hadoop.mapred.JobHistory.Keys;
 import org.apache.hadoop.mapred.JobHistory.LogTask;
+import org.apache.hadoop.mapred.JobHistory.MovedFileInfo;
 import org.apache.hadoop.mapred.JobHistory.RecordTypes;
 import org.apache.hadoop.mapred.JobHistory.Values;
 import org.apache.hadoop.util.StringUtils;
@@ -60,14 +62,14 @@ public class CoronaJobHistory {
   FileSystem doneDirFs;
   Path logFile;
   Path doneFile;
-  Configuration conf;
+  JobConf conf;
   boolean disableHistory = true;
   long jobHistoryBlockSize = 0;
-  JobHistoryFilesManager fileManager = null;
+  CoronaJobHistoryFilesManager fileManager = null;
   JobID jobId;
   ArrayList<PrintWriter> writers = null;
 
-  public CoronaJobHistory(Configuration conf, JobID jobId, String logPath) {
+  public CoronaJobHistory(JobConf conf, JobID jobId, String logPath) {
     try {
       this.conf = conf;
       this.jobId = jobId;
@@ -106,14 +108,15 @@ public class CoronaJobHistory {
         }
       }
 
-      String logFileName = encodeJobHistoryFileName(jobId.toString());
+      String logFileName = encodeJobHistoryFileName(
+          CoronaJobHistoryFilesManager.getHistoryFilename(jobId));
       logFile = new Path(logDir, logFileName);
       doneFile = new Path(doneDir, logFileName);
 
 
       // initialize the file manager
       conf.setInt("mapred.jobtracker.historythreads.maximum", 1);
-      fileManager = new JobHistory.JobHistoryFilesManager(conf,
+      fileManager = new CoronaJobHistoryFilesManager(conf,
           new JobHistoryObserver() {
             public void historyFileCopied(JobID jobid, String historyFile) {
 
@@ -184,9 +187,13 @@ public class CoronaJobHistory {
     for (PrintWriter out : writers) {
       out.close();
     }
-    // By clearning the writers, we will prevent JobHistory.moveToDone() from
+    // By clearning the writers and notify the thread waiting on it, 
+    // we will prevent JobHistory.moveToDone() from
     // waiting on writer
-    writers.clear();
+    synchronized (writers) {
+      writers.clear();
+      writers.notifyAll();
+    }
   }
 
   /**
@@ -197,7 +204,7 @@ public class CoronaJobHistory {
    * @param submitTime time when job tracker received the job
    * @throws IOException
    */
-  public void logSubmitted(String jobConfPath, long submitTime)
+  public void logSubmitted(String jobConfPath, long submitTime, String jobTrackerId)
     throws IOException {
 
     if (disableHistory) {
@@ -211,6 +218,13 @@ public class CoronaJobHistory {
     try {
       FSDataOutputStream out = null;
       PrintWriter writer = null;
+      
+      // In case the old JT is still running, but we can't connect to it, we
+      // should ensure that it won't write to our (new JT's) job history file.
+      if (logDirFs.exists(logFile)) {
+        LOG.info("Remove the old history file " + logFile);
+        logDirFs.delete(logFile, true);
+      }
 
       out = logDirFs.create(logFile,
                             new FsPermission(HISTORY_FILE_PERMISSION),
@@ -239,9 +253,9 @@ public class CoronaJobHistory {
       //add to writer as well
       log(writers, RecordTypes.Job,
           new Keys[]{Keys.JOBID, Keys.JOBNAME, Keys.USER,
-                       Keys.SUBMIT_TIME, Keys.JOBCONF },
+                       Keys.SUBMIT_TIME, Keys.JOBCONF, Keys.JOBTRACKERID },
           new String[]{jobId.toString(), jobName, user,
-                       String.valueOf(submitTime) , jobConfPath}
+                       String.valueOf(submitTime) , jobConfPath, jobTrackerId}
           );
 
     } catch (IOException e) {
@@ -250,7 +264,8 @@ public class CoronaJobHistory {
     }
 
     /* Storing the job conf on the log dir */
-    Path jobFilePath = new Path(logDir, jobId.toString() +  "_conf.xml");
+    Path jobFilePath = new Path(logDir,
+        CoronaJobHistoryFilesManager.getConfFilename(jobId));
     fileManager.setConfFile(jobId, jobFilePath);
     FSDataOutputStream jobFileOut = null;
     try {
@@ -451,8 +466,7 @@ public class CoronaJobHistory {
     if (disableHistory) {
       return;
     }
-
-    fileManager.moveToDone(jobId, true);
+    fileManager.moveToDone(jobId, true, CoronaJobTracker.getMainJobID(jobId));
   }
 
   /**
@@ -939,4 +953,5 @@ public class CoronaJobHistory {
       }
     }
   }
+
 }

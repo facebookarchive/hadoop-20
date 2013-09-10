@@ -17,47 +17,52 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
+import static org.apache.hadoop.hdfs.server.datanode.DataNode.DN_CLIENTTRACE_FORMAT;
+
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.EOFException;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.nio.channels.ClosedChannelException;
-import java.nio.channels.FileChannel;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
+import java.nio.channels.ClosedChannelException;
 import java.security.MessageDigest;
 
 import org.apache.commons.logging.Log;
+import org.apache.hadoop.fs.FSDataNodeReadProfilingData;
+import org.apache.hadoop.hdfs.protocol.AppendBlockHeader;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.BlockChecksumHeader;
 import org.apache.hadoop.hdfs.protocol.CopyBlockHeader;
-import org.apache.hadoop.hdfs.protocol.ReadMetadataHeader;
-import org.apache.hadoop.hdfs.protocol.ReplaceBlockHeader;
-import org.apache.hadoop.hdfs.protocol.VersionAndOpcode;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.ReadBlockHeader;
+import org.apache.hadoop.hdfs.protocol.ReadMetadataHeader;
+import org.apache.hadoop.hdfs.protocol.ReplaceBlockHeader;
+import org.apache.hadoop.hdfs.protocol.VersionAndOpcode;
 import org.apache.hadoop.hdfs.protocol.WriteBlockHeader;
-import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.io.ReadOptions;
 import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.WriteOptions;
+import org.apache.hadoop.io.nativeio.NativeIO;
 import org.apache.hadoop.net.NetUtils;
-import org.apache.hadoop.net.SocketOutputStream;
 import org.apache.hadoop.util.DataChecksum;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
-import static org.apache.hadoop.hdfs.server.datanode.DataNode.DN_CLIENTTRACE_FORMAT;
 
 /**
  * Thread for processing incoming/outgoing data stream.
@@ -101,8 +106,10 @@ class DataXceiver implements Runnable, FSConstants {
   }
   
   private void getAddresses() {
-    remoteAddress = s.getRemoteSocketAddress().toString();
-    localAddress = s.getLocalSocketAddress().toString();    
+    if (s != null) {
+      remoteAddress = s.getRemoteSocketAddress().toString();
+      localAddress = s.getLocalSocketAddress().toString();    
+    }
   }
 
   /**
@@ -133,7 +140,6 @@ class DataXceiver implements Runnable, FSConstants {
     DataInputStream in=null; 
     byte op = -1;
     int opsProcessed = 0;
-    
     try {
       s.setTcpNoDelay(true);
       s.setSoTimeout(datanode.socketTimeout*5);
@@ -148,6 +154,8 @@ class DataXceiver implements Runnable, FSConstants {
       // Setting keepalive timeout to 0 to disable this behavior.
       
       do {
+        long startNanoTime = System.nanoTime();
+        long startTime = DataNode.now(); 
         
         VersionAndOpcode versionAndOpcode = new VersionAndOpcode();
         
@@ -190,10 +198,10 @@ class DataXceiver implements Runnable, FSConstants {
               + " exceeds the limit of concurrent xcievers "
               + dataXceiverServer.maxXceiverCount);
         }
-        long startTime = DataNode.now();
+        
         switch ( op ) {
         case DataTransferProtocol.OP_READ_BLOCK:
-          readBlock( in, versionAndOpcode );
+          readBlock( in, versionAndOpcode , startNanoTime);
           datanode.myMetrics.readBlockOp.inc(DataNode.now() - startTime);
           if (local)
             datanode.myMetrics.readsFromLocalClient.inc();
@@ -237,6 +245,14 @@ class DataXceiver implements Runnable, FSConstants {
           getBlockCrc(in, versionAndOpcode);
           datanode.myMetrics.blockChecksumOp.inc(DataNode.now() - startTime);
           break;
+        case DataTransferProtocol.OP_APPEND_BLOCK:
+          appendBlock(in, versionAndOpcode);
+          datanode.myMetrics.appendBlockOp.inc(DataNode.now() - startTime);
+          if (local)
+            datanode.myMetrics.writesFromLocalClient.inc();
+          else
+            datanode.myMetrics.writesFromRemoteClient.inc();
+          break;
         default:
           throw new IOException("Unknown opcode " + op + " in data stream");
         }
@@ -258,6 +274,11 @@ class DataXceiver implements Runnable, FSConstants {
               + StringUtils.stringifyException(t));
         }
       } else {
+        if (op == DataTransferProtocol.OP_READ_BLOCK
+            || op == DataTransferProtocol.OP_READ_BLOCK_ACCELERATOR) {
+          datanode.myMetrics.blockReadFailures.inc();
+        }
+        datanode.myMetrics.opFailures.inc();
         LOG.error(datanode.getDatanodeInfo() + ":DataXceiver, at " + 
                   s.toString(),t);
       }
@@ -277,15 +298,23 @@ class DataXceiver implements Runnable, FSConstants {
    * @throws IOException
    */
   private void readBlock(DataInputStream in,
-      VersionAndOpcode versionAndOpcode) throws IOException {
+      VersionAndOpcode versionAndOpcode, long receiverStartTime) throws IOException {
     //
     // Read in the header
     //
+    long startNanoTime = System.nanoTime();
     long startTime = System.currentTimeMillis();
     
     ReadBlockHeader header = new ReadBlockHeader(versionAndOpcode);
     header.readFields(in);
     
+    ReadOptions options = header.getReadOptions();
+    boolean ioprioEnabled = !options.isIoprioDisabled();
+    if (ioprioEnabled) {
+      NativeIO.ioprioSetIfPossible(options.getIoprioClass(),
+          options.getIoprioData());
+    }
+
     int namespaceId = header.getNamespaceId();
     long blockId = header.getBlockId();
     Block block = new Block( blockId, 0 , header.getGenStamp());
@@ -293,7 +322,16 @@ class DataXceiver implements Runnable, FSConstants {
     long length = header.getLen();
     String clientName = header.getClientName();
     reuseConnection = header.getReuseConnection();
+    boolean shouldProfile = header.getShouldProfile();
+    FSDataNodeReadProfilingData dnData = shouldProfile ? 
+        new FSDataNodeReadProfilingData() : null;
 
+    if (shouldProfile) {
+      dnData.readVersionAndOpCodeTime = (startNanoTime - receiverStartTime) ;
+      dnData.readBlockHeaderTime = (System.nanoTime() - startNanoTime);
+      dnData.startProfiling();
+    }
+    
     // send the block
     OutputStream baseStream = NetUtils.getOutputStream(s, 
         datanode.socketWriteTimeout);
@@ -316,12 +354,18 @@ class DataXceiver implements Runnable, FSConstants {
           + " Served block " + block + " to " + s.getInetAddress();
     }
     updateCurrentThreadName("sending block " + block);
+    InjectionHandler.processEvent(InjectionEvent.DATANODE_READ_BLOCK);
         
     try {
       try {
         blockSender = new BlockSender(namespaceId, block, startOffset, length,
-            datanode.ignoreChecksumWhenRead, true, true, false, datanode,
-            clientTraceFmt);
+            datanode.ignoreChecksumWhenRead, true, true, false,
+            versionAndOpcode.getDataTransferVersion() >=
+              DataTransferProtocol.PACKET_INCLUDE_VERSION_VERSION,
+            false, datanode, clientTraceFmt);
+        if (shouldProfile) {
+          blockSender.enableReadProfiling(dnData);
+        }
      } catch(IOException e) {
         sendResponse(s, (short) DataTransferProtocol.OP_STATUS_ERROR, 
             datanode.socketWriteTimeout);
@@ -333,8 +377,15 @@ class DataXceiver implements Runnable, FSConstants {
       }
 
       out.writeShort(DataTransferProtocol.OP_STATUS_SUCCESS); // send op status
+      if (shouldProfile) {
+        dnData.startSendBlock();
+      }
+      
       long read = blockSender.sendBlock(out, baseStream, null); // send data
-
+      if (shouldProfile) {
+        dnData.endSendBlock();
+      }
+      
       // report finalization information and block length.
       ReplicaToRead replicaRead = blockSender.getReplicaToRead();
       if (replicaRead == null) {
@@ -344,10 +395,18 @@ class DataXceiver implements Runnable, FSConstants {
         throw new IOException("Can't find block " + block + " in volumeMap");
       }
       
+      int fadvise = header.getReadOptions().getFadvise();
+      if (fadvise != 0) {
+        blockSender.fadviseStream(fadvise, startOffset, length);
+      }
+
       boolean isBlockFinalized = replicaRead.isFinalized();
       long blockLength = replicaRead.getBytesVisible();
       out.writeBoolean(isBlockFinalized);
       out.writeLong(blockLength);
+      if (shouldProfile) {
+        dnData.write(out);
+      }
       out.flush();
 
       if (blockSender.didSendEntireByteRange()) {
@@ -364,6 +423,19 @@ class DataXceiver implements Runnable, FSConstants {
       }
       
       long readDuration = System.currentTimeMillis() - startTime;
+      
+      if (readDuration > datanode.thresholdLogReadDuration
+          && !ClientTraceLog.isInfoEnabled()) {
+        // No need to double logging if we've logged duration of every read
+        
+        if (remoteAddress == null) {
+            getAddresses();
+        }
+        LOG.info("Sent block " + block + " to " + remoteAddress + " offset "
+            + startOffset + " len " + length + " duration " + readDuration
+            + " (longer than " + datanode.thresholdLogReadDuration + ")");
+      }
+      
       datanode.myMetrics.bytesReadLatency.inc(readDuration);
       datanode.myMetrics.bytesRead.inc((int) read);
       if (read > KB_RIGHT_SHIFT_MIN) {
@@ -397,6 +469,210 @@ class DataXceiver implements Runnable, FSConstants {
   }
 
   /**
+   * Append a block on disk.
+   * 
+   * @param in The stream to read from
+   * @param versionAndOpcode
+   * @throws IOException
+   */
+  private void appendBlock(DataInputStream in,
+      VersionAndOpcode versionAndOpcode) throws IOException {
+    DatanodeInfo srcDataNode = null;
+    if (LOG.isDebugEnabled()) {
+      LOG.debug("appendBlock receive buf size " + s.getReceiveBufferSize() + 
+            " tcp no delay " + s.getTcpNoDelay());
+    }
+    
+    InjectionHandler.processEventIO(InjectionEvent.DATANODE_APPEND_BLOCK);
+    
+    // Read in the header
+    long startTime = System.currentTimeMillis();
+    AppendBlockHeader headerToReceive = new AppendBlockHeader(versionAndOpcode);
+    headerToReceive.readFields(in);
+    int namespaceid = headerToReceive.getNamespaceId();
+    Block block = new Block(headerToReceive.getBlockId(), 
+        headerToReceive.getNumBytes(), headerToReceive.getGenStamp());
+    if (LOG.isInfoEnabled()) {
+      if (remoteAddress == null) {
+        getAddresses();
+      }
+      LOG.info("Receiving block " + block + 
+          " src: " + remoteAddress + 
+          " dest: " + localAddress);
+    }
+    
+    int pipelineSize = headerToReceive.getPipelineDepth();
+    String client = headerToReceive.getWritePipelineInfo().getClientName();
+    boolean hasSrcDataNode = headerToReceive.getWritePipelineInfo()
+        .hasSrcDataNode();
+    if (hasSrcDataNode) {
+      srcDataNode = headerToReceive.getWritePipelineInfo().getSrcDataNode();
+    }
+    int numTargets = headerToReceive.getWritePipelineInfo().getNumTargets();
+    DatanodeInfo targets[] = headerToReceive.getWritePipelineInfo().getNodes();
+
+    DataOutputStream mirrorOut = null;  // stream to next target
+    DataInputStream mirrorIn = null;    // reply from next target
+    DataOutputStream replyOut = null;   // stream to prev target
+    Socket mirrorSock = null;           // socket to next target
+    BlockReceiver blockReceiver = null; // responsible for data handling
+    String mirrorNode = null;           // the name:port of next target
+    String firstBadLink = "";           // first datanode that failed in connection setup
+
+    updateCurrentThreadName("receiving append block " + block + " client=" + client);
+
+    try {
+
+      // update the block 
+      Block oldBlock = new Block(headerToReceive.getBlockId());
+      oldBlock = datanode.getBlockInfo(namespaceid, oldBlock);
+
+      boolean isSecondary = (targets.length + 1 != pipelineSize);
+      // open a block receiver and check if the block does not exist
+      // append doesn't support per block fadvise
+      blockReceiver = new BlockReceiver(namespaceid, oldBlock, block, in, 
+          s.getRemoteSocketAddress().toString(),
+          s.getLocalSocketAddress().toString(),
+          true, client, srcDataNode, datanode, isSecondary, 0, false,
+          versionAndOpcode.getDataTransferVersion() >=
+            DataTransferProtocol.PACKET_INCLUDE_VERSION_VERSION,
+            headerToReceive.getWritePipelineInfo().getWriteOptions().getSyncFileRange());
+
+      // get a connection back to the previous target
+      replyOut = new DataOutputStream(new BufferedOutputStream(
+          NetUtils.getOutputStream(s, datanode.socketWriteTimeout),
+          SMALL_BUFFER_SIZE));
+
+      //
+      // Open network conn to backup machine, if 
+      // appropriate
+      //
+      if (targets.length > 0) {
+        InetSocketAddress mirrorTarget = null;
+        // Connect to backup machine
+        mirrorNode = targets[0].getName();
+        mirrorTarget = NetUtils.createSocketAddr(mirrorNode);
+        mirrorSock = datanode.newSocket();
+        try {
+          int timeoutValue = datanode.socketTimeout +
+              (datanode.socketReadExtentionTimeout * numTargets);
+          int writeTimeout = datanode.socketWriteTimeout + 
+              (datanode.socketWriteExtentionTimeout * numTargets);
+          NetUtils.connect(mirrorSock, mirrorTarget, timeoutValue);
+          mirrorSock.setSoTimeout(timeoutValue);
+          mirrorSock.setSendBufferSize(DEFAULT_DATA_SOCKET_SIZE);
+          mirrorOut = new DataOutputStream(
+              new BufferedOutputStream(
+                  NetUtils.getOutputStream(mirrorSock, writeTimeout),
+                  SMALL_BUFFER_SIZE));
+          mirrorIn = new DataInputStream(NetUtils.getInputStream(mirrorSock));
+
+          // Write header: Copied from DFSClient.java!
+          AppendBlockHeader headerToSend = new AppendBlockHeader(
+              versionAndOpcode.getDataTransferVersion(), namespaceid,
+              block.getBlockId(), block.getNumBytes(), block.getGenerationStamp(), pipelineSize,
+              hasSrcDataNode, srcDataNode, targets.length - 1, targets,
+              client);
+          headerToSend.writeVersionAndOpCode(mirrorOut);
+          headerToSend.write(mirrorOut);
+          blockReceiver.writeChecksumHeader(mirrorOut);
+          mirrorOut.flush();
+
+          // read connect ack (only for clients, not for replication req)
+          if (client.length() != 0) {
+            firstBadLink = Text.readString(mirrorIn);
+            if (LOG.isDebugEnabled() || firstBadLink.length() > 0) {
+              LOG.info("Datanode " + targets.length +
+                  " got response for connect ack " +
+                  " from downstream datanode with firstbadlink as " +
+                  firstBadLink);
+            }
+          }
+
+        } catch (IOException e) {
+          if (client.length() != 0) {
+            Text.writeString(replyOut, mirrorNode);
+            replyOut.flush();
+          }
+          IOUtils.closeStream(mirrorOut);
+          mirrorOut = null;
+          IOUtils.closeStream(mirrorIn);
+          mirrorIn = null;
+          IOUtils.closeSocket(mirrorSock);
+          mirrorSock = null;
+          if (client.length() > 0) {
+            throw e;
+          } else {
+            LOG.info(datanode.getDatanodeInfo() + ":Exception transfering block " +
+                block + " to mirror " + mirrorNode +
+                ". continuing without the mirror.\n" +
+                StringUtils.stringifyException(e));
+          }
+        }
+      }
+
+      // send connect ack back to source (only for clients)
+      if (client.length() != 0) {
+        if (LOG.isDebugEnabled() || firstBadLink.length() > 0) {
+          LOG.info("Datanode " + targets.length +
+              " forwarding connect ack to upstream firstbadlink is " +
+              firstBadLink);
+        }
+        Text.writeString(replyOut, firstBadLink);
+        replyOut.flush();
+      }
+
+      // receive the block and mirror to the next target
+      String mirrorAddr = (mirrorSock == null) ? null : mirrorNode;
+      long totalReceiveSize = blockReceiver.receiveBlock(mirrorOut, mirrorIn, replyOut,
+          mirrorAddr, null, targets.length);
+
+      // if this write is for a replication request (and not
+      // from a client), then confirm block. For client-writes,
+      // the block is finalized in the PacketResponder.
+      if (client.length() == 0) {
+        datanode.notifyNamenodeReceivedBlock(namespaceid, block, null);
+        LOG.info("Received block " + block + 
+            " src: " + remoteAddress +
+            " dest: " + localAddress +
+            " of size " + block.getNumBytes());
+      } else {
+        // Log the fact that the block has been received by this datanode and
+        // has been written to the local disk on this datanode.
+        LOG.info("Received Block " + block +
+            " src: " + remoteAddress +
+            " dest: " + localAddress +
+            " of size " + block.getNumBytes() +
+            " and written to local disk");
+      }
+
+      if (datanode.blockScanner != null) {
+        datanode.blockScanner.deleteBlock(namespaceid, oldBlock);
+        datanode.blockScanner.addBlock(namespaceid, block);
+      }
+
+      long writeDuration = System.currentTimeMillis() - startTime;
+      datanode.myMetrics.bytesWrittenLatency.inc(writeDuration);
+      if (totalReceiveSize > KB_RIGHT_SHIFT_MIN) {
+        datanode.myMetrics.bytesWrittenRate.inc((int) (totalReceiveSize >> KB_RIGHT_SHIFT_BITS),
+            writeDuration);
+      }
+
+    } catch (IOException ioe) {
+      LOG.info("appendBlock " + block + " received exception " + ioe);
+      throw ioe;
+    } finally {
+      // close all opened streams
+      IOUtils.closeStream(mirrorOut);
+      IOUtils.closeStream(mirrorIn);
+      IOUtils.closeStream(replyOut);
+      IOUtils.closeSocket(mirrorSock);
+      IOUtils.closeStream(blockReceiver);
+    }
+  }
+  
+  
+  /**
    * Write a block to disk.
    * 
    * @param in The stream to read from
@@ -417,6 +693,15 @@ class DataXceiver implements Runnable, FSConstants {
     WriteBlockHeader headerToReceive = new WriteBlockHeader(
         versionAndOpcode);
     headerToReceive.readFields(in);
+
+    WriteOptions options = headerToReceive.getWritePipelineInfo()
+        .getWriteOptions();
+    boolean ioprioEnabled = !options.isIoprioDisabled();
+    if (ioprioEnabled) {
+      NativeIO.ioprioSetIfPossible(options.getIoprioClass(),
+          options.getIoprioData());
+    }
+
     int namespaceid = headerToReceive.getNamespaceId();
     Block block = new Block(headerToReceive.getBlockId(), 
         dataXceiverServer.estimateBlockSize, headerToReceive.getGenStamp());
@@ -430,13 +715,16 @@ class DataXceiver implements Runnable, FSConstants {
     }
     int pipelineSize = headerToReceive.getPipelineDepth(); // num of datanodes in entire pipeline
     boolean isRecovery = headerToReceive.isRecoveryFlag(); // is this part of recovery?
-    String client = headerToReceive.getClientName(); // working on behalf of this client
-    boolean hasSrcDataNode = headerToReceive.isHasSrcDataNode(); // is src node info present
+    String client = headerToReceive.getWritePipelineInfo().getClientName(); // working on behalf of this client
+    boolean hasSrcDataNode = headerToReceive.getWritePipelineInfo()
+        .hasSrcDataNode(); // is src node info present
     if (hasSrcDataNode) {
-      srcDataNode = headerToReceive.getSrcDataNode();
+      srcDataNode = headerToReceive.getWritePipelineInfo().getSrcDataNode();
     }
-    int numTargets = headerToReceive.getNumTargets();
-    DatanodeInfo targets[] = headerToReceive.getNodes();
+    int numTargets = headerToReceive.getWritePipelineInfo().getNumTargets();
+    DatanodeInfo targets[] = headerToReceive.getWritePipelineInfo().getNodes();
+    int fadvise = headerToReceive.getWritePipelineInfo().getWriteOptions()
+        .getFadvise();
 
     DataOutputStream mirrorOut = null;  // stream to next target
     DataInputStream mirrorIn = null;    // reply from next target
@@ -447,12 +735,19 @@ class DataXceiver implements Runnable, FSConstants {
     String firstBadLink = "";           // first datanode that failed in connection setup
 
     updateCurrentThreadName("receiving block " + block + " client=" + client);
+    InjectionHandler.processEvent(InjectionEvent.DATANODE_WRITE_BLOCK);
     try {
+      boolean ifProfileEnabled = headerToReceive.getWritePipelineInfo()
+          .getWriteOptions().ifProfileEnabled();
+      boolean isSecondary = (targets.length + 1 != pipelineSize);
       // open a block receiver and check if the block does not exist
-      blockReceiver = new BlockReceiver(namespaceid, block, in, 
+      blockReceiver = new BlockReceiver(namespaceid, block, block, in, 
           s.getRemoteSocketAddress().toString(),
           s.getLocalSocketAddress().toString(),
-          isRecovery, client, srcDataNode, datanode);
+          isRecovery, client, srcDataNode, datanode, isSecondary, fadvise,
+          ifProfileEnabled, versionAndOpcode.getDataTransferVersion() >=
+            DataTransferProtocol.PACKET_INCLUDE_VERSION_VERSION,
+            options.getSyncFileRange());
 
       // get a connection back to the previous target
       replyOut = new DataOutputStream(new BufferedOutputStream(
@@ -485,10 +780,11 @@ class DataXceiver implements Runnable, FSConstants {
 
           // Write header: Copied from DFSClient.java!
           WriteBlockHeader headerToSend = new WriteBlockHeader(
-              DataTransferProtocol.DATA_TRANSFER_VERSION, namespaceid,
+              versionAndOpcode.getDataTransferVersion(), namespaceid,
               block.getBlockId(), block.getGenerationStamp(), pipelineSize,
               isRecovery, hasSrcDataNode, srcDataNode, targets.length - 1, targets,
               client);
+          headerToSend.getWritePipelineInfo().setWriteOptions(options);
           headerToSend.writeVersionAndOpCode(mirrorOut);
           headerToSend.write(mirrorOut);
           blockReceiver.writeChecksumHeader(mirrorOut);
@@ -832,8 +1128,11 @@ class DataXceiver implements Runnable, FSConstants {
     updateCurrentThreadName("Copying block " + block);
     try {
       // check if the block exists or not
-      blockSender = new BlockSender(namespaceId, block, 0, -1,
-          false, false, false, datanode);
+      blockSender = new BlockSender(namespaceId, block, 0, -1, false, false, false,
+          false,
+          versionAndOpcode.getDataTransferVersion() >=
+              DataTransferProtocol.PACKET_INCLUDE_VERSION_VERSION, true,
+          datanode, null);
 
       // set up response stream
       OutputStream baseStream = NetUtils.getOutputStream(
@@ -938,10 +1237,13 @@ class DataXceiver implements Runnable, FSConstants {
           NetUtils.getInputStream(proxySock), BUFFER_SIZE));
 
       // open a block receiver and check if the block does not exist
-      blockReceiver = new BlockReceiver(namespaceId,
+      blockReceiver = new BlockReceiver(namespaceId, block,
           block, proxyReply, proxySock.getRemoteSocketAddress().toString(),
           proxySock.getLocalSocketAddress().toString(),
-          false, "", null, datanode);
+          false, "", null, datanode, true, 0, false,
+          versionAndOpcode.getDataTransferVersion() >=
+            DataTransferProtocol.PACKET_INCLUDE_VERSION_VERSION,
+            WriteOptions.SYNC_FILE_RANGE_DEFAULT);
 
       // receive a block
       totalReceiveSize = blockReceiver.receiveBlock(null, null, null, null,

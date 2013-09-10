@@ -1,5 +1,5 @@
   <configuration>
-    <srcPath name="hdfs://dfs1.xx:9000/user/dhruba">
+    <srcPath name="hdfs://testdfsA.xx:9000/user/user1">
        <property>
          <name>replication</name>
          <value>2</value>
@@ -20,7 +20,7 @@
          </description>
        </property>
 
-       <destPath name="hdfs://dfs3.xxx:9000/user/dhruba"</destPath>
+       <destPath name="hdfs://testdfsB.xxx:9000/user/user1"</destPath>
          <property>
           <name>replication</name>
           <value>1</value>

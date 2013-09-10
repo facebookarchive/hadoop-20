@@ -45,7 +45,7 @@ class EmptyServerCore implements IServerCore {
 
   AtomicBoolean shouldShutdown = new AtomicBoolean(false);
   NamespaceNotifierMetrics metrics =
-      new NamespaceNotifierMetrics(new Configuration(), -1);
+      new NamespaceNotifierMetrics(new Configuration(), "");
   
   @Override
   public void run() {}
@@ -57,6 +57,11 @@ class EmptyServerCore implements IServerCore {
   @Override
   public void shutdown() {
     shouldShutdown.set(true);
+  }
+  
+  @Override
+  public String getServiceName() {
+    return "";
   }
   
   @Override 
@@ -118,8 +123,8 @@ class EmptyServerCore implements IServerCore {
       throws ClientNotSubscribedException {}
 
   @Override
-  public long getId() {
-    return 0;
+  public String getId() {
+    return "";
   }
 
   @Override

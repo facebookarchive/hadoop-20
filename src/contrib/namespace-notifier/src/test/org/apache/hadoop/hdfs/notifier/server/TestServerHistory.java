@@ -23,12 +23,15 @@ import java.util.Queue;
 
 import junit.framework.Assert;
 
+import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.notifier.ClientHandlerImpl;
 import org.apache.hadoop.hdfs.notifier.EventType;
 import org.apache.hadoop.hdfs.notifier.NamespaceEvent;
 import org.apache.hadoop.hdfs.notifier.NamespaceNotification;
 import org.apache.hadoop.hdfs.notifier.TransactionIdTooOldException;
+import org.apache.log4j.Level;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.slf4j.Logger;
@@ -38,6 +41,12 @@ public class TestServerHistory {
   static private Logger LOG = LoggerFactory.getLogger(TestServerHistory.class);
 
   static Configuration conf;
+  
+  {
+    ((Log4JLogger)ServerLogReaderTransactional.LOG).getLogger().setLevel(Level.ALL);
+    ((Log4JLogger)ClientHandlerImpl.LOG).getLogger().setLevel(Level.ALL);
+    ((Log4JLogger)ServerHistory.LOG).getLogger().setLevel(Level.ALL);
+  }
   
   @BeforeClass
   public static void initConf() {
@@ -90,16 +99,25 @@ public class TestServerHistory {
     Assert.assertEquals("/a/c", historyNotifications.peek().path);
     
     // Step 2 - test with FILE_CLOSED
-    history.storeNotification(new NamespaceNotification("/a/b",
+    history.storeNotification(new NamespaceNotification("/a/d",
         EventType.FILE_CLOSED.getByteValue(), 12));
-    history.storeNotification(new NamespaceNotification("/a/b",
+    history.storeNotification(new NamespaceNotification("/a/e",
         EventType.FILE_CLOSED.getByteValue(), 13));
     historyNotifications = new LinkedList<NamespaceNotification>();
-    history.addNotificationsToQueue(new NamespaceEvent("/a/b",
+    history.addNotificationsToQueue(new NamespaceEvent("/a",
         EventType.FILE_CLOSED.getByteValue()), 12, historyNotifications);
     Assert.assertEquals(1, historyNotifications.size());
     Assert.assertEquals(13, historyNotifications.peek().txId);
-    Assert.assertEquals("/a/b", historyNotifications.peek().path);
+    Assert.assertEquals("/a/e", historyNotifications.peek().path);
+    
+    // test the sub directories
+    historyNotifications = new LinkedList<NamespaceNotification>();
+    history.addNotificationsToQueue(new NamespaceEvent("/",
+        EventType.FILE_ADDED.getByteValue()), 10, historyNotifications);
+    Assert.assertEquals(1, historyNotifications.size());
+    history.addNotificationsToQueue(new NamespaceEvent("/",
+        EventType.FILE_CLOSED.getByteValue()), 10, historyNotifications);
+    Assert.assertEquals(3, historyNotifications.size());
     
     core.shutdown();
   }
@@ -178,7 +196,8 @@ public class TestServerHistory {
     history.storeNotification(new NamespaceNotification("/a/c",
         EventType.FILE_ADDED.getByteValue(), 11));
     Thread.sleep(historyLength + 50);
-    Assert.assertFalse(history.history.containsKey("/a"));
+    Assert.assertEquals(0, history.orderedHistoryList.size());
+    Assert.assertEquals(0, history.historyTree.children.size());
     core.shutdown();
   }
   
@@ -205,19 +224,7 @@ public class TestServerHistory {
     core.shutdown();
     historyThread.join();
     
-    Assert.assertEquals(1000, history.orderedEntries.size());
-    Assert.assertEquals(1000, history.notificationsCount.get());
-    
-    // Make sure the tree also is consistent
-    int count = 0;
-    for (String path : history.history.keySet()) {
-      if (!history.history.containsKey(path))
-        continue;
-      for (Byte type : history.history.get(path).keySet()) {
-        count += history.history.get(path).get(type).size();
-      }
-    }
-    Assert.assertEquals(1000, count);
+    Assert.assertEquals(1000, history.orderedHistoryList.size());
   }
   
 

@@ -159,6 +159,11 @@ public interface ClientDatanodeProtocol extends VersionedProtocol {
   public void refreshNamenodes() throws IOException;
   
   /**
+   * @param serviceName service's name to refresh.
+   */
+  public void refreshOfferService(String serviceName) throws IOException;
+  
+  /**
    * Informs the datanode it should stop serving the given namespace.
    * @param nameserviceId the id of the namespace the datanode should stop
    * serving

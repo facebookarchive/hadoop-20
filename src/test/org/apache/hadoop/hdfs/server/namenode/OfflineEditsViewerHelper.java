@@ -34,6 +34,7 @@ import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.FileJournalManager.EditLogFile;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
@@ -85,7 +86,7 @@ public class OfflineEditsViewerHelper {
     StorageDirectory sd = it.next();
     EditLogFile elf = FSImageTestUtil.findLatestEditsLog(sd);
     File ret = null;
-    if(elf.getFirstTxId() == elf.getLastTxId())
+    if(elf.getLastTxId() == HdfsConstants.INVALID_TXID)
       ret = NNStorage.getInProgressEditsFile(sd, elf.getFirstTxId());
     else
       ret = NNStorage.getFinalizedEditsFile(sd, elf.getFirstTxId(), elf.getLastTxId());

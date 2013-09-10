@@ -17,32 +17,24 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
-import java.io.BufferedInputStream;
-import java.io.DataInputStream;
 import java.io.DataOutputStream;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.SocketException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.Arrays;
 
 import org.apache.commons.logging.Log;
-import org.apache.hadoop.fs.ChecksumException;
+import org.apache.hadoop.fs.FSDataNodeReadProfilingData;
+
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
-import org.apache.hadoop.hdfs.server.datanode.DatanodeBlockReader.BlockInputStreamFactory;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.net.SocketOutputStream;
-import org.apache.hadoop.util.ChecksumUtil;
 import org.apache.hadoop.util.DataChecksum;
 import org.apache.hadoop.util.DataTransferThrottler;
 import org.apache.hadoop.util.Progressable;
-import org.apache.hadoop.util.StringUtils;
-import org.apache.hadoop.hdfs.server.datanode.BlockWithChecksumFileReader.InputStreamWithChecksumFactory;
 
 /**
  * Reads a block from the disk and sends it to a recipient.
@@ -61,6 +53,8 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   private long seqno; // sequence number of packet
 
   private boolean transferToAllowed = true;
+  private boolean pktIncludeVersion = false;
+  private int packetVersion;
   // set once entire requested byte range has been sent to the client
   private boolean sentEntireByteRange;
   private boolean verifyChecksum; //if true, check is verified while reading
@@ -84,13 +78,13 @@ public class BlockSender implements java.io.Closeable, FSConstants {
               boolean corruptChecksumOk, boolean chunkOffsetOK,
               boolean verifyChecksum, DataNode datanode) throws IOException {
     this(namespaceId, block, startOffset, length, false, corruptChecksumOk,
-        chunkOffsetOK, verifyChecksum, datanode, null);
+        chunkOffsetOK, verifyChecksum, false, true, datanode, null);
   }
 
   BlockSender(int namespaceId, Block block, long startOffset, long length,
-              boolean ignoreChecksum, boolean corruptChecksumOk, boolean chunkOffsetOK,
-              boolean verifyChecksum, DataNode datanode, String clientTraceFmt)
-      throws IOException {
+      boolean ignoreChecksum, boolean corruptChecksumOk, boolean chunkOffsetOK,
+      boolean verifyChecksum, boolean pktIncludeVersion, boolean forceOldPktVersion, DataNode datanode,
+      String clientTraceFmt) throws IOException {
     
     replicaToRead = datanode.data.getReplicaToRead(namespaceId, block);
     if (replicaToRead == null) {
@@ -108,41 +102,13 @@ public class BlockSender implements java.io.Closeable, FSConstants {
 
     initialize(namespaceId, block, blockLength, startOffset, length,
         corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
-        datanode.updateBlockCrcWhenRead, streamFactory, clientTraceFmt);
-  }
-
-  /**
-   * This consturcotr is only for backward compatibility and will be removed
-   * after new data nodes are rolled out everywhere.
-   * 
-   */
-  public BlockSender(int namespaceId, Block block, long blockLength,
-      long startOffset, long length, boolean corruptChecksumOk,
-      boolean chunkOffsetOK, boolean verifyChecksum, boolean transferToAllowed,
-      final DataInputStream metadataIn,
-      final InputStreamFactory streamFactory)
-      throws IOException {
-    this(namespaceId, block, blockLength, startOffset, length,
-        corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
-        new BlockWithChecksumFileReader.InputStreamWithChecksumFactory() {
-          @Override
-          public InputStream createStream(long offset) throws IOException {
-            // we are passing 0 as the offset above,
-            // so we can safely ignore
-            // the offset passed
-            return streamFactory.createStream(offset);
-          }
-
-          @Override
-          public DataInputStream getChecksumStream() throws IOException {
-            return metadataIn;
-          }
-        });
+        datanode.updateBlockCrcWhenRead, pktIncludeVersion, forceOldPktVersion,
+        streamFactory, clientTraceFmt);
   }
   
   public BlockSender(int namespaceId, Block block, long blockLength, long startOffset, long length,
               boolean corruptChecksumOk, boolean chunkOffsetOK,
-              boolean verifyChecksum, boolean transferToAllowed,
+              boolean verifyChecksum, boolean transferToAllowed, boolean pktIncludeVersion,
               BlockWithChecksumFileReader.InputStreamWithChecksumFactory streamFactory
               ) throws IOException {
 
@@ -152,13 +118,13 @@ public class BlockSender implements java.io.Closeable, FSConstants {
 
     initialize(namespaceId, block, blockLength, startOffset, length,
         corruptChecksumOk, chunkOffsetOK, verifyChecksum, transferToAllowed,
-        false, streamFactory, null);
+        false, pktIncludeVersion, true, streamFactory, null);
   }
 
   private void initialize(int namespaceId, Block block, long blockLength,
       long startOffset, long length, boolean corruptChecksumOk,
       boolean chunkOffsetOK, boolean verifyChecksum, boolean transferToAllowed,
-      boolean allowUpdateBlocrCrc,
+      boolean allowUpdateBlocrCrc, boolean pktIncludeVersion, boolean forceOldPktVersion,
       BlockWithChecksumFileReader.InputStreamWithChecksumFactory streamFactory,
       String clientTraceFmt) throws IOException {
     try {
@@ -167,7 +133,13 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       this.blockLength = blockLength;
       this.transferToAllowed = transferToAllowed;
       this.clientTraceFmt = clientTraceFmt;
-
+      this.pktIncludeVersion = pktIncludeVersion;
+      
+      if (this.pktIncludeVersion && ! forceOldPktVersion) {
+        this.packetVersion = blockReader.getPreferredPacketVersion();
+      } else {
+        this.packetVersion = DataTransferProtocol.PACKET_VERSION_CHECKSUM_FIRST;
+      }
       
       checksum = blockReader.getChecksumToSend(blockLength);
       
@@ -224,11 +196,16 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       
       seqno = 0;
       
-      blockReader.initializeStream(offset, blockLength);
+      blockReader.initialize(offset, blockLength);
     } catch (IOException ioe) {
       IOUtils.closeStream(this);
       throw ioe;
     }
+  }
+
+  public void fadviseStream(int advise, long offset, long len)
+      throws IOException {
+    blockReader.fadviseStream(advise, offset, len);
   }
 
   public ReplicaToRead getReplicaToRead() {
@@ -263,6 +240,10 @@ public class BlockSender implements java.io.Closeable, FSConstants {
     // otherwise just return the same exception.
     return ioe;
   }
+  
+  public void enableReadProfiling(FSDataNodeReadProfilingData dnData) {
+    blockReader.enableReadProfiling(dnData);
+  }
 
   /**
    * Sends upto maxChunks chunks of data.
@@ -295,8 +276,17 @@ public class BlockSender implements java.io.Closeable, FSConstants {
     int packetLen = len + numChunks*checksumSize + 4;
     pkt.clear();
 
+    // The packet format is documented in DFSOuputStream.Packet.getBuffer().
+    // Here we need to use the exact packet format since it can be received
+    // by both of DFSClient, or BlockReceiver in the case of replication, which
+    // uses the same piece of codes as receiving data from DFSOutputStream.
+    //
+
     // write packet header
     pkt.putInt(packetLen);
+    if (pktIncludeVersion) {
+      pkt.putInt(packetVersion);
+    }
     pkt.putLong(offset);
     pkt.putLong(seqno);
     pkt.put((byte)((offset + len >= endOffset) ? 1 : 0));
@@ -307,13 +297,17 @@ public class BlockSender implements java.io.Closeable, FSConstants {
     byte[] buf = pkt.array();
     
     blockReader.sendChunks(out, buf, offset, checksumOff,
-        numChunks, len, crcUpdater);
+        numChunks, len, crcUpdater, packetVersion);
     
     if (throttler != null) { // rebalancing so throttle
       throttler.throttle(packetLen);
     }
     
     return len;
+  }
+  
+  private int getPacketHeaderLen() {
+    return DataNode.getPacketHeaderLen(pktIncludeVersion);
   }
 
   /**
@@ -372,7 +366,7 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       }
       
       int maxChunksPerPacket;
-      int pktSize = SIZE_OF_INTEGER + DataNode.PKT_HEADER_LEN;
+      int pktSize = SIZE_OF_INTEGER + getPacketHeaderLen();
       
       if (transferToAllowed && !verifyChecksum && 
           baseStream instanceof SocketOutputStream && 
@@ -428,10 +422,15 @@ public class BlockSender implements java.io.Closeable, FSConstants {
       close();
     }
     
-    if (crcUpdater != null && crcUpdater.isCrcValid()
+    if (crcUpdater != null && crcUpdater.isCrcValid(offset)
         && !replicaToRead.hasBlockCrcInfo()) {
-      ((DatanodeBlockInfo) replicaToRead).setBlockCrc(
-          crcUpdater.getBlockCrcOffset(), crcUpdater.getBlockCrc());
+      int blockCrcOffset = crcUpdater.getBlockCrcOffset();
+      int blockCrc = crcUpdater.getBlockCrc();
+      if (DataNode.LOG.isDebugEnabled()) {
+        DataNode.LOG.debug("Setting block CRC " + replicaToRead + " offset "
+            + blockCrcOffset + " CRC " + blockCrc);
+      }
+      ((DatanodeBlockInfo) replicaToRead).setBlockCrc(blockCrcOffset, blockCrc);
     }
 
     return totalRead;
@@ -442,6 +441,6 @@ public class BlockSender implements java.io.Closeable, FSConstants {
   }
 
   public static interface InputStreamFactory {
-    public InputStream createStream(long offset) throws IOException; 
+    public BlockDataFile.Reader getBlockDataFileReader() throws IOException;
   }
 }

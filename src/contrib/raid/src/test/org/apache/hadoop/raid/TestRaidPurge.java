@@ -99,7 +99,7 @@ public class TestRaidPurge extends TestCase {
     conf.set("dfs.block.replicator.classname",
              "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
 
-    conf.set("raid.server.address", "localhost:0");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
     conf.set("mapred.raid.http.address", "localhost:0");
     conf.setLong("dfs.blockreport.intervalMsec", 1000L);
     // create a dfs and map-reduce cluster

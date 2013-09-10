@@ -332,7 +332,7 @@ public abstract class ChecksumFileSystem extends FilterFileSystem {
                           int bytesPerChecksum,
                           Progressable progress)
       throws IOException {
-      super(new PureJavaCrc32(), bytesPerChecksum, 4);
+      super(new PureJavaCrc32(), bytesPerChecksum, 4, null);
       this.datas = fs.getRawFileSystem().create(file, overwrite, bufferSize, 
                                          replication, blockSize, progress);
       int sumBufferSize = fs.getSumBufferSize(bytesPerChecksum, bufferSize);
@@ -345,13 +345,13 @@ public abstract class ChecksumFileSystem extends FilterFileSystem {
     
     /** {@inheritDoc} */
     public void sync() throws IOException {
-      flushBuffer();
+      flushBuffer(true, false);
       sums.sync();
       datas.sync();
     }
 
     public void close() throws IOException {
-      flushBuffer();
+      flushBuffer(true, false);
       sums.close();
       datas.close();
     }
@@ -361,6 +361,11 @@ public abstract class ChecksumFileSystem extends FilterFileSystem {
     throws IOException {
       datas.write(b, offset, len);
       sums.write(checksum);
+    }
+
+    @Override
+    protected boolean shouldKeepPartialChunkData() {
+      return true;
     }
   }
 

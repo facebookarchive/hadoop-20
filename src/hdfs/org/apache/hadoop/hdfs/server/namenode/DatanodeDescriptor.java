@@ -29,6 +29,8 @@ import org.apache.hadoop.hdfs.server.common.GenerationStamp;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
+import org.apache.hadoop.hdfs.server.protocol.RaidTask;
+import org.apache.hadoop.hdfs.server.protocol.RaidTaskCommand;
 import org.apache.hadoop.hdfs.util.LightWeightHashSet;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.UTF8;
@@ -115,7 +117,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
 
   // isAlive == heartbeats.contains(this)
   // This is an optimization, because contains takes O(n) time on Arraylist
-  protected boolean isAlive = false;
+  protected volatile boolean isAlive = false;
 
   /** A queue of blocks to be replicated by this datanode */
   private BlockQueue replicateBlocks = new BlockQueue();
@@ -124,6 +126,12 @@ public class DatanodeDescriptor extends DatanodeInfo {
   /** A set of blocks to be invalidated by this datanode */
   private LightWeightHashSet<Block> invalidateBlocks 
     = new LightWeightHashSet<Block>();
+  /** A set of raid encoding tasks to be done by this datanode */
+  private LightWeightHashSet<RaidTask> raidEncodingTasks
+    = new LightWeightHashSet<RaidTask> ();
+  /** A set of raid decoding (block fixing) tasks to be done by this datanode */
+  private LightWeightHashSet<RaidTask> raidDecodingTasks
+    = new LightWeightHashSet<RaidTask> ();
   /** A set of INodeFileUnderConstruction that this datanode is part of */
   private Set<INodeFileUnderConstruction> openINodes
     = new HashSet<INodeFileUnderConstruction>();
@@ -255,6 +263,37 @@ public class DatanodeDescriptor extends DatanodeInfo {
   }
   
   /**
+   * Adds blocks already connected into list, to this descriptor's blocks.
+   * The blocks in the input list already have this descriptor inserted to them.
+   * Used for parallel initial block reports.
+   */
+  void insertIntoList(BlockInfo head, int headIndex, BlockInfo tail, int tailIndex, int count) {
+    if (head == null)
+      return;
+    
+    // connect tail to now-head
+    tail.setNext(tailIndex, blockList);
+    if (blockList != null)
+      blockList.setPrevious(blockList.findDatanode(this), tail);
+    
+    // create new head
+    blockList = head;
+    blockList.setPrevious(headIndex, null);
+    
+    // add new blocks to the count
+    numOfBlocks += count;
+  }
+  
+  /**
+   * Adds datanode descriptor to stored block.
+   * Ensures that next & previous are null when insert
+   * succeeds (DN not already in block info)
+   */
+  int addBlockWithoutInsertion(BlockInfo b) {
+    return b.addNode(this);
+  }
+  
+  /**
    * Remove block from the list of blocks belonging to the data-node.
    * Remove data-node from the block.
    */
@@ -309,9 +348,77 @@ public class DatanodeDescriptor extends DatanodeInfo {
     this.blockList = null;
     this.numOfBlocks = 0;
     this.invalidateBlocks.clear();
+    clearRaidEncodingTasks();
+    clearRaidDecodingTasks();
     this.receivedFirstFullBlockReport = false;
   }
-
+  
+  /**
+   * Raid Encoding functions
+   */
+  private int clearRaidEncodingTasks() {
+    int size = 0;
+    synchronized (raidEncodingTasks) {
+      size = raidEncodingTasks.size();
+      raidEncodingTasks.clear();
+    }
+    return size;
+  }
+  
+  void addRaidEncodingTask(RaidTask task) {
+    synchronized (raidEncodingTasks) {
+      raidEncodingTasks.add(task);
+    }
+  }
+  
+  int getNumberOfRaidEncodingTasks() {
+    synchronized (raidEncodingTasks) {
+      return raidEncodingTasks.size();
+    }
+  }
+  
+  /**
+   * Raid Decoding (block fixing) functions
+   */
+  private int clearRaidDecodingTasks() {
+    int size = 0;
+    synchronized (raidDecodingTasks) {
+      size = raidDecodingTasks.size();
+      raidDecodingTasks.clear();
+    }
+    return size;
+  }
+  
+  void addRaidDecodingTask(RaidTask task) {
+    synchronized (raidDecodingTasks) {
+      raidDecodingTasks.add(task);
+    }
+  }
+  
+  int getNumberOfRaidDecodingTasks() {
+    synchronized (raidDecodingTasks) {
+      return raidDecodingTasks.size();
+    }
+  }
+  
+  RaidTaskCommand getRaidCommand(int maxEncodingTasks, int maxDecodingTasks) {
+    List<RaidTask> tasks = new ArrayList<RaidTask>();
+    
+    synchronized (raidEncodingTasks) {
+      tasks.addAll(raidEncodingTasks.pollN (
+          Math.min(raidEncodingTasks.size(), maxEncodingTasks)));
+    }
+    
+    synchronized (raidDecodingTasks) {
+      tasks.addAll(raidDecodingTasks.pollN(
+          Math.min(raidDecodingTasks.size(), maxDecodingTasks)));
+    }
+    
+    return (tasks.size() == 0) ?
+        null : new RaidTaskCommand(DatanodeProtocol.DNA_RAIDTASK, 
+                        tasks.toArray(new RaidTask[tasks.size()]));
+  }
+  
   public int numBlocks() {
     return numOfBlocks;
   }
@@ -336,7 +443,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
   /**
    * Iterates over the list of blocks belonging to the data-node.
    */
-  static private class BlockIterator implements Iterator<Block> {
+  static private class BlockIterator implements Iterator<BlockInfo> {
     private BlockInfo current;
     private DatanodeDescriptor node;
       
@@ -360,7 +467,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
     }
   }
 
-  Iterator<Block> getBlockIterator() {
+  Iterator<BlockInfo> getBlockIterator() {
     return new BlockIterator(this.blockList, this);
   }
   
@@ -391,7 +498,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
       }
     }
   }
-
+  
   /**
    * The number of work items that are pending to be replicated
    */
@@ -458,8 +565,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
     Block iblk = new Block(); // a fixed new'ed block to be reused with index i
     Block oblk = new Block(); // for fixing genstamps
     for (int i = 0; i < newReport.getNumberOfBlocks(); ++i) {
-      iblk.set(newReport.getBlockId(i), newReport.getBlockLen(i), 
-               newReport.getBlockGenStamp(i));
+      newReport.getBlock(iblk, i);
       BlockInfo storedBlock = blocksMap.getStoredBlock(iblk);
       if(storedBlock == null) {
         // if the block with a WILDCARD generation stamp matches 
@@ -479,7 +585,7 @@ public class DatanodeDescriptor extends DatanodeInfo {
       }
       if (storedBlock == null) {
         // If block is not in blocksMap it does not belong to any file
-        if (namesystem.getNameNode().shouldRetryAbsentBlock(iblk)) {
+        if (namesystem.getNameNode().shouldRetryAbsentBlock(iblk, storedBlock)) {
           toRetry.add(new Block(iblk));
         } else {
           toInvalidate.add(new Block(iblk));
@@ -505,9 +611,9 @@ public class DatanodeDescriptor extends DatanodeInfo {
     }
     // collect blocks that have not been reported
     // all of them are next to the delimiter
-    Iterator<Block> it = new BlockIterator(delimiter.getNext(0), this);
+    Iterator<BlockInfo> it = new BlockIterator(delimiter.getNext(0), this);
     while(it.hasNext()) {
-      BlockInfo storedBlock = (BlockInfo)it.next();
+      BlockInfo storedBlock = it.next();
       INodeFile file = storedBlock.getINode();
       if (file == null || !file.isUnderConstruction()) {
         toRemove.add(storedBlock);

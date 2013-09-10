@@ -31,6 +31,11 @@ public class MapSpillSortCounters {
   private long mapMergeCPUVal;
   private long mapMergeWallClockVal;
   private long mapSpillSingleRecordNum;
+  
+  // for new accurate metrics
+  private long mapSpillJVMCPUVal;
+  private long mapMemSortJVMCPUVal;
+  private long mapMergeJVMCPUVal;
 
   private TaskReporter reporter;
 
@@ -45,6 +50,25 @@ public class MapSpillSortCounters {
     mapMergeCPUVal = 0;
     mapMergeWallClockVal = 0;
     mapSpillSingleRecordNum = 0;
+    
+    mapSpillJVMCPUVal = 0;
+    mapMemSortJVMCPUVal = 0;
+    mapMergeJVMCPUVal = 0;
+  }
+  
+  public void incJVMCPUPerSpill(long spillStart, long spillEnd) {
+    mapSpillJVMCPUVal = 
+        mapSpillJVMCPUVal + (spillEnd - spillStart);
+  }
+  
+  public void incJVMCPUPerSort(long sortStart, long sortEnd) {
+    mapMemSortJVMCPUVal =
+        mapMemSortJVMCPUVal + (sortEnd - sortStart);
+  }
+  
+  public void incJVMCPUMerge(long mergeStart, long mergeEnd) {
+    mapMergeJVMCPUVal =
+        mapMergeJVMCPUVal + (mergeEnd - mergeStart);
   }
   
   public void incCountersPerSpill(ProcResourceValues spillStartProcVals,
@@ -86,6 +110,10 @@ public class MapSpillSortCounters {
     setCounterValue(Counter.MAP_MERGE_CPU, mapMergeCPUVal);
     setCounterValue(Counter.MAP_MERGE_WALLCLOCK, mapMergeWallClockVal);
     setCounterValue(Counter.MAP_SPILL_SINGLERECORD_NUM, mapSpillSingleRecordNum);
+    
+    setCounterValue(Counter.MAP_SPILL_CPU_JVM, mapSpillJVMCPUVal);
+    setCounterValue(Counter.MAP_MEM_SORT_CPU_JVM, mapMemSortJVMCPUVal);
+    setCounterValue(Counter.MAP_MERGE_CPU_JVM, mapMergeJVMCPUVal);
   }
   
   private void setCounterValue(Counter counter, long value) {

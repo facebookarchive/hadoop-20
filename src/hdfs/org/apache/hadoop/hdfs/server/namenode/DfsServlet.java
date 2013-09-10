@@ -36,6 +36,7 @@ import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.security.UserGroupInformation;
 
@@ -93,7 +94,7 @@ abstract class DfsServlet extends HttpServlet {
         (Integer)getServletContext().getAttribute("datanode.https.port")
         : host.getInfoPort();
     // Add namenode address to the URL params
-    final String nnAddr = NameNode.getHostPortString(nn.getNameNodeAddress());
+    final String nnAddr = NetUtils.toIpPort(nn.getNameNodeAddress());
     final String filename = request.getPathInfo();
     return new URI(scheme, null, hostname, port, servletpath,
         "filename=" + filename + "&ugi=" + ugi +
@@ -147,7 +148,7 @@ abstract class DfsServlet extends HttpServlet {
 
     // Add namenode address to the url params
     NameNode nn = (NameNode)getServletContext().getAttribute("name.node");
-    String addr = NameNode.getHostPortString(nn.getNameNodeAddress());
+    String addr = NetUtils.toIpPort(nn.getNameNodeAddress());
     builder.append(JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, addr));
 
     return new URI(scheme, null, hostname,

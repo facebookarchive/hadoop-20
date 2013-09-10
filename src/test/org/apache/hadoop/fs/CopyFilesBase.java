@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.fs;
 
+import static org.junit.Assert.assertTrue;
+
 import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
 import java.io.FileNotFoundException;
@@ -25,27 +27,21 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.net.URI;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import java.util.StringTokenizer;
 
+import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
-import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.tools.DistCp;
-import org.apache.hadoop.util.ToolRunner;
 import org.apache.log4j.Level;
-import org.mortbay.log.Log;
-
-import static org.junit.Assert.*;
 /**
  * A JUnit test for copying files recursively.
  */
@@ -53,11 +49,12 @@ public class CopyFilesBase {
   {
     ((Log4JLogger)LogFactory.getLog("org.apache.hadoop.hdfs.StateChange")
         ).getLogger().setLevel(Level.OFF);
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.OFF);
+    DataNode.LOG.getLogger().setLevel(Level.OFF);
     ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.OFF);
     ((Log4JLogger)DistCp.LOG).getLogger().setLevel(Level.ALL);
   }
   
+  public static final Log LOG = LogFactory.getLog(CopyFilesBase.class);
   protected static final URI LOCAL_FS = URI.create("file:///");
   
   protected static final Random RAN = new Random();
@@ -134,11 +131,9 @@ public class CopyFilesBase {
       throws IOException {
     MyFile f = levels < 0 ? new MyFile() : new MyFile(levels);
     Path p = new Path(root, f.getName());
-    FSDataOutputStream out = fs.create(p);
     byte[] toWrite = new byte[f.getSize()];
     new Random(f.getSeed()).nextBytes(toWrite);
-    out.write(toWrite);
-    out.close();
+    createFileWithContent(fs, p, toWrite);
     FileSystem.LOG.info("created: " + p + ", size=" + f.getSize());
     return f;
   }
@@ -152,31 +147,46 @@ public class CopyFilesBase {
     return checkFiles(fs, topdir, files, false);    
   }
 
+  public static boolean checkContentOfFile(FileSystem fs, Path filePath, byte[] content)
+      throws IOException {
+    FSDataInputStream in = null;
+    try {
+      FileStatus fileStatus = fs.getFileStatus(filePath);
+      if (fileStatus.getLen() != content.length) {
+        return false;
+      }
+      in = fs.open(filePath);
+      byte[] toRead = new byte[content.length];
+      in.readFully(toRead);
+      for (int i = 0; i < content.length; ++i) {
+        if (content[i] != toRead[i]) {
+          return false;
+        }
+      }
+      return true;
+    } catch (IOException e) {
+      LOG.warn("Get exception in checkContentOfFile.", e);
+      throw e;
+    } finally {
+      if (in != null) {
+        in.close();
+      }
+    }
+  }
+
   protected static boolean checkFiles(FileSystem fs, String topdir, MyFile[] files,
       boolean existingOnly) throws IOException {
     Path root = new Path(topdir);
     
     for (int idx = 0; idx < files.length; idx++) {
       Path fPath = new Path(root, files[idx].getName());
-      FileStatus fstatus = null;
       try {
-        fstatus = fs.getFileStatus(fPath);
-        FSDataInputStream in = fs.open(fPath);
-        byte[] toRead = new byte[files[idx].getSize()];
         byte[] toCompare = new byte[files[idx].getSize()];
         Random rb = new Random(files[idx].getSeed());
         rb.nextBytes(toCompare);
-        assertEquals("file length is not the same", fstatus.getLen(), 
-            toRead.length);
-        in.readFully(toRead);
-        in.close();
-        for (int i = 0; i < toRead.length; i++) {
-          if (toRead[i] != toCompare[i]) {
-            return false;
-          }
+        if (!checkContentOfFile(fs, fPath, toCompare)) {
+          return false;
         }
-        toRead = null;
-        toCompare = null;
       }
       catch(FileNotFoundException fnfe) {
         if (!existingOnly) {
@@ -278,15 +288,22 @@ public class CopyFilesBase {
     return home;
   }
 
-  protected static void create(FileSystem fs, Path f) throws IOException {
-    FSDataOutputStream out = fs.create(f);
+  public static void createFileWithContent(FileSystem fs, Path filePath, byte[] content)
+      throws IOException {
+    FSDataOutputStream out = fs.create(filePath);
     try {
-      byte[] b = new byte[1024 + RAN.nextInt(1024)];
-      RAN.nextBytes(b);
-      out.write(b);
+      out.write(content);
     } finally {
-      if (out != null) out.close();
+      if (out != null) {
+        out.close();
+      }
     }
+  }
+
+  protected static void create(FileSystem fs, Path f) throws IOException {
+    byte[] b = new byte[1024 + RAN.nextInt(1024)];
+    RAN.nextBytes(b);
+    createFileWithContent(fs, f, b);
   }
   
   protected static String execCmd(FsShell shell, String... args) throws Exception {

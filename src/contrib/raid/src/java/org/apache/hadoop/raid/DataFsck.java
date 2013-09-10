@@ -129,6 +129,7 @@ public class DataFsck extends Configured implements Tool {
   }
 
   public static void main(String[] args) throws Exception {
+    org.apache.hadoop.hdfs.DnsMonitorSecurityManager.setTheManager();
     DataFsck dataFsck = new DataFsck(new Configuration());
     int res = ToolRunner.run(dataFsck, args);
     System.exit(res);

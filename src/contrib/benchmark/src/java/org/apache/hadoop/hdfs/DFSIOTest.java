@@ -32,12 +32,13 @@ public class DFSIOTest extends Configured implements Constant, Tool{
 	private static Configuration fsConfig;
 	private static long blocksize;
 	private static long ntasks;
+	private static boolean ifPrintProfile = false;
 	public static long replications;
 
 	public static void printUsage() {
 		System.out.println("USAGE: bin/hadoop hadoop-*-benchmark.jar dfstest nMaps fileSize " +
 				"[-bufferRead] [-bufferWrite] [-blocksize] [-filesPerTask]" +
-				"[-replications]");
+				"[-replications] [-printProfile]");
 		System.out.println("Default bufferRead = 1000000\n" +
 				"Default bufferWrite = 1000000");
 		System.out.println("Default blocksize = " + BLOCKSIZE);
@@ -89,9 +90,12 @@ public class DFSIOTest extends Configured implements Constant, Tool{
 			if (args[i].equals("-bufferWrite")) bufferLimitW = Long.parseLong(args[++i]); else
 			if (args[i].equals("-blocksize")) blocksize = Long.parseLong(args[++i]); else
 			if (args[i].equals("-filesPerTask")) ntasks = Long.parseLong(args[++i]); else
+			if (args[i].equals("-printProfile")) ifPrintProfile = true; else
 			if (args[i].equals("-replications")) replications = Long.parseLong(args[++i]); else
 				printUsage();
 		}
+
+    System.out.println("Auto print Write Profile? " + ifPrintProfile);
 
 		// running the Writting
 		fsConfig = new Configuration(getConf());
@@ -133,6 +137,7 @@ public class DFSIOTest extends Configured implements Constant, Tool{
 		conf.setReducerClass(Reduce.class);
 		conf.setNumReduceTasks(1);
 		conf.setSpeculativeExecution(false);
+		conf.setBoolean("dfs.write.profile.auto.print", ifPrintProfile);
 		JobClient.runJob(conf);
 
 		// Reading test

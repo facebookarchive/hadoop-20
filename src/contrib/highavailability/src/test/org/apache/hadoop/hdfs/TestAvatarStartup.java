@@ -1,18 +1,24 @@
 package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import junit.framework.TestCase;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniAvatarCluster.NameNodeInfo;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.util.InjectionEventI;
 import org.apache.hadoop.util.InjectionHandler;
@@ -48,10 +54,10 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
     conf = new Configuration();
     conf.setBoolean("fs.ha.retrywrites", retrywrites);
     if (federation) {
-      cluster = new MiniAvatarCluster(conf, 1, true, null, null,
-          2 + r.nextInt(4), true);
+      cluster = new MiniAvatarCluster.Builder(conf)
+      		.numNameNodes(2 + r.nextInt(4)).federation(true).enableQJM(false).build();
     } else {
-      cluster = new MiniAvatarCluster(conf, 1, true, null, null);
+      cluster = new MiniAvatarCluster.Builder(conf).enableQJM(false).build();
     }
     zkClient = new AvatarZooKeeperClient(conf, null);
   }
@@ -75,8 +81,8 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
 
   private long getSessionId(int index) throws Exception {
     AvatarNode primaryAvatar = cluster.getPrimaryAvatar(index).avatar;
-    String address = AvatarNode.getClusterAddress(primaryAvatar
-        .getStartupConf());
+    String address = primaryAvatar.getStartupConf().get(
+        NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY);
     return zkClient.getPrimarySsId(address, false);
   }
 

@@ -18,8 +18,12 @@
 
 package org.apache.hadoop.raid;
 
+import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.FileNotFoundException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.InterruptedIOException;
 import java.io.PrintStream;
 import java.text.SimpleDateFormat;
@@ -27,6 +31,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Date;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.LinkedList;
@@ -73,8 +78,9 @@ import org.apache.hadoop.raid.protocol.PolicyInfo;
 import org.apache.hadoop.raid.protocol.RaidProtocol;
 import org.apache.hadoop.raid.tools.FastFileCheck;
 import org.apache.hadoop.raid.tools.ParityVerifier;
+import org.apache.hadoop.raid.tools.RSBenchmark;
+import org.json.JSONException;
 import org.xml.sax.SAXException;
-
 import java.util.concurrent.atomic.*;
 
 /**
@@ -158,7 +164,7 @@ public class RaidShell extends Configured implements Tool {
     }
   }
 
-  private static RaidProtocol createRPCRaidnode(InetSocketAddress raidNodeAddr,
+  public static RaidProtocol createRPCRaidnode(InetSocketAddress raidNodeAddr,
       Configuration conf, UnixUserGroupInformation ugi)
     throws IOException {
     LOG.info("RaidShell connecting to " + raidNodeAddr);
@@ -167,11 +173,8 @@ public class RaidShell extends Configured implements Tool {
         NetUtils.getSocketFactory(conf, RaidProtocol.class));
   }
 
-  private static RaidProtocol createRaidnode(RaidProtocol rpcRaidnode)
+  public static RaidProtocol createRaidnode(RaidProtocol rpcRaidnode)
     throws IOException {
-    RetryPolicy createPolicy = RetryPolicies.retryUpToMaximumCountWithFixedSleep(
-        5, 5000, TimeUnit.MILLISECONDS);
-
     Map<Class<? extends Exception>,RetryPolicy> remoteExceptionToPolicyMap =
       new HashMap<Class<? extends Exception>, RetryPolicy>();
 
@@ -190,13 +193,6 @@ public class RaidShell extends Configured implements Tool {
         rpcRaidnode, methodNameToPolicyMap);
   }
 
-  private void checkOpen() throws IOException {
-    if (!clientRunning) {
-      IOException result = new IOException("RaidNode closed");
-      throw result;
-    }
-  }
-
   /**
    * Close the connection to the raidNode.
    */
@@ -211,7 +207,6 @@ public class RaidShell extends Configured implements Tool {
    * Displays format of commands.
    */
   private static void printUsage(String cmd) {
-    String prefix = "Usage: java " + RaidShell.class.getSimpleName();
     if ("-showConfig".equals(cmd)) {
       System.err.println("Usage: java RaidShell" + 
                          " [-showConfig]"); 
@@ -247,6 +242,14 @@ public class RaidShell extends Configured implements Tool {
     } else if ("-verifyParity".equals(cmd)) {
       System.err.println("Usage: java RaidShell -verifyParity -repl expectRepl" +
                          " [-restore] parityRootPath");
+    } else if ("-rs_benchmark".equals(cmd)) {
+      System.err.println("Usage: java RaidShell -rs_benchmark -verify -native" + 
+                         " [-encode E] [-seed S] [-dpos P] [-dlen L] [-elen L]");
+    } else if ("-estimateSaving".equals(cmd)) {
+      System.err.println("Usage: java RaidShell -estimateSaving xor:/x/y/xor,rs:/x/y/rs,dir-xor:/x/y/dir_xor " +
+      		"[-threads numthreads] [-debug]");
+    } else if ("-smoketest".equals(cmd)) {
+      System.err.println("Usage: java RaidShell -smoketest");
     } else {
       System.err.println("Usage: java RaidShell");
       System.err.println("           [-showConfig ]");
@@ -267,6 +270,11 @@ public class RaidShell extends Configured implements Tool {
                          " [-restore] parityRootPath");
       System.err.println("           [-checkParity path]");
       System.err.println("           [-verifyFile rootPath]");
+      System.err.println("           [-rs_benchmark -verify -native" + 
+                         " [-encode E] [-seed S] [-dpos P] [-dlen L] [-elen L]");
+      System.err.println("           [-estimateSaving xor:/x/y/xor,rs:/x/y/rs,dir-xor:/x/y/dir_xor " +
+      		"[-threads numthreads] [-debug]");
+      System.err.println("           [-smoketest]");
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
     }
@@ -356,6 +364,20 @@ public class RaidShell extends Configured implements Tool {
         exitCode = 0;
       } else if ("-verifyFile".equals(cmd)) {
         verifyFile(argv, i);
+      } else if ("-rs_benchmark".equals(cmd)) {
+        rsBenchmark(argv, i);
+      } else if ("-estimateSaving".equals(cmd)) {
+        estimateSaving(argv, i);
+      } else if ("-smoketest".equals(cmd)) {
+        initializeRpc(conf, RaidNode.getAddress(conf));
+        boolean succeed = startSmokeTest();
+        if (succeed) {
+          System.err.println("Raid Smoke Test Succeeded!");
+          exitCode = 0;
+        } else {
+          System.err.println("Raid Smoke Test Failed!");
+          exitCode = -1;
+        }
       } else {
         exitCode = -1;
         System.err.println(cmd.substring(1) + ": Unknown command");
@@ -414,6 +436,210 @@ public class RaidShell extends Configured implements Tool {
     } catch (IOException ex) {
       System.err.println("findMissingParityFiles: " + ex);
     }
+  }
+  
+  private long estimateSaving(final Codec codec,
+      final List<Path> files, final int targetReplication, final int numThreads,
+      final boolean isDebug) throws IOException { 
+    final AtomicLong totalSavingSize = new AtomicLong(0);
+    ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+    LOG.info("Processing " + files.size() + " files/dirs for " + codec.id +
+        " in " + numThreads + " threads");
+    if (isDebug) {
+      System.out.println("oldDiskSize | oldParitySize | newDiskSize | newParitySize" +
+                         "| savingSize | totalSavingSize | path ");
+    }
+    final AtomicInteger finishNum = new AtomicInteger(0);
+    for (int i = 0; i < numThreads; i++) {
+      final int startIdx = i; 
+      Runnable work = new Runnable() {
+        public void run() {
+          try {
+            for (int idx = startIdx; idx < files.size(); idx += numThreads) {
+              try {
+                Path p = files.get(idx);
+                FileSystem fs = FileSystem.get(conf);
+                p = fs.makeQualified(p);
+                FileStatus stat = null;
+                try {
+                  stat = fs.getFileStatus(p);
+                } catch (FileNotFoundException e) {
+                  LOG.warn("Path " + p  + " does not exist", e);
+                }
+                if (stat == null) {
+                  continue;
+                }
+                short repl = 0;
+                List<FileStatus> lfs = null;
+                if (codec.isDirRaid) {
+                  if (!stat.isDir()) {
+                    continue;
+                  }
+                  lfs = RaidNode.listDirectoryRaidFileStatus(conf, fs, p);
+                  if (lfs == null) {
+                    continue;
+                  }
+                  repl = DirectoryStripeReader.getReplication(lfs);
+                } else {
+                  repl = stat.getReplication();
+                }
+                 
+                // if should not raid, will not put the file into the write list.
+                if (!RaidNode.shouldRaid(conf, fs, stat, codec, lfs)) {
+                  LOG.info("Should not raid file: " + p);
+                  continue;
+                }
+                // check the replication.
+                boolean add = false;
+                if (repl > targetReplication) {
+                  add = true;
+                } else if (repl == targetReplication &&
+                           !ParityFilePair.parityExists(stat, codec, conf)) {
+                  add = true;
+                }
+                if (add) {
+                  long oldDiskSize = 0L;
+                  long newDiskSize = 0L;
+                  long numBlocks = 0L;
+                  long parityBlockSize = 0L;
+                  if (codec.isDirRaid) {
+                    for (FileStatus fsStat: lfs) {
+                      oldDiskSize += fsStat.getLen() * (fsStat.getReplication());
+                      newDiskSize += fsStat.getLen() * targetReplication;
+                    }
+                    numBlocks = DirectoryStripeReader.getBlockNum(lfs);
+                    parityBlockSize =
+                        DirectoryStripeReader.getParityBlockSize(conf, lfs); 
+                  } else {
+                    oldDiskSize = stat.getLen() * stat.getReplication();
+                    newDiskSize = stat.getLen() * targetReplication; 
+                    numBlocks = RaidNode.getNumBlocks(stat);
+                    parityBlockSize = stat.getBlockSize();
+                  }
+                  
+                  long numStripes = RaidNode.numStripes(numBlocks,
+                      codec.stripeLength); 
+                  long newParitySize = numStripes * codec.parityLength * 
+                      parityBlockSize * targetReplication;
+                  long oldParitySize = 0L;
+                  for (Codec other: Codec.getCodecs()) {
+                    if (other.priority < codec.priority) {
+                      Path parityPath = new Path(other.parityDirectory,
+                          RaidNode.makeRelative(stat.getPath()));
+                      long logicalSize = 0;
+                      try {
+                        logicalSize = 
+                            fs.getContentSummary(parityPath).getSpaceConsumed();
+                      } catch (IOException ioe) {
+                        // doesn't exist
+                        continue;
+                      }
+                      oldParitySize += logicalSize;
+                    }
+                  }
+                  long savingSize = oldDiskSize + oldParitySize - newDiskSize -
+                      newParitySize;
+                  totalSavingSize.addAndGet(savingSize);
+                  if (isDebug) {
+                    System.out.println(oldDiskSize + " " + oldParitySize + " " +
+                        newDiskSize + " " + newParitySize + " " + savingSize + 
+                        " " + totalSavingSize.get() + " " + stat.getPath());
+                  }
+                }
+              } catch (IOException ioe) {
+                LOG.warn("Get IOException" , ioe);
+              }
+            }
+          } finally {
+            finishNum.incrementAndGet();
+          }
+        }
+      };
+      if (executor != null) {
+        executor.execute(work);
+      }
+    }
+    if (executor != null) {
+      try {
+        while (finishNum.get() < numThreads) {
+          try {
+            Thread.sleep(2000);
+          } catch (InterruptedException ie) {
+            LOG.warn("EstimateSaving get exception ", ie);
+            throw new IOException(ie);
+          }
+        }
+      } finally {
+        executor.shutdown(); // Waits for submitted tasks to finish.
+      }
+    }
+    return totalSavingSize.get();
+  }
+  
+  private ArrayList<Path> readFileList(String fileListPath)
+      throws IOException {
+    FileSystem fs = FileSystem.get(conf);
+    ArrayList<Path> paths = new ArrayList<Path>();
+    InputStream in = fs.open(new Path(fileListPath));
+    BufferedReader input = new BufferedReader(
+        new InputStreamReader(in));
+    String l;
+    try {
+      while ((l = input.readLine()) != null){
+        paths.add(new Path(l));
+      }
+      return paths;
+    } finally {
+      input.close();
+    }
+  }
+  
+  private void estimateSaving(String[] args, int startIndex)
+      throws Exception {
+    String mappings = args[startIndex++];
+    HashMap<String, String> codecFileListMap = new HashMap<String, String>();
+    for (String mapping: mappings.split(",")) {
+      String[] parts = mapping.split(":");
+      codecFileListMap.put(parts[0], parts[1]);
+    }
+    int numThreads = 10;
+    boolean isDebug = false;
+    while (startIndex < args.length) {
+      if (args[startIndex].equals("-threads")) {
+        numThreads = Integer.parseInt(args[++startIndex]);
+      } else if (args[startIndex].equals("-debug")) {
+        isDebug = true;
+      } else {
+        throw new IOException("Can't recognize " + args[startIndex]);
+      }
+      startIndex++;
+    }
+    long totalSavingSize = 0;
+    ArrayList<PolicyInfo> allPolicies = new ArrayList<PolicyInfo>();
+    ArrayList<PolicyInfo> allPoliciesWithSrcPath = new ArrayList<PolicyInfo>();
+    ConfigManager configMgr = new ConfigManager(conf);
+    for (PolicyInfo info : configMgr.getAllPolicies()) {
+      allPolicies.add(info);
+      if (info.getSrcPath() != null) {
+        allPoliciesWithSrcPath.add(info);
+      }
+    }
+    for (PolicyInfo info: allPolicies) {
+      if (info.getFileListPath() == null || !info.getShouldRaid()) {
+        continue;
+      }
+      Codec c = Codec.getCodec(info.getCodecId());
+      // Assume each codec has only one fileList path
+      String filePath = codecFileListMap.get(c.id);
+      if (filePath == null) {
+        continue;
+      }
+      List<Path> files = readFileList(filePath); 
+      totalSavingSize += estimateSaving(c, files,
+          Integer.parseInt(info.getProperty("targetReplication")),
+          numThreads, isDebug);
+    }
+    LOG.info("Total Saving Bytes is:" + totalSavingSize);
   }
   
   /**
@@ -495,6 +721,57 @@ public class RaidShell extends Configured implements Tool {
       System.err.println("verifyFile: " + ex);
     }
   }
+  
+  private void rsBenchmark(String[] args, int startIndex) {
+    boolean verify = false;
+    boolean hasSeed = false;
+    boolean useNative = false;
+    StringBuilder encodeMethod = new StringBuilder("rs");
+    long seed = 0;
+    int dpos = 0;
+    int dlen = 0;
+    int elen = RSBenchmark.DEFAULT_DATALEN;
+    for (int idx = startIndex; idx < args.length; idx++) {
+      String option = args[idx];
+      if (option.equals("-verify")) {
+        verify = true;
+      } else if (option.equals("-seed")) {
+        hasSeed = true;
+        seed = Long.parseLong(args[++idx]);
+      } else if (option.equals("-encode")) {
+        encodeMethod.setLength(0);
+        encodeMethod.append((args[++idx]));
+      } else if (option.equals("-dpos")) {
+        dpos = Integer.parseInt(args[++idx]);
+      } else if (option.equals("-dlen")) {
+        dlen = Integer.parseInt(args[++idx]);
+      } else if (option.equals("-elen")) {
+        elen = Integer.parseInt(args[++idx]);
+      } else if (option.equals("-native")) {
+        useNative = true;
+      }
+    }
+    if (dlen == 0) {
+      dlen = elen;
+    }
+    RSBenchmark rsBen = hasSeed?
+        new RSBenchmark(
+          verify,
+          encodeMethod.toString(),
+          seed,
+          dpos,
+          dlen,
+          elen,
+          useNative):
+        new RSBenchmark(
+            verify,
+            encodeMethod.toString(),
+            dpos,
+            dlen,
+            elen,
+            useNative);
+    rsBen.run();
+  }
 
   /**
    * Apply operation specified by 'cmd' on all parameters
@@ -503,12 +780,15 @@ public class RaidShell extends Configured implements Tool {
   private int showConfig(String cmd, String argv[], int startindex)
       throws IOException {
     int exitCode = 0;
-    int i = startindex;
     PolicyInfo[] all = raidnode.getAllPolicies();
     for (PolicyInfo p: all) {
       out.println(p);
     }
     return exitCode;
+  }
+  
+  private boolean startSmokeTest() throws Exception {
+    return raidnode.startSmokeTest();
   }
 
   /**
@@ -580,7 +860,7 @@ public class RaidShell extends Configured implements Tool {
    */
   private int distRaid(String[] args, int startIndex) throws IOException,
     SAXException, RaidConfigurationException,
-    ClassNotFoundException, ParserConfigurationException {
+    ClassNotFoundException, ParserConfigurationException, JSONException {
     // find the matched raid policy
     String policyName = args[startIndex++];
     ConfigManager configManager = new ConfigManager(conf);
@@ -701,7 +981,7 @@ public class RaidShell extends Configured implements Tool {
     }
   }
   
-  int collectNumCorruptBlocksInFile(final DistributedFileSystem dfs,
+  public static int collectNumCorruptBlocksInFile(final DistributedFileSystem dfs,
                                     final Path filePath) throws IOException {
     FileStatus stat = dfs.getFileStatus(filePath);
     BlockLocation[] blocks = 
@@ -709,7 +989,7 @@ public class RaidShell extends Configured implements Tool {
     
     int count = 0;
     for (BlockLocation block : blocks) {
-      if (this.isBlockCorrupt(block)) {
+      if (RaidShell.isBlockCorrupt(block)) {
         count ++;
         if (LOG.isDebugEnabled()) {
           LOG.debug("file " + filePath.toString() + " corrupt in block " + 
@@ -735,7 +1015,15 @@ public class RaidShell extends Configured implements Tool {
   protected boolean isFileCorrupt(final DistributedFileSystem dfs, 
       final FileStatus fileStat) 
     throws IOException {
-    return isFileCorrupt(dfs, fileStat, false); 
+    return isFileCorrupt(dfs, fileStat, false, conf,
+        this.numNonRaidedMissingBlks, this.numStrpMissingBlksMap); 
+  }
+  
+  protected boolean isFileCorrupt(final DistributedFileSystem dfs, 
+      final FileStatus fileStat, boolean cntMissingBlksPerStrp) 
+    throws IOException {
+    return isFileCorrupt(dfs, fileStat, cntMissingBlksPerStrp, conf,
+        this.numNonRaidedMissingBlks, this.numStrpMissingBlksMap); 
   }
   
   /**
@@ -743,12 +1031,17 @@ public class RaidShell extends Configured implements Tool {
    * @param dfs
    * @param filePath
    * @param cntMissingBlksPerStrp
+   * @param numNonRaidedMissingBlks
+   * @param numStrpMissingBlksMap
    * @return
    * @throws IOException
    */
-  protected boolean isFileCorrupt(final DistributedFileSystem dfs, 
+  public static boolean isFileCorrupt(final DistributedFileSystem dfs, 
                                 final FileStatus fileStat, 
-                                final boolean cntMissingBlksPerStrp) 
+                                final boolean cntMissingBlksPerStrp,
+                                final Configuration conf, 
+                                AtomicLong numNonRaidedMissingBlks,
+                                Map<String, AtomicLongArray> numStrpMissingBlksMap) 
     throws IOException {
     if (fileStat == null) {
       return false;
@@ -760,28 +1053,35 @@ public class RaidShell extends Configured implements Tool {
       HashMap<Integer, Integer> corruptBlocksPerStripe =
         new LinkedHashMap<Integer, Integer>();
       boolean fileCorrupt = false;
-      RaidInfo raidInfo = RaidUtils.getFileRaidInfo(fileStat, conf);
-      
+      // Har checking requires one more RPC to namenode per file
+      // skip it for performance. 
+      RaidInfo raidInfo = RaidUtils.getFileRaidInfo(fileStat, conf, true);
+      if (raidInfo.codec == null) {
+        raidInfo = RaidUtils.getFileRaidInfo(fileStat, conf, false);
+      }
       if (raidInfo.codec == null) {
         // Couldn't find out the parity file, so the file is corrupt
         int count = collectNumCorruptBlocksInFile(dfs, filePath);
-        if (cntMissingBlksPerStrp) {
-          incrNonRaidedMissingBlks(count);
+        if (cntMissingBlksPerStrp && numNonRaidedMissingBlks != null) {
+          numNonRaidedMissingBlks.addAndGet(count);
         }
         return true;
       }
 
       if (raidInfo.codec.isDirRaid) {
         RaidUtils.collectDirectoryCorruptBlocksInStripe(conf, dfs, raidInfo, 
-            filePath, corruptBlocksPerStripe);
+            fileStat, corruptBlocksPerStripe);
       } else {
-        RaidUtils.collectFileCorruptBlocksInStripe(dfs, raidInfo, filePath,
+        RaidUtils.collectFileCorruptBlocksInStripe(dfs, raidInfo, fileStat,
             corruptBlocksPerStripe);
       }
 
       final int maxCorruptBlocksPerStripe = raidInfo.parityBlocksPerStripe;
 
-      for (int corruptBlocksInStripe: corruptBlocksPerStripe.values()) {
+      for (Integer corruptBlocksInStripe: corruptBlocksPerStripe.values()) {
+        if (corruptBlocksInStripe == null) {
+          continue;
+        }
         //detect if the file has any stripes which cannot be fixed by Raid
         if (LOG.isDebugEnabled()) {
           LOG.debug("file " + filePath.toString() +
@@ -793,8 +1093,9 @@ public class RaidShell extends Configured implements Tool {
             fileCorrupt = true;
           }
         }
-        if(cntMissingBlksPerStrp) {
-          incrStrpMissingBlks(raidInfo.codec.id, corruptBlocksInStripe-1);
+        if(cntMissingBlksPerStrp && numStrpMissingBlksMap != null) {
+          numStrpMissingBlksMap.get(raidInfo.codec.id).incrementAndGet(
+              corruptBlocksInStripe-1);
         }
       }
       return fileCorrupt;
@@ -1050,14 +1351,6 @@ public class RaidShell extends Configured implements Tool {
   int getCorruptCount() {
     return corruptCounter.get();
   }
-    
-  private void incrNonRaidedMissingBlks(int num) {
-    this.numNonRaidedMissingBlks.addAndGet(num);
-  }
-  
-  private void incrStrpMissingBlks(String codecId, int index){
-    numStrpMissingBlksMap.get(codecId).incrementAndGet(index);
-  }
   
   long getStrpMissingBlks(String codecId, int index){
     return numStrpMissingBlksMap.get(codecId).get(index);
@@ -1077,7 +1370,7 @@ public class RaidShell extends Configured implements Tool {
       if (harPath.startsWith(prefix)) {
         float usefulPercent =
           PurgeMonitor.usefulHar(
-            codec, fs, fs, new Path(harPath), prefix, conf, null);
+            codec, null, fs, fs, new Path(harPath), prefix, conf, null);
         out.println("Useful percent of " + harPath + " " + usefulPercent);
       } else {
         System.err.println("Har " + harPath + " is not located in " +
@@ -1155,7 +1448,8 @@ public class RaidShell extends Configured implements Tool {
         "Purge File ",
         java.util.Collections.singletonList(parityPath),
         parityFs,
-        new PurgeMonitor.PurgeParityFileFilter(conf, codec, srcFs, parityFs,
+        new PurgeMonitor.PurgeParityFileFilter(conf, codec, null,
+            srcFs, parityFs,
           parityPrefix, null, entriesProcessed),
         1,
         false);
@@ -1203,7 +1497,7 @@ public class RaidShell extends Configured implements Tool {
     }
   }
   
-  private boolean isBlockCorrupt(BlockLocation fileBlock)
+  static private boolean isBlockCorrupt(BlockLocation fileBlock)
       throws IOException {
     if (fileBlock == null)
       // empty block

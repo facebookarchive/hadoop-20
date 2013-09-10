@@ -21,6 +21,8 @@ import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 
@@ -28,6 +30,7 @@ import org.apache.hadoop.io.Writable;
  * Metadata for a currently open file
  * @see FileSystem#iterativeGetOpenFiles
  */
+@ThriftStruct
 public class OpenFileInfo implements Writable {
   
   public OpenFileInfo() {
@@ -48,7 +51,20 @@ public class OpenFileInfo implements Writable {
     millisOpen = in.readLong();
   }
 
+  @ThriftField(1)
   public String filePath;       // full path of the file
+  @ThriftField(2)
   public long millisOpen;       // milliseconds that the file has been held open
+
+  public static void write(DataOutput out, OpenFileInfo elem) throws IOException {
+    OpenFileInfo info = new OpenFileInfo(elem.filePath, elem.millisOpen);
+    info.write(out);
+  }
+
+  public static OpenFileInfo read(DataInput in) throws IOException {
+    OpenFileInfo info = new OpenFileInfo();
+    info.readFields(in);
+    return info;
+  }
 }
 

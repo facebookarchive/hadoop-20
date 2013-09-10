@@ -104,7 +104,9 @@
 
   <!-- the normal classpath -->
   <path id="contrib-classpath">
+    <pathelement location="${hadoop.root}/build/contrib/storageservice/classes"/>
     <pathelement location="${hadoop.root}/build/contrib/raid/classes"/>
+    <pathelement location="${hadoop.root}/build/contrib/highavailability/classes"/>
     <pathelement location="${build.classes}"/>
     <pathelement location="${hadoop.root}/build/tools"/>
     <pathelement location="${hadoop.root}/build/examples"/>
@@ -122,6 +124,8 @@
     <pathelement location="${build.test}" />
     <pathelement location="${hadoop.root}/build/test/classes"/>
     <pathelement location="${hadoop.root}/src/contrib/test"/>
+    <pathelement location="${hadoop.root}/build/contrib/storageservice/test"/>
+    <pathelement location="${hadoop.root}/build/contrib/highavailability/test"/>
     <pathelement location="${conf.dir}"/>
     <pathelement location="${hadoop.root}/build"/>
     <pathelement location="${build.examples}"/>
@@ -163,6 +167,19 @@
      deprecation="${javac.deprecation}">
      <classpath refid="contrib-classpath"/>
     </javac>
+  </target>
+
+  <target name="jar-source" unless="skip.contrib">
+    <jar jarfile="${build.dir}/hadoop-${version}-${name}-sources.jar">
+      <manifest>
+        <section name="org/apache/hadoop">
+          <attribute name="Implementation-Title" value="hadoop-${name}"/>
+          <attribute name="Implementation-Version" value="${version}"/>
+          <attribute name="Implementation-Vendor" value="Facebook"/>
+        </section>
+      </manifest>
+      <fileset dir="${src.dir}" includes="*/**"/>
+    </jar>
   </target>
 
 

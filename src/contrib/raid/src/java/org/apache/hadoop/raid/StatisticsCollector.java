@@ -34,6 +34,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.raid.Statistics.Counters;
@@ -206,7 +207,7 @@ public class StatisticsCollector implements Runnable {
     long saving = 0;
     for (Codec codec : Codec.getCodecs()) {
       String code = codec.id;
-      long s = lastRaidStatistics.get(code).getSaving();
+      long s = lastRaidStatistics.get(code).getSaving(conf);
       if (s == -1) {
         return -1;
       }
@@ -226,7 +227,7 @@ public class StatisticsCollector implements Runnable {
     long saving = 0;
     for (Codec codec : Codec.getCodecs()) {
       String code = codec.id;
-      long s = lastRaidStatistics.get(code).getSaving();
+      long s = lastRaidStatistics.get(code).getSaving(conf);
       if (s > 0) {
         metrics.savingForCode.get(code).set(s);
         saving += s;
@@ -248,7 +249,7 @@ public class StatisticsCollector implements Runnable {
     long saving = 0;
     for (Codec codec : Codec.getCodecs()) {
       String code = codec.id;
-      long s = lastRaidStatistics.get(code).getDoneSaving();
+      long s = lastRaidStatistics.get(code).getDoneSaving(conf);
       if (s == -1) {
         return -1;
       }
@@ -264,7 +265,7 @@ public class StatisticsCollector implements Runnable {
     DFSClient dfs;
     double totalPhysical;
     try {
-      dfs = new DFSClient(conf);
+      dfs = ((DistributedFileSystem)FileSystem.get(conf)).getClient();
       totalPhysical = dfs.getNSDiskStatus().getDfsUsed();
     } catch (IOException e) {
       return -1;
@@ -341,6 +342,9 @@ public class StatisticsCollector implements Runnable {
     for (PolicyInfo info : allPolicyInfos) {
       String code = info.getCodecId();
       Codec codec = Codec.getCodec(code);
+      if (codec == null) {
+      	continue;
+      }
       if (!codec.isDirRaid) {
         fileRaidInfos.add(info);
         fileRaidRoots.addAll(info.getSrcPathExpanded());
@@ -358,6 +362,9 @@ public class StatisticsCollector implements Runnable {
     for (PolicyInfo info : allPolicyInfos) {
       String code = info.getCodecId();
       Codec codec = Codec.getCodec(code);
+      if (codec == null) {
+      	continue;
+      }
       if (codec.isDirRaid) {
         dirRaidInfos.add(info);
         dirRaidRoots.addAll(info.getSrcPathExpanded());

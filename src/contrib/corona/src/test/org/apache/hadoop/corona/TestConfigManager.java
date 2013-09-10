@@ -52,7 +52,7 @@ public class TestConfigManager extends TestCase {
 
     ConfigManager configManager = new ConfigManager(TYPES, conf);
     PoolInfo poolInfo = new PoolInfo("defaultGroup", "myPool");
-    assertEquals(ScheduleComparator.FIFO, configManager.getComparator(poolInfo));
+    assertEquals(ScheduleComparator.FIFO, configManager.getPoolComparator(poolInfo));
     assertEquals(Integer.MAX_VALUE, configManager.getPoolMaximum(poolInfo, ResourceType.MAP));
     assertEquals(Integer.MAX_VALUE, configManager.getPoolMaximum(poolInfo, ResourceType.REDUCE));
     assertEquals(0, configManager.getPoolMinimum(poolInfo, ResourceType.MAP));
@@ -64,7 +64,7 @@ public class TestConfigManager extends TestCase {
     assertEquals(1.0, configManager.getWeight(poolInfo));
   }
 
-  public void testComparator() throws IOException {
+  public void testPoolComparator() throws IOException {
     FileWriter out = new FileWriter(CONFIG_FILE_PATH);
     out.write("<?xml version=\"1.0\"?>\n");
     out.write("<configuration>\n");
@@ -82,11 +82,30 @@ public class TestConfigManager extends TestCase {
 
     ConfigManager configManager = new ConfigManager(TYPES, conf);
     assertEquals(ScheduleComparator.FIFO,
-        configManager.getComparator(new PoolInfo("defaultGroup", "poolA")));
+        configManager.getPoolComparator(new PoolInfo("defaultGroup",
+                                                     "poolA")));
     assertEquals(ScheduleComparator.FAIR,
-        configManager.getComparator(new PoolInfo("defaultGroup", "poolB")));
+        configManager.getPoolComparator(new PoolInfo("defaultGroup",
+                                                     "poolB")));
     assertEquals(ScheduleComparator.FAIR,
-        configManager.getComparator(new PoolInfo("defaultGroup", "poolC")));
+        configManager.getPoolComparator(new PoolInfo("defaultGroup",
+                                                     "poolC")));
+  }
+
+  public void testPoolGroupComparator() throws IOException {
+    FileWriter out = new FileWriter(CONFIG_FILE_PATH);
+    out.write("<?xml version=\"1.0\"?>\n");
+    out.write("<configuration>\n");
+    out.write("  <group name=\"firstGroup\">\n");
+    out.write("    <pool name=\"poolA\">\n");
+    out.write("    </pool>");
+    out.write("  </group>");
+    out.write("</configuration>\n");
+    out.close();
+
+    ConfigManager configManager = new ConfigManager(TYPES, conf);
+    assertEquals(ScheduleComparator.PRIORITY,
+        configManager.getPoolGroupComparator("firstGroup"));
   }
 
   public void testMinTasks() throws IOException {
@@ -190,6 +209,36 @@ public class TestConfigManager extends TestCase {
     assertEquals(2.0, configManager.getWeight(poolInfoA));
     assertEquals(1.0, configManager.getWeight(poolInfoB));
   }
+
+  public void testPriority() throws IOException {
+    FileWriter out = new FileWriter(CONFIG_FILE_PATH);
+    out.write("<?xml version=\"1.0\"?>\n");
+    out.write("<configuration>\n");
+    out.write("  <group name=\"firstGroup\">\n");
+    out.write("    <pool name=\"poolA\">\n");
+    out.write("      <priority>2</priority>\n");
+    out.write("    </pool>");
+    out.write("    <pool name=\"poolB\">\n");
+    out.write("      <priority>1</priority>\n");
+    out.write("    </pool>");
+    out.write("  </group>");
+    out.write("  <group name=\"secondGroup\">\n");
+    out.write("    <pool name=\"poolC\">\n");
+    out.write("      <priority>3</priority>\n");
+    out.write("    </pool>");
+    out.write("  </group>");
+    out.write("</configuration>\n");
+    out.close();
+
+    ConfigManager configManager = new ConfigManager(TYPES, conf);
+    assertEquals(2, configManager.getPriority(new PoolInfo("firstGroup",
+        "poolA")));
+    assertEquals(1, configManager.getPriority(new PoolInfo("firstGroup",
+        "poolB")));
+    assertEquals(3, configManager.getPriority(new PoolInfo("secondGroup",
+        "poolC")));
+  }
+
 
   public void testLocalityWait() throws IOException {
     FileWriter out = new FileWriter(CONFIG_FILE_PATH);

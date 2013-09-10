@@ -38,6 +38,7 @@ import org.apache.hadoop.io.compress.DefaultCodec;
 import org.apache.hadoop.mapred.IFile.Writer;
 import org.apache.hadoop.mapred.Merger.Segment;
 import org.apache.hadoop.mapred.Task.TaskReporter;
+import org.apache.hadoop.util.LexicographicalComparerHolder;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.ResourceCalculatorPlugin.ProcResourceValues;
 
@@ -201,6 +202,7 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
     long sortStartMilli = System.currentTimeMillis();
     ProcResourceValues sortStartProcVals =
         task.getCurrentProcResourceValues();
+    long sortStart = task.jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
     // sort
     for (int i = 0; i < reducePartitions.length; i++) {
       reducePartitions[i].groupOrSort();
@@ -208,8 +210,10 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
     long sortEndMilli = System.currentTimeMillis();
     ProcResourceValues sortEndProcVals =
         task.getCurrentProcResourceValues();
+    long sortEnd = task.jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
     mapSpillSortCounter.incCountersPerSort(sortStartProcVals,
         sortEndProcVals, sortEndMilli - sortStartMilli);
+    mapSpillSortCounter.incJVMCPUPerSort(sortStart, sortEnd);
     return sortEndProcVals;
   }
 
@@ -217,6 +221,7 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
   public void sortAndSpill() throws IOException {
     ProcResourceValues sortEndProcVals = sortReduceParts();
     long sortEndMilli = System.currentTimeMillis();
+    long spillStart = task.jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
     // spill
     FSDataOutputStream out = null;
     long spillBytes = 0;
@@ -259,8 +264,10 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
     long spillEndMilli = System.currentTimeMillis();
     ProcResourceValues spillEndProcVals =
         task.getCurrentProcResourceValues();
+    long spillEnd = task.jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
     mapSpillSortCounter.incCountersPerSpill(sortEndProcVals,
         spillEndProcVals, spillEndMilli - sortEndMilli, spillBytes);
+    mapSpillSortCounter.incJVMCPUPerSpill(spillStart, spillEnd);
   }
 
   public void spillSingleRecord(K key, V value, int part)
@@ -269,6 +276,7 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
     ProcResourceValues spillStartProcVals =
         task.getCurrentProcResourceValues();
     long spillStartMilli = System.currentTimeMillis();
+    long spillStart = task.jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
     // spill
     FSDataOutputStream out = null;
     long spillBytes = 0;
@@ -338,6 +346,8 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
         task.getCurrentProcResourceValues();
     mapSpillSortCounter.incCountersPerSpill(spillStartProcVals,
         spillEndProcVals, spillEndMilli - spillStartMilli, spillBytes);
+    long spillEnd = task.jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
+    mapSpillSortCounter.incJVMCPUPerSpill(spillStart, spillEnd);
     mapSpillSortCounter.incSpillSingleRecord();
   }
   
@@ -358,11 +368,14 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
     }
     long mergeStartMilli = System.currentTimeMillis();
     ProcResourceValues mergeStartProcVals = task.getCurrentProcResourceValues();
+    long mergeStart = task.jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
     mergeParts();
     long mergeEndMilli = System.currentTimeMillis();
     ProcResourceValues mergeEndProcVals = task.getCurrentProcResourceValues();
+    long mergeEnd = task.jmxThreadInfoTracker.getTaskCPUTime("MAIN_TASK");
     mapSpillSortCounter.incMergeCounters(mergeStartProcVals, mergeEndProcVals,
         mergeEndMilli - mergeStartMilli);
+    mapSpillSortCounter.incJVMCPUMerge(mergeStart, mergeEnd);
   }
 
   private void mergeParts() throws IOException, InterruptedException,
@@ -469,21 +482,19 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
                   @Override
                   public int compare(byte[] b1, int s1, int l1,
                       byte[] b2, int s2, int l2) {
-                    return LexicographicalComparerHolder.BEST_COMPARER
-                        .compareTo(
+                    return LexicographicalComparerHolder.compareBytes(
                             b1, 
                             s1 + WritableUtils.INT_LENGTH_BYTES, 
                             l1 - WritableUtils.INT_LENGTH_BYTES, 
                             b2, 
                             s2 + WritableUtils.INT_LENGTH_BYTES, 
-                            l2 - WritableUtils.INT_LENGTH_BYTES
-                            );
+                            l2 - WritableUtils.INT_LENGTH_BYTES);
                   }
 
                   @Override
                   public int compare(K o1, K o2) {
-                    return LexicographicalComparerHolder.BEST_COMPARER
-                        .compareTo( o1.getBytes(), 0, o1.getLength(), 
+                    return LexicographicalComparerHolder.compareBytes(
+                    		o1.getBytes(), 0, o1.getLength(), 
                             o2.getBytes(), 0, o2.getLength());
                   }
                 },  reporter, null,

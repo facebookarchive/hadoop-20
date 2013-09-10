@@ -19,6 +19,8 @@
 package org.apache.hadoop.streaming;
 
 import java.io.*;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.apache.hadoop.streaming.Environment;
 
@@ -44,9 +46,12 @@ public class TrAppReduce
     expect("mapred_job_tracker", "local");
     //expect("mapred_local_dir", "build/test/mapred/local");
     expectDefined("mapred_local_dir");
+    Set<String> output_classes = new HashSet<String>();
+    output_classes.add("org.apache.hadoop.io.BytesWritable");
+    output_classes.add("org.apache.hadoop.io.Text");
     expect("mapred_output_format_class", "org.apache.hadoop.mapred.TextOutputFormat");
-    expect("mapred_output_key_class", "org.apache.hadoop.io.Text");
-    expect("mapred_output_value_class", "org.apache.hadoop.io.Text");
+    expect("mapred_output_key_class", output_classes);
+    expect("mapred_output_value_class", output_classes);
 
     expect("mapred_task_is_map", "false");
     expectDefined("mapred_task_id");
@@ -59,6 +64,15 @@ public class TrAppReduce
   }
 
   // this runs in a subprocess; won't use JUnit's assertTrue()    
+  void expect(String evName, Set<String> evVals) throws IOException
+  {
+    String got = env.getProperty(evName);
+    if (!evVals.contains(got)) {
+      String msg = "FAIL evName=" + evName + " got=" + got + " expect=" + evVals;
+      throw new IOException(msg);
+    }
+  }
+  
   void expect(String evName, String evVal) throws IOException
   {
     String got = env.getProperty(evName);

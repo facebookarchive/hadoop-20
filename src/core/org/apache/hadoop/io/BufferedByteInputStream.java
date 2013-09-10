@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.io;
 
+import java.io.BufferedInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -55,8 +56,11 @@ public class BufferedByteInputStream extends InputStream {
    */
   public static DataInputStream wrapInputStream(InputStream is, int bufferSize,
       int readBufferSize) {
-    return new DataInputStream(new BufferedByteInputStream(is, bufferSize,
-        readBufferSize));
+    // wrapping BufferedByteInputStream in BufferedInputStream decreases
+    // pressure on BBIS internal locks, and we read from the BBIS in
+    // bigger chunks
+    return new DataInputStream(new BufferedInputStream(
+        new BufferedByteInputStream(is, bufferSize, readBufferSize)));
   }
 
   /**
@@ -70,6 +74,7 @@ public class BufferedByteInputStream extends InputStream {
       int readBufferSize) {
     buffer = new BufferedByteInputOutput(bufferSize);
     readThread = new ReadThread(is, buffer, readBufferSize);
+    readThread.setDaemon(true);
     readThread.start();
     underlyingInputStream = is;
   }

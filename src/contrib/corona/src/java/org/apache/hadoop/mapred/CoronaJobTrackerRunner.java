@@ -13,7 +13,8 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocalDirAllocator;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.util.CoronaFailureEvent;
+import org.apache.hadoop.util.CoronaFailureEventInjector;
 import org.apache.hadoop.util.Shell;
 
 public class CoronaJobTrackerRunner extends TaskRunner {
@@ -101,7 +102,14 @@ public class CoronaJobTrackerRunner extends TaskRunner {
     return conf.get("mapred.corona.standalonecjt.java.opts",
                        JobConf.DEFAULT_MAPRED_TASK_JAVA_OPTS);
   }
-
+  
+  private static File getJobStdLogFile(TaskAttemptID taskid, TaskLog.LogName filter) {
+    return new File(
+      CoronaTaskTracker.jobTrackerLogDir() + File.separator + "userlogs" + 
+      File.separator+ taskid.toString() + File.separator + filter.toString()
+    );
+  }
+  
   @SuppressWarnings("deprecation")
   @Override
   public void run() {
@@ -191,9 +199,28 @@ public class CoronaJobTrackerRunner extends TaskRunner {
       vargs.add(task.getTaskID().toString()); // Pass attempt id.
       vargs.add(coronaSessionInfo.getJobTrackerAddr().getHostName());
       vargs.add(Integer.toString(coronaSessionInfo.getJobTrackerAddr()
-          .getPort()));
-
-      tracker.addToMemoryManager(task.getTaskID(), task.isMapTask(), conf);
+        .getPort()));
+      // add the task log http server host and port
+      vargs.add(this.tracker.localHostname);
+      vargs.add(Integer.toString(this.tracker.httpPort));
+      
+      // inject the job tracker failure event if needed
+      if (this.tracker instanceof CoronaTaskTracker) {
+        CoronaFailureEventInjector jtEventInjector = 
+            ((CoronaTaskTracker)this.tracker).jtFailureEventInjector;
+        if (jtEventInjector != null) {
+          LOG.info("Injecting failure event to RJT");
+          CoronaFailureEvent failureEvent = jtEventInjector.pollFailureEvent();
+          if (failureEvent != null) {
+            LOG.info("Injecting failure event " + failureEvent.toString());
+            vargs.add(failureEvent.toString());
+          }
+        }
+      }
+     //vargs.add("2:0");
+     
+      tracker.addToMemoryManager(task.getTaskID(), task.isMapTask(), conf,
+        false);
 
       // set memory limit using ulimit if feasible and necessary ...
       String[] ulimitCmd = Shell.getUlimitMemoryCommand(getChildUlimit(conf));
@@ -206,8 +233,8 @@ public class CoronaJobTrackerRunner extends TaskRunner {
       }
 
       // Set up the redirection of the task's stdout and stderr streams
-      File stdout = TaskLog.getTaskLogFile(taskid, TaskLog.LogName.STDOUT);
-      File stderr = TaskLog.getTaskLogFile(taskid, TaskLog.LogName.STDERR);
+      File stdout = getJobStdLogFile(taskid, TaskLog.LogName.STDOUT);
+      File stderr = getJobStdLogFile(taskid, TaskLog.LogName.STDERR);
       stdout.getParentFile().mkdirs();
 
       Map<String, String> env = new HashMap<String, String>();

@@ -78,5 +78,7 @@ public enum EditsElement {
     KEY_LENGTH,
     KEY_BLOB,
     CHECKSUM,
-    OFFSET
+    OFFSET,
+    INODE_ID,
+    BLOCK_CHECKSUM
 }

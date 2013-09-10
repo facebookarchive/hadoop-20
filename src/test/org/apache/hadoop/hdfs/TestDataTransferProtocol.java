@@ -185,6 +185,7 @@ public class TestDataTransferProtocol extends TestCase {
     Text.writeString(sendOut, "cl");// clientID
     sendOut.writeBoolean(false); // no src node info
     sendOut.writeInt(0);           // number of downstream targets
+    sendOut.writeInt(0); // The size for bitset of options.
     sendOut.writeByte((byte)DataChecksum.CHECKSUM_CRC32);
     
     // bad bytes per checksum
@@ -222,9 +223,11 @@ public class TestDataTransferProtocol extends TestCase {
     Text.writeString(sendOut, "cl");// clientID
     sendOut.writeBoolean(false); // no src node info
     sendOut.writeInt(0);
+    sendOut.writeInt(0); // number of options
     sendOut.writeByte((byte)DataChecksum.CHECKSUM_CRC32);
     sendOut.writeInt((int)512);
     sendOut.writeInt(4);           // size of packet
+    sendOut.writeInt(2); // packet version
     sendOut.writeLong(0);          // OffsetInBlock
     sendOut.writeLong(100);        // sequencenumber
     sendOut.writeBoolean(false);   // lastPacketInBlock
@@ -250,9 +253,11 @@ public class TestDataTransferProtocol extends TestCase {
     Text.writeString(sendOut, "cl");// clientID
     sendOut.writeBoolean(false); // no src node info
     sendOut.writeInt(0);
+    sendOut.writeInt(0); // number of options.
     sendOut.writeByte((byte)DataChecksum.CHECKSUM_CRC32);
     sendOut.writeInt((int)512);    // checksum size
     sendOut.writeInt(8);           // size of packet
+    sendOut.writeInt(1);           // packet version
     sendOut.writeLong(0);          // OffsetInBlock
     sendOut.writeLong(100);        // sequencenumber
     sendOut.writeBoolean(true);    // lastPacketInBlock
@@ -261,8 +266,9 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeInt(0);           // zero checksum
     //ok finally write a block with 0 len
     Text.writeString(recvOut, "");
-    new DataTransferProtocol.PipelineAck(100, 
-        new short[]{DataTransferProtocol.OP_STATUS_SUCCESS}).write(recvOut);
+    new DataTransferProtocol.PipelineAck(100,
+        new short[] { DataTransferProtocol.OP_STATUS_SUCCESS }, null)
+        .write(recvOut);
     sendRecvData("Writing a zero len block blockid " + newBlockId, false);
     
     /* Test OP_READ_BLOCK */
@@ -281,6 +287,8 @@ public class TestDataTransferProtocol extends TestCase {
     recvOut.writeShort((short)DataTransferProtocol.OP_STATUS_ERROR);
     Text.writeString(sendOut, "cl");
     sendOut.writeBoolean(false);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); // The size for bitset of options.
     sendRecvData("Wrong block ID " + newBlockId + " for read", false); 
 
     // negative block start offset
@@ -294,6 +302,8 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(fileLen);
     Text.writeString(sendOut, "cl");
     sendOut.writeBoolean(false);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); //bitset options.
     sendRecvData("Negative start-offset for read for block " + 
                  firstBlock.getBlockId(), false);
 
@@ -308,6 +318,8 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(fileLen);
     Text.writeString(sendOut, "cl");
     sendOut.writeBoolean(false);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); //bitset options.
     sendRecvData("Wrong start-offset for reading block " +
                  firstBlock.getBlockId(), false);
     
@@ -324,6 +336,8 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(-1-random.nextInt(oneMil));
     Text.writeString(sendOut, "cl");
     sendOut.writeBoolean(false);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); //bitset options.
     sendRecvData("Negative length for reading block " +
                  firstBlock.getBlockId(), false);
     
@@ -340,6 +354,8 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(fileLen + 1);
     Text.writeString(sendOut, "cl");
     sendOut.writeBoolean(false);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); //bitset options.
     sendRecvData("Wrong length for reading block " +
                  firstBlock.getBlockId(), false);
     
@@ -354,6 +370,8 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(fileLen);
     Text.writeString(sendOut, "cl");
     sendOut.writeBoolean(true);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); //bitset options.
     readFile(fileSys, file, fileLen);
     
     // not support REUSE_CONNECTION

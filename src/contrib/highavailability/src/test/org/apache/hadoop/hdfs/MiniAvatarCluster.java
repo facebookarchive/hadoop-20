@@ -21,11 +21,14 @@ import java.io.FileOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.util.Collection;
+import java.util.Enumeration;
 import java.util.List;
 import java.util.Properties;
 import java.util.ArrayList;
 import java.util.Random;
 import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import junit.framework.Assert;
 
@@ -43,11 +46,13 @@ import org.apache.hadoop.hdfs.MiniDFSCluster.ShutdownInterface;
 import org.apache.hadoop.hdfs.MiniDFSCluster.ShutDownUtil;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.qjournal.MiniJournalCluster;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.hdfs.server.namenode.StandbyStorageRetentionManager;
+import org.apache.hadoop.hdfs.server.namenode.Standby;
+import org.apache.hadoop.hdfs.server.namenode.NNStorageDirectoryRetentionManager;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
@@ -68,7 +73,8 @@ public class MiniAvatarCluster {
   public static final String NAMESERVICE_ID_PREFIX = "nameserviceId";
   public static int currNSId = 0;
   public static int instantiationRetries = 15;
-
+  public static final String JID = "test-journal";
+  
   public static class DataNodeProperties implements ShutdownInterface {
     public AvatarDataNode datanode;
     public Configuration conf;
@@ -120,7 +126,7 @@ public class MiniAvatarCluster {
         this.avatar.shutdown(true);
     }
   }
-
+  
   private static final Log LOG = LogFactory.getLog(MiniAvatarCluster.class);
 
   private static final String DEFAULT_TEST_DIR = 
@@ -128,6 +134,8 @@ public class MiniAvatarCluster {
   public static final String TEST_DIR =
     new File(System.getProperty("test.build.data", DEFAULT_TEST_DIR)).
     getAbsolutePath();
+
+  private static final AtomicInteger ClusterId = new AtomicInteger(1);
 
   private static final String ZK_DATA_DIR = TEST_DIR + "/zk.data";
   private static final String ZK_CONF_FILE = TEST_DIR + "/zk.conf";
@@ -142,19 +150,38 @@ public class MiniAvatarCluster {
   private String[] hosts;
   private boolean federation;
   private NameNodeInfo[] nameNodes;
+  private final boolean enableQJM;
+  private StartupOption startOpt;
+  private final int numJournalNodes;
+  private MiniJournalCluster journalCluster = null; 
   private Configuration conf;
   
+  /**
+   * Some test cases only work with FileJournalManager, need a way to tell
+   * if QJM is enabled here.
+   */
+  public boolean isUsingJournalCluster() {
+  	return journalCluster != null;
+  }
+  
+  public MiniJournalCluster getJournalCluster() {
+    if (journalCluster == null) {
+      throw new IllegalArgumentException(
+          "MiniAvatarCluster not configured to use journal cluster");
+    }
+    return journalCluster;
+  }
+
   public class NameNodeInfo {
     Configuration conf;
     public ArrayList<AvatarInfo> avatars = null;
-    private final String fsimagelocal0Dir;
-    private final String fsimagelocal1Dir;
     private final String fsimage0Dir;
     private final String fsimage1Dir;
-    private final String fseditslocal0Dir;
-    private final String fseditslocal1Dir;
     private final String fsedits0Dir;
     private final String fsedits1Dir;
+
+    private final String fsimagelocalDir;
+    private final String fseditslocalDir;
 
     private final int nnPort;
     private final int nn0Port;
@@ -177,12 +204,14 @@ public class MiniAvatarCluster {
     
     NameNodeInfo(int nnIndex) {
       avatarDir = baseAvatarDir;
-      fsimagelocal0Dir = avatarDir + "/fsimagelocal0";
-      fsimagelocal1Dir = avatarDir + "/fsimagelocal1";
+
+      fsimagelocalDir = avatarDir + "/fsimagelocal-"
+          + FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD;
+      fseditslocalDir = avatarDir + "/fseditslocal-"
+          + FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD;
+
       fsimage0Dir = avatarDir + "/fsimage0";
       fsimage1Dir = avatarDir + "/fsimage1";
-      fseditslocal0Dir = avatarDir + "/fseditslocal0";
-      fseditslocal1Dir = avatarDir + "/fseditslocal1";
       fsedits0Dir = avatarDir + "/fsedits0";
       fsedits1Dir = avatarDir + "/fsedits1";
 
@@ -201,14 +230,33 @@ public class MiniAvatarCluster {
       this.avatars = avatars;
     }
     
+    void unlockStorageDirectory(String instance) {
+      if (!instance.equals("zero") && !instance.equals("one")) {
+        throw new IllegalArgumentException(
+            "Specify one or zero, invalid argument : " + instance);
+      }
+      new File(fsimagelocalDir.replaceAll(
+          FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD, instance), "in_use.lock")
+          .delete();
+      new File(fseditslocalDir.replaceAll(
+          FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD, instance), "in_use.lock")
+          .delete();
+    }
+
     public void initClientConf(Configuration conf) {
       clientConf = new Configuration(conf);
       clientConf.set("fs.default.name", "hdfs://localhost:" + nnPort);
-      clientConf.set("fs.default.name0", "hdfs://localhost:" + nn0Port);
-      clientConf.set("fs.default.name1", "hdfs://localhost:" + nn1Port);
+      clientConf.set("fs.default.name0", "hdfs://127.0.0.1:" + nn0Port);
+      clientConf.set("fs.default.name1", "hdfs://127.0.0.1:" + nn1Port);
+      clientConf.set(NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY, "localhost:"
+          + nnPort);
+      clientConf.set(NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY + "0", "127.0.0.1:"
+          + nn0Port);
+      clientConf.set(NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY + "1", "127.0.0.1:"
+          + nn1Port);
       clientConf.set("dfs.namenode.dn-address", "localhost:" + nnDnPort);
-      clientConf.set("dfs.namenode.dn-address0", "localhost:" + nnDn0Port);
-      clientConf.set("dfs.namenode.dn-address1", "localhost:" + nnDn1Port);
+      clientConf.set("dfs.namenode.dn-address0", "127.0.0.1:" + nnDn0Port);
+      clientConf.set("dfs.namenode.dn-address1", "127.0.0.1:" + nnDn1Port);
       clientConf.set("fs.hdfs.impl",
           "org.apache.hadoop.hdfs.DistributedAvatarFileSystem");
       clientConf.setBoolean("fs.hdfs.impl.disable.cache", true);
@@ -222,27 +270,50 @@ public class MiniAvatarCluster {
       this.nameserviceId = nameserviceId;
       // avatar nodes
       if (federation) {
-        conf.set("dfs.namenode.rpc-address0", "localhost:" + rpc0Port);
-        conf.set("dfs.namenode.rpc-address1", "localhost:" + rpc1Port);
+        conf.set("dfs.namenode.rpc-address0", "127.0.0.1:" + rpc0Port);
+        conf.set("dfs.namenode.rpc-address1", "127.0.0.1:" + rpc1Port);
       } else {
         conf.set("fs.default.name", "hdfs://localhost:" + nnPort);
         conf.set("fs.default.name0", "hdfs://localhost:" + nn0Port);
         conf.set("fs.default.name1", "hdfs://localhost:" + nn1Port);
         conf.set("dfs.namenode.dn-address", "localhost:" + nnDnPort);
-        conf.set("dfs.http.address", "localhost:" + httpPort);
+        conf.set(NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY, "localhost:" + nnPort);
+        conf.set("dfs.http.address", "127.0.0.1:" + httpPort);
       }
       // Enable avatar testing framework for unit tests.
       conf.setFloat("dfs.avatarnode.failover.sample.percent", 1.0f);
+      conf.set("dfs.avatarnode.failover.test.data.dir", avatarDir);
 
-      conf.set("dfs.namenode.dn-address0", "localhost:" + nnDn0Port);
-      conf.set("dfs.namenode.dn-address1", "localhost:" + nnDn1Port);
-      conf.set("dfs.http.address0", "localhost:" + http0Port);
-      conf.set("dfs.http.address1", "localhost:" + http1Port);
+      conf.set("dfs.namenode.dn-address0", "127.0.0.1:" + nnDn0Port);
+      conf.set("dfs.namenode.dn-address1", "127.0.0.1:" + nnDn1Port);
+      conf.set("dfs.http.address0", "127.0.0.1:" + http0Port);
+      conf.set("dfs.http.address1", "127.0.0.1:" + http1Port);
+      conf.set(NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY + "0", "127.0.0.1:"
+          + nn0Port);
+      conf.set(NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY + "1", "127.0.0.1:"
+          + nn1Port);
+
+      // set the shared edits and image dirs.
+      if (enableQJM) {
+        String journalURI = journalCluster.getQuorumJournalURI(JID).toString();
+        
+        // set the edits dir
+        conf.set("dfs.name.edits.dir.shared0", journalURI + "/zero");
+        conf.set("dfs.name.edits.dir.shared1", journalURI + "/one");
+        
+        // set the image dir
+        conf.set("dfs.name.dir.shared0", journalURI + "/zero");
+        conf.set("dfs.name.dir.shared1", journalURI + "/one");
+        
+        conf.setBoolean("dfs.force.remote.image", true);
+      } else {
+        conf.set("dfs.name.edits.dir.shared0", fsedits0Dir);
+        conf.set("dfs.name.edits.dir.shared1", fsedits1Dir);
+        
+        conf.set("dfs.name.dir.shared0", fsimage0Dir);
+        conf.set("dfs.name.dir.shared1", fsimage1Dir);
+      }
       
-      conf.set("dfs.name.dir.shared0", fsimage0Dir);
-      conf.set("dfs.name.dir.shared1", fsimage1Dir);
-      conf.set("dfs.name.edits.dir.shared0", fsedits0Dir);
-      conf.set("dfs.name.edits.dir.shared1", fsedits1Dir);
       conf.setInt("dfs.safemode.extension", 1000);
       // These two ipc parameters help RPC connections to shut down quickly in
       // unit tests.
@@ -281,34 +352,51 @@ public class MiniAvatarCluster {
       a0Conf = new Configuration(conf);
       a1Conf = new Configuration(conf);
 
-      a0Conf.set("dfs.name.dir", fsimagelocal0Dir);
-      a0Conf.set("dfs.name.edits.dir", fseditslocal0Dir);
+      a0Conf.set("dfs.name.dir", fsimagelocalDir);
+      a0Conf.set("dfs.name.edits.dir", fseditslocalDir);
       a0Conf.set("fs.checkpoint.dir", avatarDir + "/checkpoint0");
 
-      a1Conf.set("dfs.name.dir", fsimagelocal1Dir);
-      a1Conf.set("dfs.name.edits.dir", fseditslocal1Dir);
+      a1Conf.set("dfs.name.dir", fsimagelocalDir);
+      a1Conf.set("dfs.name.edits.dir", fseditslocalDir);
       a1Conf.set("fs.checkpoint.dir", avatarDir + "/checkpoint1");
     }
     
     public void createAvatarDirs() {
-      new File(fsimagelocal0Dir).mkdirs();
-      new File(fsimagelocal1Dir).mkdirs();
+      new File(fsimagelocalDir.replaceAll(
+          FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD, "zero")).mkdirs();
+      new File(fsimagelocalDir.replaceAll(
+          FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD, "one")).mkdirs();
       new File(fsimage0Dir).mkdirs();
       new File(fsimage1Dir).mkdirs();
-      new File(fseditslocal0Dir).mkdirs();
-      new File(fseditslocal1Dir).mkdirs();
+      new File(fseditslocalDir.replaceAll(
+          FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD, "zero")).mkdirs();
+      new File(fseditslocalDir.replaceAll(
+          FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD, "one")).mkdirs();
       new File(fsedits0Dir).mkdirs();
       new File(fsedits1Dir).mkdirs();
     }
     
     public void cleanupAvatarDirs() throws IOException {
-      String[] files = new String[] {fsimagelocal0Dir, fsimagelocal1Dir,
-          fsimage0Dir, fsimage1Dir, fseditslocal0Dir, fseditslocal1Dir,
+      String[] files = new String[] {
+          fsimagelocalDir.replaceAll(
+              FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD, "zero"),
+          fsimagelocalDir.replaceAll(
+              FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD, "one"),
+          fsimage0Dir,
+          fsimage1Dir,
+          fseditslocalDir.replaceAll(
+              FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD, "zero"),
+          fseditslocalDir.replaceAll(
+              FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD, "one"),
           fsedits0Dir, fsedits1Dir
       };
       for (String filename : files) {
         FileUtil.fullyDelete(new File(filename));
       }
+    }
+
+    public String getNameserviceId() {
+      return nameserviceId;
     }
   }
 
@@ -321,6 +409,92 @@ public class MiniAvatarCluster {
   static {
     DataNode.setSecureRandom(new Random());
   }
+  
+  public static class Builder {
+  	private Configuration conf;
+  	private int numDataNodes = 1;
+  	private boolean format = true;
+  	private String[] racks = null;
+  	private String[] hosts = null;
+  	private int numNameNodes = 1;
+  	private boolean federation = false;
+  	private long[] simulatedCapacities = null;
+  	private int numJournalNodes = 3;
+  	private boolean enableQJM = true;
+    private MiniJournalCluster journalCluster = null;
+    private StartupOption startOpt = null;
+    private int instantiationRetries = 15;
+  	
+  	public Builder(Configuration conf) {
+  		this.conf = conf;
+  	}
+  	
+    public Builder startOpt(StartupOption startOpt) {
+      this.startOpt = startOpt;
+      return this;
+    }
+
+    public Builder instantionRetries(int instantionRetries) {
+      this.instantiationRetries = instantionRetries;
+      return this;
+    }
+
+  	public Builder numDataNodes(int numDataNodes) {
+  	  this.numDataNodes = numDataNodes;
+  	  return this;
+  	}
+  	
+  	public Builder format(boolean format) {
+  	  this.format = format;
+  	  return this;
+  	}
+  	
+  	public Builder racks(String[] racks) {
+  	  this.racks = racks;
+  	  return this;
+  	}
+  	
+  	public Builder hosts(String[] hosts) {
+  	  this.hosts = hosts;
+  	  return this;
+  	}
+  	
+  	public Builder numNameNodes(int numNameNodes) {
+  		this.numNameNodes = numNameNodes;
+  		return this;
+  	}
+  	
+  	public Builder federation(boolean federation) {
+  		this.federation = federation;
+  		return this;
+  	}
+  	
+  	public Builder simulatedCapacities(long[] simulatedCapacities) {
+  		this.simulatedCapacities = simulatedCapacities;
+  		return this;
+  	}
+  	
+  	public Builder numJournalNodes(int numJournalNodes) {
+  		this.numJournalNodes = numJournalNodes;
+  		return this;
+  	}
+  	
+  	public Builder enableQJM(boolean enableQJM) {
+  		this.enableQJM = enableQJM;
+  		return this;
+  	}
+  	
+    public Builder setJournalCluster(MiniJournalCluster journalCluster) {
+      this.journalCluster = journalCluster;
+      this.enableQJM = true;
+		return this;
+	}
+
+  	public MiniAvatarCluster build() 
+  			throws IOException, ConfigException, InterruptedException {
+  		return new MiniAvatarCluster(this);
+  	}
+  }
 
   public MiniAvatarCluster(Configuration conf,
                            int numDataNodes,
@@ -328,8 +502,10 @@ public class MiniAvatarCluster {
                            String[] racks,
                            String[] hosts) 
     throws IOException, ConfigException, InterruptedException {
-    this(conf, numDataNodes, format, racks, hosts, 1, false);
+  	this(new Builder(conf).numDataNodes(numDataNodes).format(format)
+  	    .racks(racks).hosts(hosts));
   }
+  
   public MiniAvatarCluster(Configuration conf,
                            int numDataNodes,
                            boolean format,
@@ -338,8 +514,13 @@ public class MiniAvatarCluster {
                            int numNameNodes,
                            boolean federation)
     throws IOException, ConfigException, InterruptedException {
-    this(conf, numDataNodes, format, racks, hosts, numNameNodes, federation, null);
+  	this(new Builder(conf).numDataNodes(numDataNodes).format(format)
+            .racks(racks)
+            .hosts(hosts)
+  					.numNameNodes(numNameNodes)
+  					.federation(federation));
   }
+  
   /**
    * Modify the config and start up the servers.  The rpc and info ports for
    * servers are guaranteed to use free ports.
@@ -365,16 +546,38 @@ public class MiniAvatarCluster {
                            boolean federation,
                            long[] simulatedCapacities)
     throws IOException, ConfigException, InterruptedException {
-
+  	this(new Builder(conf).numDataNodes(numDataNodes).format(format)
+        .racks(racks)
+        .hosts(hosts)
+        .numNameNodes(numNameNodes)
+        .federation(federation)
+        .simulatedCapacities(simulatedCapacities));
+  }
+  
+  public MiniAvatarCluster(Builder b) 
+  		throws IOException, ConfigException, InterruptedException {
+  	
+    Standby.CHECKPOINT_SLEEP_BEFORE_RETRY = 100;
+    this.conf = b.conf;
+    
     final String testDir = TEST_DIR + "/" + conf.get(MiniDFSCluster.DFS_CLUSTER_ID, "");
     baseAvatarDir = testDir + "/avatar";
     dataDir = testDir + "/data";
-    this.conf = conf;
-    this.numDataNodes = numDataNodes;
-    this.format = format;
-    this.racks = racks;
-    this.hosts = hosts;
     
+    this.instantiationRetries = b.instantiationRetries;
+    this.numDataNodes = b.numDataNodes;
+    this.format = b.format;
+    this.racks = b.racks;
+    this.hosts = b.hosts;
+    this.numJournalNodes = b.numJournalNodes;
+    this.enableQJM = b.enableQJM;
+    this.startOpt = b.startOpt;
+    this.journalCluster = b.journalCluster;
+
+    int clusterId = ClusterId.getAndIncrement();
+    conf.setInt(FSConstants.DFS_CLUSTER_ID, clusterId);
+    conf.set(FSConstants.DFS_CLUSTER_NAME, "MiniAvatarCluster-" + clusterId);
+
     conf.setInt("dfs.secondary.info.port", 0);
     conf.set("fs.ha.zookeeper.prefix", "/hdfs");
     conf.set("fs.ha.zookeeper.quorum", "localhost:" + zkClientPort);
@@ -386,11 +589,14 @@ public class MiniAvatarCluster {
     conf.setInt("dfs.datanode.fullblockreport.delay", 1000);
     conf.setInt("dfs.datanode.blockreceived.retry.internval", 1000);
     
-    conf.set("dfs.datanode.address", "localhost:0");
+    conf.set(FSConstants.DFS_DATANODE_ADDRESS_KEY, "localhost:0");
     conf.set("dfs.datanode.http.address", "localhost:0");
     conf.set("dfs.datanode.ipc.address", "localhost:0");
-    conf.set("dfs.datanode.dns.interface", "lo");
-    conf.set("dfs.namenode.dns.interface", "lo");
+
+    String loopBack = getLoopBackInterface();
+    LOG.info("LoopBack interface is : " + loopBack);
+    conf.set(FSConstants.DFS_DATANODE_DNS_INTERFACE, loopBack);
+    conf.set(FSConstants.DFS_NAMENODE_DNS_INTERFACE, loopBack);
 
     // other settings
     conf.setBoolean("dfs.permissions", false);
@@ -400,10 +606,14 @@ public class MiniAvatarCluster {
     conf.setLong("dfs.blockreport.initialDelay", 0);
     conf.setClass("topology.node.switch.mapping.impl", 
                   StaticMapping.class, DNSToSwitchMapping.class);
-    
-    conf.setInt("dfs.ingest.retries", 2);
+
+    if (conf.get("dfs.ingest.retries") == null) {
+      conf.setInt("dfs.ingest.retries", 2);
+    }
     conf.setLong("rpc.polling.interval", 10);
     conf.setLong("lease.check.interval", 10);
+    
+    conf.set("dfs.secondary.http.address", "0.0.0.0:0");
     
     // enable checkpoint by default
     if(conf.get("fs.checkpoint.enabled") == null) {
@@ -419,18 +629,23 @@ public class MiniAvatarCluster {
     conf.setInt("hdfs.avatarnode.sleep", 1000);
     
     // disable standby backup limits
-    conf.setInt(StandbyStorageRetentionManager.STANDBY_IMAGE_DAYS_TOKEEP, 0);
-    conf.setInt(StandbyStorageRetentionManager.STANDBY_IMAGE_COPIES_TOKEEP, 0);
+    conf.setInt(NNStorageDirectoryRetentionManager.NN_IMAGE_DAYS_TOKEEP, 0);
+    conf.setInt(NNStorageDirectoryRetentionManager.NN_IMAGE_COPIES_TOKEEP, 0);
 
-    this.federation = federation;
+    // start the JournalCluster.
+    if (this.enableQJM) {
+    	startJournalCluster();
+    }
+    
+    this.federation = b.federation;
     Collection<String> nameserviceIds = DFSUtil.getNameServiceIds(conf);
     if(nameserviceIds.size() > 1)  
       this.federation = true;
-    if (!federation && numNameNodes != 1) {
+    if (!federation && b.numNameNodes != 1) {
       throw new IOException("Only 1 namenode is allowed in non-federation cluster.");
     }
-    nameNodes = new NameNodeInfo[numNameNodes];
-    for (int nnIndex = 0; nnIndex < numNameNodes; nnIndex++) {
+    nameNodes = new NameNodeInfo[b.numNameNodes];
+    for (int nnIndex = 0; nnIndex < b.numNameNodes; nnIndex++) {
       nameNodes[nnIndex] = new NameNodeInfo(nnIndex);
       if (format)
         nameNodes[nnIndex].cleanupAvatarDirs();
@@ -446,7 +661,7 @@ public class MiniAvatarCluster {
       }
       initFederationConf(conf, nameserviceIds);
     }
-
+    
     if (this.format) {
       File data_dir = new File(dataDir);
       if (data_dir.exists() && !FileUtil.fullyDelete(data_dir)) {
@@ -462,7 +677,7 @@ public class MiniAvatarCluster {
     // wouldn't return from the standby initialization we would never start the
     // datanodes and hence we enter a deadlock.
     registerZooKeeperNodes();
-    startDataNodes(simulatedCapacities);
+    startDataNodes(b.simulatedCapacities);
     startAvatarNodes();
     waitAvatarNodesActive();
 
@@ -470,6 +685,30 @@ public class MiniAvatarCluster {
 
     waitExitSafeMode();
     waitForTheFirstCheckpoint();
+  }
+  
+  /**
+   * Retrieves the name of the loopback interface in a platform independent way.
+   */
+  private static String getLoopBackInterface() throws IOException {
+    String loopBack = "lo";
+    Enumeration<NetworkInterface> ifaces = NetworkInterface
+        .getNetworkInterfaces();
+    while (ifaces.hasMoreElements()) {
+      NetworkInterface iface = ifaces.nextElement();
+      if (iface.isLoopback()) {
+        loopBack = iface.getName();
+        break;
+      }
+    }
+    return loopBack;
+  }
+
+  private void startJournalCluster() throws IOException {
+    if (journalCluster == null) {
+      this.journalCluster = new MiniJournalCluster.Builder(conf)
+          .numJournalNodes(numJournalNodes).build();
+    }
   }
   
   private void initFederationConf(Configuration conf,
@@ -560,13 +799,13 @@ public class MiniAvatarCluster {
         AvatarZooKeeperClient zkClient =
           new AvatarZooKeeperClient(nni.conf, null, false);
         zkClient.registerPrimary("localhost:" + nni.nnPort, 
-        "localhost:" + nnPrimaryPort, true);
+        "127.0.0.1:" + nnPrimaryPort, true);
         zkClient.registerPrimary("localhost:" + nni.nnDnPort, 
-        "localhost:" + nnDnPrimaryPort, true);
+        "127.0.0.1:" + nnDnPrimaryPort, true);
         zkClient.registerPrimary("localhost:" + nni.httpPort,
-        "localhost:" + httpPrimaryPort, true);
+        "127.0.0.1:" + httpPrimaryPort, true);
         zkClient.registerPrimary("localhost:" + nni.rpcPort,
-        "localhost:" + rpcPrimaryPort, true);
+        "127.0.0.1:" + rpcPrimaryPort, true);
         try {
           zkClient.shutdown();
         } catch (InterruptedException ie) {
@@ -634,7 +873,7 @@ public class MiniAvatarCluster {
   private void startAvatarNodes() throws IOException {
     for (NameNodeInfo nni: this.nameNodes) {
       nni.updateAvatarConf(this.conf);
-      startAvatarNode(nni, null);
+      startAvatarNode(nni, startOpt);
     }
   }
 
@@ -797,6 +1036,12 @@ public class MiniAvatarCluster {
     logStateChange("Shutting down avatar datanodes - completed");
   }
 
+  private void shutDownJournalCluster() throws IOException {
+  	if (journalCluster != null) {
+  		journalCluster.shutdown();
+  	}
+  }
+  
   public void shutDownAvatarNodes() throws IOException, InterruptedException {
     logStateChange("Shutting down avatar nodes");
     List<Thread> threads = new ArrayList<Thread>();
@@ -832,6 +1077,7 @@ public class MiniAvatarCluster {
     // add all namenodes to be shutdown
     processNamenodesForShutdown(threads);   
     MiniDFSCluster.joinThreads(threads);
+    shutDownJournalCluster();
     logStateChange("Shutting down Mini Avatar Cluster - completed");
   }
 
@@ -901,7 +1147,11 @@ public class MiniAvatarCluster {
     @Override
     public void run() {
       try {
-        String[] dnArgs = { HdfsConstants.StartupOption.REGULAR.getName() };
+        String dnArg = StartupOption.REGULAR.getName();
+        if (startOpt != null && startOpt == StartupOption.ROLLBACK) {
+          dnArg = startOpt.getName();
+        }
+        String[] dnArgs = { dnArg };
         int iN = curDn + i;
         Configuration dnConf = new Configuration(conf);
 
@@ -927,9 +1177,9 @@ public class MiniAvatarCluster {
 
 
         if (hosts != null) {
-          dnConf.set("slave.host.name", hosts[i]);
+          dnConf.set(FSConstants.SLAVE_HOST_NAME, hosts[i]);
           LOG.info("Starting DataNode " + iN + " with hostname set to: "
-              + dnConf.get("slave.host.name"));
+              + dnConf.get(FSConstants.SLAVE_HOST_NAME));
         }
 
         if (racks != null) {
@@ -939,9 +1189,6 @@ public class MiniAvatarCluster {
           StaticMapping.addNodeToRack(name, racks[i]);
         }
         Configuration newconf = new Configuration(dnConf); // save config
-        if (hosts != null) {
-          NetUtils.addStaticResolution(hosts[i], "localhost");
-        }
         AvatarDataNode dn = instantiateDataNode(dnArgs, dnConf);
         // since the HDFS does things based on IP:port, we need to add the
         // mapping
@@ -1440,7 +1687,7 @@ public class MiniAvatarCluster {
     LOG.info("Restart Datanode " + index);
     // Use the same port since dn is identified by host:port.
     int port = dn.datanode.getSelfAddr().getPort();
-    dn.conf.set("dfs.datanode.address", "localhost:" + port);
+    dn.conf.set(FSConstants.DFS_DATANODE_ADDRESS_KEY, "localhost:" + port);
     dn.datanode = instantiateDataNode(dn.dnArgs, dn.conf);
     dn.datanode.runDatanodeDaemon();
     if (waitActive) {
@@ -1533,9 +1780,17 @@ public class MiniAvatarCluster {
     throw e;
   }
   
+  public static void clearAvatarDir() {
+    try {
+      FileUtil.fullyDelete(new File(baseAvatarDir));
+    } catch (Exception e) {
+      LOG.warn("Exception when deleting directory " + baseAvatarDir, e);
+    }
+  }
+  
   private static void sleep(long time) throws IOException {
     try {
-      Thread.sleep(1000);
+      Thread.sleep(time);
     } catch (InterruptedException e) {
       LOG.fatal("Thread interrupted");
       throw new IOException(e.toString());

@@ -20,7 +20,10 @@ package org.apache.hadoop.hdfs.server.protocol;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.Comparator;
+
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.namenode.EditLogInputStream;
 import org.apache.hadoop.io.Writable;
 
 import com.google.common.base.Function;
@@ -30,6 +33,17 @@ public class RemoteEditLog implements Writable, Comparable<RemoteEditLog> {
   private long startTxId = HdfsConstants.INVALID_TXID;
   private long endTxId = HdfsConstants.INVALID_TXID;
   private boolean inProgress = false;
+  
+  static final public Comparator<RemoteEditLog>
+  REMOTE_EDIT_LOG_COMPARATOR = new Comparator<RemoteEditLog>() {
+    @Override
+    public int compare(RemoteEditLog a, RemoteEditLog b) {
+      return ComparisonChain.start().
+        compare(a.startTxId, b.startTxId).
+        compare(b.endTxId, a.endTxId).
+        result();
+    }
+  };
   
   public RemoteEditLog() {
   }

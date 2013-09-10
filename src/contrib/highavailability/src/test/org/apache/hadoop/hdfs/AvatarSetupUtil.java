@@ -11,6 +11,7 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.Avatar;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
 import org.apache.hadoop.hdfs.server.namenode.Ingest;
 import org.apache.hadoop.hdfs.server.namenode.Standby;
 import org.apache.hadoop.util.InjectionHandler;
@@ -36,8 +37,22 @@ public class AvatarSetupUtil {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
 
+  public void setUp(boolean federation, String name, int blockSize)
+      throws Exception {
+    Configuration conf = new Configuration();
+    conf.setInt("dfs.block.size", blockSize);
+    conf.setBoolean("fs.ha.retrywrites", true);
+    setUp(federation, conf, name, false);
+  }
+
   public void setUp(boolean federation, String name) throws Exception {
-    setUp(federation, new Configuration(), name);
+    setUp(federation, name, new Configuration());
+  }
+
+  public void setUp(boolean federation, String name, Configuration conf)
+      throws Exception {
+    conf.setLong(FSEditLog.CONF_ROLL_TIMEOUT_MSEC, 500);
+    setUp(federation, conf, name);
   }
   
   public void setUp(boolean federation, Configuration conf, String name)

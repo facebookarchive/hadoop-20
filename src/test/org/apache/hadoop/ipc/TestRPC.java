@@ -19,6 +19,7 @@
 package org.apache.hadoop.ipc;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -29,16 +30,19 @@ import junit.framework.TestCase;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Hashtable;
 import java.util.List;
 import java.util.concurrent.atomic.*;
 
 import org.apache.commons.logging.*;
+import org.apache.commons.logging.impl.Log4JLogger;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.io.BooleanWritable;
 import org.apache.hadoop.io.UTF8;
 import org.apache.hadoop.io.Writable;
@@ -50,6 +54,10 @@ import org.apache.hadoop.security.authorize.ConfiguredPolicy;
 import org.apache.hadoop.security.authorize.PolicyProvider;
 import org.apache.hadoop.security.authorize.Service;
 import org.apache.hadoop.security.authorize.ServiceAuthorizationManager;
+import org.apache.hadoop.util.InjectionEventCore;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
+import org.apache.log4j.Level;
 
 import org.junit.Test;
 import static org.junit.Assert.*;
@@ -60,7 +68,10 @@ public class TestRPC {
 
   public static final Log LOG =
     LogFactory.getLog(TestRPC.class);
-  
+  {
+    ((Log4JLogger)Client.CLIENT_TRACE_LOG).getLogger().setLevel(Level.ALL);
+  }
+
   private static Configuration conf = new Configuration();
 
   int datasize = 1024*100;
@@ -360,7 +371,7 @@ public class TestRPC {
       
       Field addressField = addr.getClass().getDeclaredField("addr");
       addressField.setAccessible(true);
-      addressField.set(addr, InetAddress.getByName("66.66.66.66"));
+      addressField.set(addr, InetAddress.getByName("facebook.com"));
       Field hostField = addr.getClass().getDeclaredField("hostname");
       hostField.setAccessible(true);
       hostField.set(addr, "localhost");
@@ -483,6 +494,54 @@ public class TestRPC {
   }
  
   @Test
+  public void testIOSetupFailure() throws Exception {
+    SecurityUtil.setPolicy(new ConfiguredPolicy(conf, new TestPolicyProvider()));
+    
+    Server server = RPC.getServer(new TestImpl(), ADDRESS, 0, 5, true, conf);
+
+    TestProtocol proxy = null;
+
+    server.start();
+
+    InetSocketAddress addr = NetUtils.getConnectAddress(server);
+    
+    final AtomicReference<Hashtable> hashtable = new AtomicReference<Hashtable>(
+        null);
+    try {
+      InjectionHandler.set(new InjectionHandler() {
+        @Override
+        protected void _processEvent(InjectionEventI event, Object... args) {
+          if (event == InjectionEventCore.RPC_CLIENT_SETUP_IO_STREAM_FAILURE) {
+            hashtable.set((Hashtable) args[0]);
+            throw new RuntimeException("testIOSetupFailure");
+          }
+        }
+      });
+      
+      try {
+        proxy = (TestProtocol)RPC.getProxy(
+            TestProtocol.class, TestProtocol.versionID, addr, conf);
+        proxy.ping();
+        TestCase.fail();
+      } catch (RuntimeException e) {
+        if (!e.getMessage().equals("testIOSetupFailure")) {
+          throw e;
+        }
+      }
+      InjectionHandler.clear();
+      TestCase
+          .assertNotNull("inject handler is not triggered", hashtable.get());
+      TestCase.assertTrue("Connection is not cleared.", hashtable.get()
+          .isEmpty());
+    } finally {
+      server.stop();
+      if (proxy != null) {
+        RPC.stopProxy(proxy);
+      }
+    }
+  }
+  
+  @Test
   public void testStandaloneClient() throws IOException {
     try {
       RPC.waitForProxy(TestProtocol.class,
@@ -572,12 +631,14 @@ public class TestRPC {
               fs.listStatus(new Path("/"));
             }
           } catch (IOException e) {
-            if (e.getCause() instanceof InterruptedException) {
+            if (e instanceof InterruptedIOException
+                || e.getCause() instanceof InterruptedException) {
               // the underlying InterruptedException should be wrapped to an
               // IOException and end up here
               passed.set(true);
             } else {
               passed.set(false);
+              LOG.error(e);
               fail(e.getMessage());
             }
           } finally {

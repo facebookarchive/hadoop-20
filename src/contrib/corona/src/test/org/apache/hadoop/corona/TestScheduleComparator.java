@@ -59,6 +59,153 @@ public class TestScheduleComparator extends TestCase {
     Assert.assertEquals("s2", schedulables.get(1).getName());
   }
 
+  public void testMinFairComparatorWithGrants() {
+    List<Schedulable> schedulables = new ArrayList<Schedulable>();
+    // grants:1,2
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 1, 0,
+                                            1.0, 0L, 0, 2));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 2, 0,
+                                            1.0, 0L, 0, 1));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+
+    schedulables.clear();
+    // Commutativity.
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 1, 0,
+                                            1.0, 0L, 0, 1));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 2, 0,
+                                            1.0, 0L, 0, 2));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s2", schedulables.get(0).getName());
+    Assert.assertEquals("s1", schedulables.get(1).getName());
+
+    schedulables.clear();
+    // Fair if equal priority
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 1, 0,
+                                            1.0, 0L, 0, 1));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 2, 0,
+                                            1.0, 0L, 0, 1));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+  }
+
+  /**
+   * Neither of them needy. Different weights.
+   */
+  public void testMinFairComparatorWithWeights() {
+    List<Schedulable> schedulables = new ArrayList<Schedulable>();
+    // priority wins over weights
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 1, 0,
+                                            2.0, 0L, 0, 2));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 1, 0,
+                                            1.0, 0L, 0, 1));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+
+    schedulables.clear();
+    // commutative
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 1, 0,
+                                            2.0, 0L, 0, 1));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 1, 0,
+                                            1.0, 0L, 0, 2));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s2", schedulables.get(0).getName());
+    Assert.assertEquals("s1", schedulables.get(1).getName());
+
+    schedulables.clear();
+    // Fair if equal priority.
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 1, 0,
+                                            2.0, 0L, 0, 1));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 1, 0,
+                                            1.0, 0L, 0, 1));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+  }
+
+  /**
+   * One of the schedulables is needy.
+   */
+  public void testMinFairComparatorWithMin() {
+    List<Schedulable> schedulables = new ArrayList<Schedulable>();
+    // min:10,0 prty:1,2
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 9, 10,
+                                            1.0, 0L, 0, 1));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 0, 0,
+                                            100.0, 0L, 0, 2));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+
+    schedulables.clear();
+    // min:10,0 prty:2,1
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 9, 10,
+                                            1.0, 0L, 0, 2));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 0, 0,
+                                            100.0, 0L, 0, 1));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+
+    schedulables.clear();
+    // min:10,0 prty:1,1
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 9, 10,
+                                            1.0, 0L, 0, 1));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 0, 0,
+                                            100.0, 0L, 0, 1));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+  }
+
+  /**
+   * Both schedulables are needy.
+   */
+  public void testMinFairComparatorWithBothUnderMin() {
+    List<Schedulable> schedulables = new ArrayList<Schedulable>();
+    // grant:1,2 Min:2,3, prty:1,2
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 1, 2,
+                                            1.0, 0L, 1, 1));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 2, 3,
+                                            100.0, 0L, 1, 2));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+
+    schedulables.clear();
+    // grant:1,2 Min:2,3, prty: 2,1, same result
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 1, 2,
+                                            1.0, 0L, 1, 2));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 2, 3,
+                                            100.0, 0L, 1, 1));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+
+    schedulables.clear();
+    // grant:1,2 Min:2,3, prty: 1,1, same result
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 1, 2,
+                                            1.0, 0L, 1, 1));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 2, 3,
+                                            100.0, 0L, 1, 1));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+  }
+
+  public void testMinFairComparatorWithTie() {
+    List<Schedulable> schedulables = new ArrayList<Schedulable>();
+    // startTime:0,1
+    schedulables.add(new SchedulableForTest("s1", ResourceType.MAP, 1, 2, 0.0, 0L));
+    schedulables.add(new SchedulableForTest("s2", ResourceType.MAP, 1, 2, 0.0, 0));
+    Collections.sort(schedulables, ScheduleComparator.PRIORITY);
+    Assert.assertEquals("s1", schedulables.get(0).getName());
+    Assert.assertEquals("s2", schedulables.get(1).getName());
+  }
+
   public void testFifoComparator() {
     List<Schedulable> schedulables = new ArrayList<Schedulable>();
     // startTime:0,1

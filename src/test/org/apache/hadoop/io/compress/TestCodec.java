@@ -77,6 +77,25 @@ public class TestCodec extends TestCase {
     codecTest(conf, seed, count, "org.apache.hadoop.io.compress.LzmaCodec");
   }
 
+  public void testLz4Codec() throws IOException {
+    if (Lz4Codec.isNativeCodeLoaded()) {
+      conf.setBoolean(
+        "io.compression.codec.lz4.use.lz4hc",
+        false);
+      codecTest(conf, seed, 0, "org.apache.hadoop.io.compress.Lz4Codec");
+      codecTest(conf, seed, count, "org.apache.hadoop.io.compress.Lz4Codec");
+      conf.setBoolean(
+        "io.compression.codec.lz4.use.lz4hc",
+          true);
+
+      codecTest(conf, seed, 0, "org.apache.hadoop.io.compress.Lz4Codec");
+      codecTest(conf, seed, count, "org.apache.hadoop.io.compress.Lz4Codec");
+    } else {
+      LOG.warn("Native hadoop library available but lz4 not");
+      return;
+    }
+  }
+
   private static void codecTest(Configuration conf, int seed, int count, 
                                 String codecClass) 
     throws IOException {

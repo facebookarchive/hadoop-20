@@ -36,6 +36,7 @@ import java.util.concurrent.CountDownLatch;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirType;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
@@ -178,8 +179,9 @@ public abstract class FSImageTestUtil {
    */
   public static FSEditLog createStandaloneEditLog(File logDir)
       throws IOException {
-    assertTrue(logDir.mkdirs() || logDir.exists());
-    Files.deleteDirectoryContents(logDir);
+    if (logDir.exists())
+      FileUtil.fullyDelete(logDir);
+    assertTrue(logDir.mkdirs());
     NNStorage storage = Mockito.mock(NNStorage.class);
     StorageDirectory sd 
       = FSImageTestUtil.mockStorageDirectory(logDir, NameNodeDirType.EDITS);
@@ -189,8 +191,10 @@ public abstract class FSImageTestUtil {
       .getStorageDirectory(Matchers.<URI>anyObject());
 
     return new FSEditLog(new Configuration(), 
-                         storage,
-                         ImmutableList.of(logDir.toURI()), null);
+                         null, storage,
+                         ImmutableList.of(logDir.toURI()),
+                         ImmutableList.of(logDir.toURI()), 
+                         null);
   }
   
   /**

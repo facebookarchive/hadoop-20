@@ -17,15 +17,21 @@
  */
 package org.apache.hadoop.hdfs.protocol;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.io.*;
 
 import java.io.*;
+import java.util.Arrays;
+import java.util.List;
 
 /****************************************************
  * A LocatedBlock is a pair of Block, DatanodeInfo[]
  * objects.  It tells where to find a Block.
  * 
  ****************************************************/
+@ThriftStruct
 public class LocatedBlock implements Writable {
 
   static {                                      // register a ctor
@@ -64,7 +70,7 @@ public class LocatedBlock implements Writable {
 
   /**
    */
-  public LocatedBlock(Block b, DatanodeInfo[] locs, long startOffset, 
+  public LocatedBlock(Block b, DatanodeInfo[] locs, long startOffset,
                       boolean corrupt) {
     this.b = b;
     this.offset = startOffset;
@@ -76,8 +82,15 @@ public class LocatedBlock implements Writable {
     }
   }
 
+  @ThriftConstructor
+  public LocatedBlock(@ThriftField(1) Block block, @ThriftField(2) List<DatanodeInfo> datanodes,
+      @ThriftField(3) long startOffset, @ThriftField(4) boolean corrupt) {
+    this(block, datanodes.toArray(new DatanodeInfo[datanodes.size()]), startOffset, corrupt);
+  }
+
   /**
    */
+  @ThriftField(1)
   public Block getBlock() {
     return b;
   }
@@ -87,7 +100,13 @@ public class LocatedBlock implements Writable {
   public DatanodeInfo[] getLocations() {
     return locs;
   }
-  
+
+  @ThriftField(2)
+  public List<DatanodeInfo> getDatanodes() {
+    return Arrays.asList(locs);
+  }
+
+  @ThriftField(3)
   public long getStartOffset() {
     return offset;
   }
@@ -107,7 +126,8 @@ public class LocatedBlock implements Writable {
   void setCorrupt(boolean corrupt) {
     this.corrupt = corrupt;
   }
-  
+
+  @ThriftField(value = 4, name = "corrupt")
   public boolean isCorrupt() {
     return this.corrupt;
   }
@@ -144,4 +164,15 @@ public class LocatedBlock implements Writable {
         (offset + getBlockSize()) + "]";
   }
 
+  public static void write(DataOutput out, LocatedBlock elem) throws IOException {
+    LocatedBlock block = new LocatedBlock(elem.getBlock(), elem.getLocations(),
+        elem.getStartOffset(), elem.isCorrupt());
+    block.write(out);
+  }
+
+  public static LocatedBlock read(DataInput in) throws IOException {
+    LocatedBlock block = new LocatedBlock();
+    block.readFields(in);
+    return block;
+  }
 }

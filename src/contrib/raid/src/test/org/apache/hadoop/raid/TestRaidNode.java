@@ -134,7 +134,7 @@ public class TestRaidNode extends TestCase {
     conf.set("dfs.block.replicator.classname",
         "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
 
-    conf.set("raid.server.address", "localhost:0");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
     loadTestCodecs(conf, 3, 10, 1, 5);
 
     // create a dfs and map-reduce cluster
@@ -258,8 +258,6 @@ public class TestRaidNode extends TestCase {
 
     createClusters(true, false);
     try {
-      assertEquals(DataTransferProtocol.DATA_TRANSFER_VERSION,
-                   RaidUtils.getDataTransferProtocolVersion(conf));
       for (long blockSize : blockSizes) {
         for (int stripeLength : stripeLengths) {
            this.loadTestCodecs(conf, stripeLength, stripeLength, 1, 3);

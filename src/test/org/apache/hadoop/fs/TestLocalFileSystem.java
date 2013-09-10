@@ -161,7 +161,12 @@ public class TestLocalFileSystem extends TestCase {
     cleanupFile(fs, path);
   }
   
-  public void testFileCrc(boolean inlineChecksum) throws IOException {
+  public void testFileCrc() throws IOException {
+    testFileCrcInternal(true);
+    testFileCrcInternal(false);
+  }
+  
+  void testFileCrcInternal(boolean inlineChecksum) throws IOException {
     ((Log4JLogger) HftpFileSystem.LOG).getLogger().setLevel(Level.ALL);
 
     Random random = new Random(1);
@@ -175,7 +180,7 @@ public class TestLocalFileSystem extends TestCase {
     random.nextBytes(data);
 
     // write data to a file
-    Path foo = new Path(TEST_ROOT_DIR, "foo");
+    Path foo = new Path(TEST_ROOT_DIR, "foo_" + inlineChecksum);
     {
       final FSDataOutputStream out = fs.create(foo, false, 512, (short) 2, 512);
       out.write(data);

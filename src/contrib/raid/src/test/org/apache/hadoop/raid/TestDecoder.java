@@ -39,14 +39,13 @@ public class TestDecoder extends TestCase {
   RaidNode cnode = null;
   Random rand = new Random();
   
-  private void mySetup(int stripeLength, String code, int parallelism) throws Exception {
+  private void mySetup(int stripeLength) throws Exception {
 
     new File(TEST_DIR).mkdirs(); // Make sure data directory exists
     conf = new Configuration();
 
     conf.setBoolean("raid.config.reload", true);
     conf.setLong("raid.config.reload.interval", RELOAD_INTERVAL);
-    conf.setInt("raid.encoder.parallelism", parallelism);
 
     // scan all policies once every 5 second
     conf.setLong("raid.policy.rescan.interval", 5000);
@@ -67,10 +66,6 @@ public class TestDecoder extends TestCase {
     fileSys = dfsCluster.getFileSystem();
     namenode = fileSys.getUri().toString();
     FileSystem.setDefaultUri(conf, namenode);
-    
-    ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
-    cb.addPolicy("RaidTest1", "/user/dikang/raidtest", 1, 1, code);
-    cb.persist();
   }
   
   private void doRaid(Path srcPath, Codec codec) throws IOException {
@@ -83,68 +78,73 @@ public class TestDecoder extends TestCase {
   
   public void testFixBlock() throws Exception {
     int[] parallelisms = new int[] {1, 3, 4};
-    
-    for (int parallelism : parallelisms) {
-      verifyDecoder("xor", parallelism);
-      verifyDecoder("rs", parallelism);
-    }
-  }
-  
-  public void verifyDecoder(String code, int parallelism) throws Exception {
     try {
-      mySetup(5, code, parallelism);
-      Codec codec = Codec.getCodec(code);
-      Path srcPath = new Path("/user/dikang/raidtest/file1");
-      long blockSize = 8192 * 1024L;
-      
-      long crc = TestRaidDfs.createTestFilePartialLastBlock(fileSys, srcPath, 
-          1, 7, blockSize);
-      doRaid(srcPath, codec);
-      FileStatus srcStat = fileSys.getFileStatus(srcPath);
-      ParityFilePair pair = ParityFilePair.getParityFile(codec, srcStat, conf);
-      
-      FileStatus file1Stat = fileSys.getFileStatus(srcPath);
-      long length = file1Stat.getLen();
-      LocatedBlocks file1Loc =
-          RaidDFSUtil.getBlockLocations((DistributedFileSystem)fileSys, 
-              srcPath.toUri().getPath(),
-              0, length);
-      
-      // corrupt file
-      
-      int[] corruptBlockIdxs = new int[] {5};
-      long errorOffset = 5 * blockSize;
-      for (int idx: corruptBlockIdxs) {
-        TestBlockFixer.corruptBlock(file1Loc.get(idx).getBlock(), dfsCluster);
+      mySetup(5);
+      for (int parallelism : parallelisms) {
+        verifyDecoder("xor", parallelism);
+        verifyDecoder("rs", parallelism);
       }
-      
-      RaidDFSUtil.reportCorruptBlocks((DistributedFileSystem)fileSys, srcPath,
-          corruptBlockIdxs, blockSize);
-      
-      Decoder decoder = new Decoder(conf, codec);
-      ByteArrayOutputStream out = new ByteArrayOutputStream();
-      decoder.codec.simulateBlockFix = true;
-      CRC32 oldCRC = decoder.fixErasedBlock(fileSys, srcStat, fileSys, 
-          pair.getPath(), true, blockSize, errorOffset, blockSize, false, 
-          out, null, null, false);
-      
-      decoder.codec.simulateBlockFix = false;
-      out = new ByteArrayOutputStream();
-      decoder.fixErasedBlock(fileSys, srcStat, fileSys, 
-          pair.getPath(), true, blockSize, errorOffset, blockSize, false, 
-          out, null, null, false);
-      
-      // calculate the new crc
-      CRC32 newCRC = new CRC32();
-      byte[] constructedBytes = out.toByteArray();
-      newCRC.update(constructedBytes);
-      
-      assertEquals(oldCRC.getValue(), newCRC.getValue());
     } finally {
       if (dfsCluster != null) {
         dfsCluster.shutdown();
       }
     }
+  }
+  
+  public void verifyDecoder(String code, int parallelism) throws Exception {
+    Codec codec = Codec.getCodec(code);
+    conf.setInt("raid.encoder.parallelism", parallelism);
+    ConfigBuilder cb = new ConfigBuilder(CONFIG_FILE);
+    cb.addPolicy("RaidTest1", "/user/dikang/raidtest/file" + code + parallelism,
+        1, 1, code);
+    cb.persist();
+    Path srcPath = new Path("/user/dikang/raidtest/file" + code + parallelism +
+        "/file1");
+    long blockSize = 8192 * 1024L;
+    
+    long crc = TestRaidDfs.createTestFilePartialLastBlock(fileSys, srcPath, 
+        1, 7, blockSize);
+    doRaid(srcPath, codec);
+    FileStatus srcStat = fileSys.getFileStatus(srcPath);
+    ParityFilePair pair = ParityFilePair.getParityFile(codec, srcStat, conf);
+    
+    FileStatus file1Stat = fileSys.getFileStatus(srcPath);
+    long length = file1Stat.getLen();
+    LocatedBlocks file1Loc =
+        RaidDFSUtil.getBlockLocations((DistributedFileSystem)fileSys, 
+            srcPath.toUri().getPath(),
+            0, length);
+     
+    // corrupt file
+      
+    int[] corruptBlockIdxs = new int[] {5};
+    long errorOffset = 5 * blockSize;
+    for (int idx: corruptBlockIdxs) {
+      TestBlockFixer.corruptBlock(file1Loc.get(idx).getBlock(), dfsCluster);
+    }
+      
+    RaidDFSUtil.reportCorruptBlocks((DistributedFileSystem)fileSys, srcPath,
+        corruptBlockIdxs, blockSize);
+    
+    Decoder decoder = new Decoder(conf, codec);
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+    decoder.codec.simulateBlockFix = true;
+    CRC32 oldCRC = decoder.fixErasedBlock(fileSys, srcStat, fileSys, 
+        pair.getPath(), true, blockSize, errorOffset, blockSize, false, 
+        out, null, null, false);
+    
+    decoder.codec.simulateBlockFix = false;
+    out = new ByteArrayOutputStream();
+    decoder.fixErasedBlock(fileSys, srcStat, fileSys, 
+        pair.getPath(), true, blockSize, errorOffset, blockSize, false, 
+        out, null, null, false);
+    
+    // calculate the new crc
+    CRC32 newCRC = new CRC32();
+    byte[] constructedBytes = out.toByteArray();
+    newCRC.update(constructedBytes);
+    
+    assertEquals(oldCRC.getValue(), newCRC.getValue());
   }
 
 }

@@ -88,7 +88,7 @@ public class FakeConfigManager extends ConfigManager {
   }
 
   @Override
-  public ScheduleComparator getComparator(PoolInfo poolInfo) {
+  public ScheduleComparator getPoolComparator(PoolInfo poolInfo) {
     String key =
         PROPERTY.COMPARATOR + PoolInfo.createStringFromPoolInfo(poolInfo);
     if (!config.containsKey(key)) {

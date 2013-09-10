@@ -50,7 +50,7 @@ public class TestAvatarQuiesce {
     conf.setLong("fs.checkpoint.period", 2);
     conf.setBoolean("fs.checkpoint.wait", waitForCheckpoint);
     
-    cluster = new MiniAvatarCluster(conf, 3, true, null, null);
+    cluster = new MiniAvatarCluster.Builder(conf).numDataNodes(3).enableQJM(false).build();
     fs = cluster.getFileSystem();
   }
 

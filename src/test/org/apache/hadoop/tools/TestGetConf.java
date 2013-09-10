@@ -31,6 +31,7 @@ import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.tools.GetConf;
 import org.apache.hadoop.tools.GetConf.Command;
 import org.apache.hadoop.tools.GetConf.CommandHandler;
@@ -70,7 +71,7 @@ public class TestGetConf {
     for (int i = 0; i < nameServiceIdCount; i++, portOffset++) {
       String nsID = getNameServiceId(i);
       String specificKey = DFSUtil.getNameServiceIdKey(key, nsID);
-      values[i] = "nn" + i + ":" + portOffset;
+      values[i] = "127.0.0.1" + ":" + portOffset;
       conf.set(specificKey, values[i]);
     }
     return values;
@@ -83,7 +84,7 @@ public class TestGetConf {
   private String[] toStringArray(List<InetSocketAddress> list) {
     String[] ret = new String[list.size()];
     for (int i = 0; i < list.size(); i++) {
-      ret[i] = NameNode.getHostPortString(list.get(i));
+      ret[i] = NetUtils.toIpPort(list.get(i));
     }
     return ret;
   }
@@ -152,7 +153,7 @@ public class TestGetConf {
     int i = 0;
     String[] expectedHosts = new String[expected.size()];
     for (InetSocketAddress addr : expected) {
-      expectedHosts[i++] = addr.getHostName();
+      expectedHosts[i++] = addr.getAddress().getHostAddress();
     }
 
     // Compare two arrays
@@ -164,9 +165,9 @@ public class TestGetConf {
     // Ensure DFSUtil returned the right set of addresses
     List<InetSocketAddress> list = getAddressListFromConf(type, conf);
     String[] actual = toStringArray(list);
-    Arrays.sort(actual);
     Arrays.sort(expected);
-    assertTrue(Arrays.equals(expected, actual));
+    Arrays.sort(actual);
+    assertArrayEquals(expected, actual);
 
     // Test GetConf returned addresses
     getAddressListFromTool(type, conf, list);
@@ -215,18 +216,18 @@ public class TestGetConf {
   
     // Returned namenode address should match default address
     conf.set("fs.default.name", "hdfs://localhost:1000");
-    verifyAddresses(conf, TestType.NAMENODE, "localhost:1000");
+    verifyAddresses(conf, TestType.NAMENODE, "127.0.0.1:1000");
   
     // Returned namenode address should match service RPC address
     conf = new Configuration();
     conf.set(NameNode.DATANODE_PROTOCOL_ADDRESS, "localhost:1000");
     conf.set(FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY, "localhost:1001");
-    verifyAddresses(conf, TestType.NAMENODE, "localhost:1000");
+    verifyAddresses(conf, TestType.NAMENODE, "127.0.0.1:1000");
   
     // Returned address should match RPC address
     conf = new Configuration();
     conf.set(FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY, "localhost:1001");
-    verifyAddresses(conf, TestType.NAMENODE, "localhost:1001");
+    verifyAddresses(conf, TestType.NAMENODE, "127.0.0.1:1001");
   }
 
   /**

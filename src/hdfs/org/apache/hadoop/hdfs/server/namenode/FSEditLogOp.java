@@ -26,17 +26,16 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
-import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
+import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 
 import static org.apache.hadoop.hdfs.server.namenode.FSEditLogOpCodes.*;
 
+import org.apache.hadoop.io.ArrayOutputStream;
 import org.apache.hadoop.io.DataOutputBuffer;
-import org.apache.hadoop.io.ArrayWritable;
-import org.apache.hadoop.io.UTF8;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
@@ -44,7 +43,6 @@ import org.apache.hadoop.io.WritableFactory;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.DataInputStream;
-import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.EOFException;
 
@@ -58,6 +56,10 @@ public abstract class FSEditLogOp {
   public final FSEditLogOpCodes opCode;
   long txid;
 
+  /**
+   * Opcode size is limited to 1.5 megabytes
+   */
+  public static final int MAX_OP_SIZE = (3 * 1024 * 1024) / 2;
 
   @SuppressWarnings("deprecation")
   private static ThreadLocal<EnumMap<FSEditLogOpCodes, FSEditLogOp>> opInstances =
@@ -69,6 +71,7 @@ public abstract class FSEditLogOp {
         instances.put(OP_INVALID, new InvalidOp());
         instances.put(OP_ADD, new AddOp());
         instances.put(OP_CLOSE, new CloseOp());
+        instances.put(OP_APPEND, new AppendOp());
         instances.put(OP_SET_REPLICATION, new SetReplicationOp());
         instances.put(OP_CONCAT_DELETE, new ConcatDeleteOp());
         instances.put(OP_RENAME, new RenameOp());
@@ -88,6 +91,7 @@ public abstract class FSEditLogOp {
         instances.put(OP_END_LOG_SEGMENT,
                       new LogSegmentOp(OP_END_LOG_SEGMENT));
         instances.put(OP_HARDLINK, new HardLinkOp());
+        instances.put(OP_MERGE, new MergeOp());
         return instances;
       }
   };
@@ -109,6 +113,7 @@ public abstract class FSEditLogOp {
     this.txid = txid;
   }
   
+  @Override
   public String toString(){
     return "Record: txid: " + txid + " opcode: " + opCode;
   }
@@ -116,18 +121,19 @@ public abstract class FSEditLogOp {
   abstract void readFields(DataInputStream in, int logVersion)
       throws IOException;
 
-  abstract void writeFields(DataOutputStream out)
+  abstract void writeFields(DataOutput out)
       throws IOException;
 
   @SuppressWarnings("unchecked")
   public static abstract class AddCloseOp extends FSEditLogOp {
     int length;
     public String path;
+    long inodeId;
     short replication;
     long mtime;
     long atime;
     long blockSize;
-    Block[] blocks;
+    BlockInfo[] blocks;
     PermissionStatus permissions;
     String clientName;
     String clientMachine;
@@ -137,15 +143,17 @@ public abstract class FSEditLogOp {
       assert(opCode == OP_ADD || opCode == OP_CLOSE);
     }
     
-    public void set(String path,
+    public void set(long inodeId,
+        String path,
         short replication,
         long mtime,
         long atime,
         long blockSize,
-        Block[] blocks,
+        BlockInfo[] blocks,
         PermissionStatus permissions,
         String clientName,
         String clientMachine) {
+      this.inodeId = inodeId;
       this.path = path;
       this.replication = replication;
       this.mtime = mtime;
@@ -158,13 +166,15 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(path, out);
+      FSImageSerialization.writeLong(inodeId, out);
       FSImageSerialization.writeShort(replication, out);
       FSImageSerialization.writeLong(mtime, out);
       FSImageSerialization.writeLong(atime, out);
       FSImageSerialization.writeLong(blockSize, out);
-      new ArrayWritable(Block.class, blocks).write(out);
+      FSImageSerialization.writeBlocks(blocks, out);
+      
       permissions.write(out);
 
       if (this.opCode == OP_ADD) {
@@ -179,8 +189,9 @@ public abstract class FSEditLogOp {
       // versions > 0 support per file replication
       // get name and replication
       if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
-        this.length = in.readInt();
+        this.length = FSImageSerialization.readInt(in);
       }
+      
       if (-7 == logVersion && length != 3||
           -17 < logVersion && logVersion < -7 && length != 4 ||
           (logVersion <= -17 && length != 5 && !LayoutVersion.supports(
@@ -191,7 +202,9 @@ public abstract class FSEditLogOp {
                               length + ". ");
       }
       this.path = FSImageSerialization.readString(in);
-
+      
+      this.inodeId = readInodeId(in, logVersion);
+      
       if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
         this.replication = FSImageSerialization.readShort(in);
         this.mtime = FSImageSerialization.readLong(in);
@@ -252,15 +265,18 @@ public abstract class FSEditLogOp {
         return locations;
     }
 
-    private static Block[] readBlocks(
+    static BlockInfo[] readBlocks(
         DataInputStream in,
         int logVersion) throws IOException {
-      int numBlocks = in.readInt();
-      Block[] blocks = new Block[numBlocks];
+      int numBlocks = FSImageSerialization.readInt(in);
+      BlockInfo[] blocks = new BlockInfo[numBlocks];
       for (int i = 0; i < numBlocks; i++) {
-        Block blk = new Block();
+        BlockInfo blk = new BlockInfo();
         if (logVersion <= -14) {
           blk.readFields(in);
+          if (LayoutVersion.supports(Feature.BLOCK_CHECKSUM, logVersion)) {
+            blk.setChecksum(FSImageSerialization.readInt(in));
+          }
         } else {
           BlockTwo oldblk = new BlockTwo();
           oldblk.readFields(in);
@@ -300,6 +316,52 @@ public abstract class FSEditLogOp {
       return (CloseOp)opInstances.get().get(OP_CLOSE);
     }
   }
+  
+  public static class AppendOp extends FSEditLogOp {
+    public String path;
+    BlockInfo[] blocks;
+    String clientName;
+    String clientMachine;
+    
+    private AppendOp() {
+      super(OP_APPEND);
+    }
+
+    public static AppendOp getUniqueInstance() {
+      return new AppendOp();
+    }
+
+    static AppendOp getInstance() {
+      return (AppendOp)opInstances.get().get(OP_APPEND);
+    }
+    
+    public void set(String path,
+        BlockInfo[] blocks,
+        String clientName,
+        String clientMachine) {
+      this.path = path;
+      this.blocks = blocks;
+      this.clientName = clientName;
+      this.clientMachine = clientMachine;
+    }
+    
+    @Override 
+    void writeFields(DataOutput out) throws IOException {
+      FSImageSerialization.writeString(path, out);
+      FSImageSerialization.writeBlocks(blocks, out);
+      FSImageSerialization.writeString(clientName,out);
+      FSImageSerialization.writeString(clientMachine,out);
+    }
+
+    @Override
+    void readFields(DataInputStream in, int logVersion)
+        throws IOException {
+      this.path = FSImageSerialization.readString(in);
+      this.blocks = AddCloseOp.readBlocks(in, logVersion);
+      this.clientName = FSImageSerialization.readString(in);
+      this.clientMachine = FSImageSerialization.readString(in);
+    }
+  }
 
   static class SetReplicationOp extends FSEditLogOp {
     String path;
@@ -324,7 +386,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(path, out);
       FSImageSerialization.writeShort(replication, out);
     }
@@ -338,6 +400,62 @@ public abstract class FSEditLogOp {
       } else {
         this.replication = readShort(in);
       }
+    }
+  }
+  
+  static class MergeOp extends FSEditLogOp {
+    String parity;
+    String source;
+    String codecId;
+    int[] checksums;
+    long timestamp;
+
+    private MergeOp() {
+      super(OP_MERGE);
+    }
+
+    public static MergeOp getUniqueInstance() {
+      return new MergeOp();
+    }
+
+    static MergeOp getInstance() {
+      return (MergeOp)opInstances.get()
+        .get(OP_MERGE);
+    }
+    
+    void set(String parity, String source, String codecId, 
+        int[] checksums, long timestamp) {
+      this.parity = parity;
+      this.source = source;
+      this.codecId = codecId;
+      this.checksums = checksums;
+      this.timestamp = timestamp;
+    }
+
+    @Override 
+    void writeFields(DataOutput out) throws IOException {
+      FSImageSerialization.writeString(parity, out);
+      FSImageSerialization.writeString(source, out);
+      FSImageSerialization.writeString(codecId, out);
+      FSImageSerialization.writeInt(checksums.length, out);
+      for(int i = 0; i < checksums.length; i++) {
+        FSImageSerialization.writeInt(checksums[i], out);
+      }
+      FSImageSerialization.writeLong(timestamp, out);
+    }
+
+    @Override
+    void readFields(DataInputStream in, int logVersion)
+        throws IOException {
+      this.parity = FSImageSerialization.readString(in);
+      this.source = FSImageSerialization.readString(in);
+      this.codecId = FSImageSerialization.readString(in);
+      int numBlocks = FSImageSerialization.readInt(in);
+      this.checksums = new int[numBlocks];
+      for (int i = 0; i < numBlocks; i++) {
+        this.checksums[i] = FSImageSerialization.readInt(in);
+      }
+      this.timestamp = FSImageSerialization.readLong(in);
     }
   }
 
@@ -367,9 +485,9 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(trg, out);
-      out.writeInt(srcs.length);
+      FSImageSerialization.writeInt(srcs.length, out);
       for(int i=0; i<srcs.length; i++) {
         FSImageSerialization.writeString(srcs[i], out);
       }
@@ -380,7 +498,7 @@ public abstract class FSEditLogOp {
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
       if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
-        this.length = in.readInt();
+        this.length = FSImageSerialization.readInt(in);
         if (length < 3) { // trg, srcs.., timestamp
           throw new IOException("Incorrect data format. "
               + "Concat delete operation.");
@@ -389,7 +507,7 @@ public abstract class FSEditLogOp {
       this.trg = FSImageSerialization.readString(in);
       int srcSize = 0;
       if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
-        srcSize = in.readInt();
+        srcSize = FSImageSerialization.readInt(in);
       } else {
         srcSize = this.length - 1 - 1; // trg and timestamp
       }
@@ -430,7 +548,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(src, out);
       FSImageSerialization.writeString(dst, out);
       FSImageSerialization.writeLong(timestamp, out);
@@ -471,7 +589,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(src, out);
       FSImageSerialization.writeString(dst, out);
       FSImageSerialization.writeLong(timestamp, out);
@@ -481,7 +599,7 @@ public abstract class FSEditLogOp {
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
       if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
-        this.length = in.readInt();
+        this.length = FSImageSerialization.readInt(in);
         if (this.length != 3) {
           throw new IOException("Incorrect data format. "
               + "Old rename operation.");
@@ -521,7 +639,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(path, out);
       FSImageSerialization.writeLong(timestamp, out);
     }
@@ -530,7 +648,7 @@ public abstract class FSEditLogOp {
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
       if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
-        this.length = in.readInt();
+        this.length = FSImageSerialization.readInt(in);
         if (this.length != 2) {
           throw new IOException("Incorrect data format. " + "delete operation.");
         }
@@ -544,9 +662,10 @@ public abstract class FSEditLogOp {
     }
   }
 
-  static class MkdirOp extends FSEditLogOp {
+  public static class MkdirOp extends FSEditLogOp {
     int length;
-    String path;
+    public String path;
+    long inodeId;
     long timestamp;
     PermissionStatus permissions;
 
@@ -563,15 +682,17 @@ public abstract class FSEditLogOp {
         .get(OP_MKDIR);
     }
     
-    void set(String path, long timestamp, PermissionStatus permissions) {
+    void set(long inodeId, String path, long timestamp, PermissionStatus permissions) {
+      this.inodeId = inodeId;
       this.path = path;
       this.timestamp = timestamp;
       this.permissions = permissions;
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(path, out);
+      FSImageSerialization.writeLong(inodeId, out);
       FSImageSerialization.writeLong(timestamp, out); // mtime
       FSImageSerialization.writeLong(timestamp, out); // atime, unused at this
       permissions.write(out);
@@ -582,7 +703,7 @@ public abstract class FSEditLogOp {
         throws IOException {
 
       if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
-        this.length = in.readInt();
+        this.length = FSImageSerialization.readInt(in);
       }
       if (-17 < logVersion && length != 2 ||
           logVersion <= -17 && length != 3
@@ -590,7 +711,12 @@ public abstract class FSEditLogOp {
         throw new IOException("Incorrect data format. "
                               + "Mkdir operation.");
       }
+      
+
       this.path = FSImageSerialization.readString(in);
+      
+      this.inodeId = readInodeId(in, logVersion);
+      
       if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
         this.timestamp = FSImageSerialization.readLong(in);
       } else {
@@ -638,7 +764,7 @@ public abstract class FSEditLogOp {
     }
     
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeLong(genStamp, out);
     }
     
@@ -661,7 +787,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       throw new IOException("Deprecated, should not write");
     }
 
@@ -685,7 +811,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       throw new IOException("Deprecated, should not write");
     }
 
@@ -721,7 +847,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(src, out);
       permissions.write(out);
      }
@@ -759,7 +885,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(src, out);
       FSImageSerialization.writeString(username == null ? "" : username, out);
       FSImageSerialization.writeString(groupname == null ? "" : groupname, out);
@@ -788,7 +914,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       throw new IOException("Deprecated");      
     }
 
@@ -813,7 +939,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       throw new IOException("Deprecated");      
     }
 
@@ -849,7 +975,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(src, out);
       FSImageSerialization.writeLong(nsQuota, out);
       FSImageSerialization.writeLong(dsQuota, out);
@@ -890,7 +1016,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       FSImageSerialization.writeString(path, out);
       FSImageSerialization.writeLong(mtime, out);
       FSImageSerialization.writeLong(atime, out);
@@ -900,7 +1026,7 @@ public abstract class FSEditLogOp {
     void readFields(DataInputStream in, int logVersion)
         throws IOException {
       if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, logVersion)) {
-        this.length = in.readInt();
+        this.length = FSImageSerialization.readInt(in);
         if (length != 3) {
           throw new IOException("Incorrect data format. " + "times operation.");
         }
@@ -928,13 +1054,14 @@ public abstract class FSEditLogOp {
       return (LogSegmentOp)opInstances.get().get(code);
     }
 
+    @Override
     public void readFields(DataInputStream in, int logVersion)
         throws IOException {
       // no data stored in these ops yet
     }
 
     @Override
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
       // no data stored
     }
   }
@@ -949,7 +1076,7 @@ public abstract class FSEditLogOp {
     }
 
     @Override 
-    void writeFields(DataOutputStream out) throws IOException {
+    void writeFields(DataOutput out) throws IOException {
     }
     
     @Override
@@ -961,6 +1088,13 @@ public abstract class FSEditLogOp {
 
   static private short readShort(DataInputStream in) throws IOException {
     return Short.parseShort(FSImageSerialization.readString(in));
+  }
+
+  public long readInodeId(DataInputStream in, int logVersion) throws IOException {
+    if (LayoutVersion.supports(Feature.ADD_INODE_ID, logVersion)) {
+      return FSImageSerialization.readLong(in);
+    }
+    return INodeId.GRANDFATHER_INODE_ID;
   }
 
   static private long readLong(DataInputStream in) throws IOException {
@@ -979,7 +1113,8 @@ public abstract class FSEditLogOp {
       WritableFactories.setFactory
         (BlockTwo.class,
          new WritableFactory() {
-           public Writable newInstance() { return new BlockTwo(); }
+          @Override
+          public Writable newInstance() { return new BlockTwo(); }
          });
     }
 
@@ -991,11 +1126,13 @@ public abstract class FSEditLogOp {
     /////////////////////////////////////
     // Writable
     /////////////////////////////////////
+    @Override
     public void write(DataOutput out) throws IOException {
       out.writeLong(blkid);
       out.writeLong(len);
     }
 
+    @Override
     public void readFields(DataInput in) throws IOException {
       this.blkid = in.readLong();
       this.len = in.readLong();
@@ -1033,6 +1170,26 @@ public abstract class FSEditLogOp {
       checksum.update(buf.getData(), start, end-start);
       int sum = (int)checksum.getValue();
       buf.writeInt(sum);
+    }
+    
+    /**
+     * Write an operation to the output stream
+     * 
+     * @param op The operation to write
+     * @throws IOException if an error occurs during writing.
+     */
+    public static void writeOp(FSEditLogOp op, ArrayOutputStream os) throws IOException {
+      // clear the buffer
+      os.reset();
+      os.writeByte(op.opCode.getOpCode());
+      os.writeLong(op.txid);
+      // write op fields
+      op.writeFields(os);
+      Checksum checksum = FSEditLog.getChecksumForWrite();
+      checksum.reset();
+      checksum.update(os.getBytes(), 0, os.size());
+      int sum = (int)checksum.getValue();
+      os.writeInt(sum);
     }
   }
 
@@ -1081,6 +1238,50 @@ public abstract class FSEditLogOp {
         this.in = in;
       }
     }
+    
+    /**
+     * Read an operation from the input stream.
+     * 
+     * Note that the objects returned from this method may be re-used by future
+     * calls to the same method.
+     * 
+     * @param skipBrokenEdits    If true, attempt to skip over damaged parts of
+     * the input stream, rather than throwing an IOException
+     * @return the operation read from the stream, or null at the end of the 
+     *         file
+     * @throws IOException on error.  This function should only throw an
+     *         exception when skipBrokenEdits is false.
+     */
+    public FSEditLogOp readOp(boolean skipBrokenEdits) throws IOException {
+      while (true) {
+        try {
+          return decodeOp();
+        } catch (IOException e) {
+          in.reset();
+          if (!skipBrokenEdits) {
+            throw e;
+          }
+        } catch (RuntimeException e) {
+          // FSEditLogOp#decodeOp is not supposed to throw RuntimeException.
+          // However, we handle it here for recovery mode, just to be more
+          // robust.
+          in.reset();
+          if (!skipBrokenEdits) {
+            throw e;
+          }
+        } catch (Throwable e) {
+          in.reset();
+          if (!skipBrokenEdits) {
+            throw new IOException("got unexpected exception " +
+                e.getMessage(), e);
+          }
+        }
+        // Move ahead one byte and re-try the decode process.
+        if (in.skip(1) < 1) {
+          return null;
+        }
+      }
+    }
 
     /**
      * Read an operation from the input stream.
@@ -1091,7 +1292,8 @@ public abstract class FSEditLogOp {
      * @return the operation read from the stream, or null at the end of the file
      * @throws IOException on error.
      */
-    public FSEditLogOp readOp() throws IOException {
+    public FSEditLogOp decodeOp() throws IOException {
+      in.mark(MAX_OP_SIZE);
       if (checksum != null) {
         checksum.reset();
       }
@@ -1137,7 +1339,7 @@ public abstract class FSEditLogOp {
         throws IOException {
       if (checksum != null) {
         int calculatedChecksum = (int)checksum.getValue();
-        int readChecksum = in.readInt(); // read in checksum
+        int readChecksum = FSImageSerialization.readInt(in); // read in checksum
         if (readChecksum != calculatedChecksum) {
           throw new ChecksumException(
               "Transaction is corrupt. Calculated checksum is " +

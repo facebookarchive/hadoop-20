@@ -240,7 +240,7 @@ public class Codec implements Serializable {
     }
     ErasureCode code = (ErasureCode) ReflectionUtils.newInstance(erasureCode,
         conf);
-    code.init(this);
+    code.init(this.stripeLength, this.parityLength);
     return code;
   }
 

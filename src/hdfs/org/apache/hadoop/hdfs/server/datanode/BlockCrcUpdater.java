@@ -17,21 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.RandomAccessFile;
-
-import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
-import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
-import org.apache.hadoop.fs.FileUtil;
-import org.apache.hadoop.fs.HardLink;
-import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.util.CrcConcat;
-import org.mortbay.log.Log;
 
 /**
  * This class is used to progressively calculate block CRC using
@@ -49,18 +35,13 @@ public class BlockCrcUpdater{
     blockCrcOk = enable;
   }
   
-  void updateBlockCrc(long offset, boolean partialAllowed, int length,
-      int crc) {
+  void updateBlockCrc(long offset, int length, int crc) {
     if (!blockCrcOk) {
-      return;
-    }
-    if (!partialAllowed && length != bytesPerChecksum) {
-      blockCrcOk = false;
       return;
     }
 
     if (offset != blockCrcOffset) {
-      Log.warn("File  CRC for last complete chunk is for offset "
+      DataNode.LOG.warn("File  CRC for last complete chunk is for offset "
           + blockCrcOffset + " but data are written for offset " + offset);
       blockCrcOk = false;
       return;
@@ -74,7 +55,10 @@ public class BlockCrcUpdater{
   }
 
   
-  public boolean isCrcValid() {
+  public boolean isCrcValid(long expectedLen) {
+    if (expectedLen != blockCrcOffset) {
+      return false;
+    }
     return blockCrcOk;
   }
 

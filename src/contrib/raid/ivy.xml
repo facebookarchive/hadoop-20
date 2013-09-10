@@ -86,9 +86,26 @@
       name="core"
       rev="${core.version}"
       conf="common->default"/>
+    <dependency org="org.mockito"
+      name="mockito-all"
+      rev="${mockito-all.version}"
+      conf="common->master"/>
     <dependency org="org.json"
       name="json"
       rev="${json.version}"
+      conf="common->default"/>
+    <!-- swift -->
+    <dependency org="com.facebook.swift"
+      name="swift-codec"
+      rev="${swift.version}"
+      conf="common->default"/>
+    <dependency org="com.facebook.swift"
+      name="swift-service"
+      rev="${swift.version}"
+      conf="common->default"/>
+    <dependency org="com.facebook.swift"
+      name="swift-annotations"
+      rev="${swift.version}"
       conf="common->default"/>
   </dependencies>
 </ivy-module>

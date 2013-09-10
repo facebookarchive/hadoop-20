@@ -174,7 +174,7 @@ public class GetConf extends Configured implements Tool {
   void printList(List<InetSocketAddress> list) {
     StringBuilder buffer = new StringBuilder();
     for (InetSocketAddress address : list) {
-      buffer.append(address.getHostName()).append(" ");
+      buffer.append(address.getAddress().getHostAddress()).append(" ");
     }
     printOut(buffer.toString());
   }

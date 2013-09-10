@@ -89,7 +89,7 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    *  and CRC
    * @throws IOException
    */
-  public DatanodeBlockWriter writeToBlock(int namespaceId, Block b,
+  public DatanodeBlockWriter writeToBlock(int namespaceId, Block b, Block oldBlock,
       boolean isRecovery, boolean isReplicationRequest, int checksumType,
       int bytePerChecksum) throws IOException;
 

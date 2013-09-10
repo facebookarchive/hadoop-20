@@ -74,13 +74,6 @@ class DefaultTaskController extends TaskController {
     // So this is a dummy method.
     return;
   }
-  
-
-  @Override
-  void setup() {
-    // nothing to setup
-    return;
-  }
 
   /*
    * No need to do anything as we don't need to do as we dont need anything
@@ -131,6 +124,8 @@ class DefaultTaskController extends TaskController {
         }else {
           ProcessTree.killProcess(pid);
         }
+      } else {
+        LOG.warn("killTask: Failed to get pid from task context " + context);
       }
     }
   }
@@ -150,5 +145,32 @@ class DefaultTaskController extends TaskController {
     } catch(IOException ioe) {
       LOG.warn("Unable to change permissions of " + context.fullPath);
     }
+  }
+
+  @Override
+  boolean supportsIsTaskAlive() {
+    return true;
+  }
+
+  @Override
+  boolean isTaskAlive(TaskControllerContext context) {
+    String pid = context.pid;
+    if (pid != null) {
+      return ProcessTree.isAlive(pid);
+    } else {
+      LOG.warn("isTaskAlive: Failed to get pid from task context " + context);
+      return false;
+    }
+  }
+
+  @Override
+  void doStackTrace(TaskControllerContext context) {
+    String pid = context.pid;
+    if (pid != null) {
+      ProcessTree.doStackTrace(pid);
+    } else {
+      LOG.warn("doStackTrace: Failed to get pid from task context " + context);
+    }
+    
   }
 }

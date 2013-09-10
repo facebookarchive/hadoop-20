@@ -44,6 +44,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.MD5MD5CRC32FileChecksum;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
@@ -68,8 +69,11 @@ public class HftpFileSystem extends FileSystem {
     HttpURLConnection.setFollowRedirects(true);
   }
 
-  protected InetSocketAddress nnAddr;
+  protected InetSocketAddress    nnAddr;
   protected UserGroupInformation ugi;
+  
+  /** The URI reference this FileSystem was initialized with **/
+  protected URI                  initializedWith;
 
   public static final String HFTP_TIMEZONE = "UTC";
   public static final String HFTP_DATE_FORMAT = "yyyy-MM-dd'T'HH:mm:ssZ";
@@ -100,7 +104,14 @@ public class HftpFileSystem extends FileSystem {
     } catch (LoginException le) {
       throw new IOException(StringUtils.stringifyException(le));
     }
-
+    initializedWith = name;
+    if (conf.getBoolean(FSConstants.CLIENT_CONFIGURATION_LOOKUP_DONE, false)) {
+      try {
+        initializedWith = new URI(conf.get(FileSystem.FS_DEFAULT_NAME_KEY));
+      } catch (URISyntaxException e) {
+        LOG.error(e);
+      }
+    }
     nnAddr = NetUtils.createSocketAddr(name.toString());
     doStrictContentLengthCheck = conf.getBoolean(STRICT_CONTENT_LENGTH, false);
   }
@@ -108,8 +119,7 @@ public class HftpFileSystem extends FileSystem {
   @Override
   public URI getUri() {
     try {
-      return new URI("hftp", null, nnAddr.getHostName(), nnAddr.getPort(),
-                     null, null, null);
+      return new URI("hftp", initializedWith.getAuthority(), null, null, null);
     } catch (URISyntaxException e) {
       return null;
     }
@@ -123,7 +133,7 @@ public class HftpFileSystem extends FileSystem {
   protected HttpURLConnection openConnection(String path, String query)
       throws IOException {
     try {
-      final URL url = new URI("http", null, nnAddr.getHostName(),
+      final URL url = new URI("http", null, nnAddr.getAddress().getHostAddress(),
           nnAddr.getPort(), path, query, null).toURL();
       if (LOG.isTraceEnabled()) {
         LOG.trace("url=" + url);

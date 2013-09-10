@@ -33,7 +33,7 @@ import org.apache.hadoop.ipc.VersionedProtocol;
  * returning values from these functions.
  *
  **********************************************************************/
-public interface DatanodeProtocol extends VersionedProtocol {
+public interface DatanodeProtocol extends VersionedProtocol, BlockSynchronizationProtocol {
   /**
    * 20: nextGenerationStamp has a new parameter indicating if it is for
    * NameNode initiated lease recovery or not
@@ -57,6 +57,7 @@ public interface DatanodeProtocol extends VersionedProtocol {
   final static int DNA_REGISTER = 4;   // re-register
   final static int DNA_FINALIZE = 5;   // finalize previous upgrade
   final static int DNA_RECOVERBLOCK = 6;  // request a block recovery
+  final static int DNA_RAIDTASK = 7;    // request a raid task (encoding or block fixing).
 
   /** 
    * Register Datanode.

@@ -58,7 +58,7 @@ import static org.mockito.Mockito.spy;
  */
 public class TestNameNodeRestart extends TestCase {
   {
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+    DataNode.LOG.getLogger().setLevel(Level.ALL);
     ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)NameNode.LOG).getLogger().setLevel(Level.ALL);

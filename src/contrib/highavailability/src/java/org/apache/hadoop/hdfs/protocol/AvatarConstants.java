@@ -17,24 +17,13 @@
  */
 package org.apache.hadoop.hdfs.protocol;
 
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.DataInput;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.ArrayList;
-import java.util.List;
+import static org.apache.hadoop.hdfs.conf.AvatarConfigurationKeys.DFS_AVATARNODE_ONE_ADDRESS;
+import static org.apache.hadoop.hdfs.conf.AvatarConfigurationKeys.DFS_AVATARNODE_ZERO_ADDRESS;
+
+import java.net.InetSocketAddress;
 
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.fs.ChecksumException;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FilterFileSystem;
-import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FSInputStream;
-import org.apache.hadoop.util.Progressable;
-import org.apache.hadoop.util.ReflectionUtils;
+import org.apache.hadoop.hdfs.server.namenode.AvatarNodeZkUtil;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 
 /**
@@ -43,13 +32,63 @@ import org.apache.hadoop.hdfs.server.namenode.NameNode;
 
 public interface AvatarConstants {
 
+  static interface AddressGetter {
+    public InetSocketAddress getAddress(Configuration conf);
+  }
+
+  /**
+   * Various types entries within Zookeeper
+   */
+  static public enum ZookeeperKey {
+
+    CLIENT_PROTOCOL_ADDRESS("cpa", new AddressGetter() {
+      @Override
+      public InetSocketAddress getAddress(Configuration conf) {
+        return NameNode.getClientProtocolAddress(conf);
+      }
+    }),
+
+    DATANODE_PROTOCOL_ADDRESS("dnpa", new AddressGetter() {
+      @Override
+      public InetSocketAddress getAddress(Configuration conf) {
+        return NameNode.getDNProtocolAddress(conf);
+      }
+    }),
+
+    HTTP_SERVER_ADDRESS("hsa", new AddressGetter() {
+      @Override
+      public InetSocketAddress getAddress(Configuration conf) {
+        return NameNode.getHttpServerAddress(conf);
+      }
+    });
+
+    private final String appendix;
+    private final AddressGetter addressGetter;
+
+    private ZookeeperKey(String s, AddressGetter g) {
+      appendix = s;
+      addressGetter = g;
+    }
+
+    public String getIpPortString(Configuration conf) {
+      return AvatarNodeZkUtil.toIpPortString(addressGetter.getAddress(conf));
+    }
+
+    @Override
+    public String toString() {
+      return "." + appendix;
+    }
+  }
+
   /**
    * Define the various avatars of the NameNode.
    */
   static public enum Avatar {
-    ACTIVE    ("Primary"),
-    STANDBY   ("Standby"),
-    UNKNOWN   ("UnknownAvatar");
+    ACTIVE("Primary"),
+    STANDBY("Standby"),
+    UNKNOWN("UnknownAvatar");
+
+    public static Avatar[] avatars = new Avatar[] { ACTIVE, STANDBY };
 
     private String description = null;
     private Avatar(String arg) {this.description = arg;}
@@ -64,15 +103,35 @@ public interface AvatarConstants {
    * At present, there can be only two.
    */
   static public enum InstanceId {
-    NODEZERO    ("FirstNode"),
-    NODEONE   ("SecondNode"),
-    UNKNOWN   ("Unknown");
+    NODEZERO ("FirstNode", 0, "zero", DFS_AVATARNODE_ZERO_ADDRESS),
+    NODEONE  ("SecondNode", 1, "one", DFS_AVATARNODE_ONE_ADDRESS);
+    private String       description = null;
+    private int          val;
+    private final String configKey;
+    private final String valInWords;
 
-    private String description = null;
-    private InstanceId(String arg) {this.description = arg;}
+    private InstanceId(String arg, int aValue, String valInWords,
+        String configKeyString) {
+      this.description = arg;
+      val = aValue;
+      configKey = configKeyString;
+      this.valInWords = valInWords;
+    }
 
     public String toString() {
       return description;
+    }
+
+    public int getValue() {
+      return val;
+    }
+
+    public String getConfigKey() {
+      return configKey;
+    }
+
+    public String getZookeeeperValue() {
+      return valInWords;
     }
   }
 
@@ -81,30 +140,31 @@ public interface AvatarConstants {
     NODEZERO("-zero"),
     NODEONE("-one"),
     SYNC("-sync"),
-    ACTIVE ("-active"),
-    STANDBY  ("-standby"),
-    FORMAT  ("-format"),     // these are namenode options
-    FORMATFORCE   ("-formatforce"),  
-    REGULAR ("-regular"),
-    UPGRADE ("-upgrade"),
+    ACTIVE("-active"),
+    STANDBY("-standby"),
+    FORMAT("-format"), // these are namenode options
+    FORMATFORCE("-formatforce"),
+    REGULAR("-regular"),
+    UPGRADE("-upgrade"),
     ROLLBACK("-rollback"),
     FINALIZE("-finalize"),
-    IMPORT  ("-importCheckpoint"),
-    FORCE ("-forceStartup"),
-    SERVICE ("-service");
-    
+    IMPORT("-importCheckpoint"),
+    FORCE("-forceStartup"),
+    SERVICE("-service");
 
     private String name = null;
+
     private StartupOption(String arg) {this.name = arg;}
     public String getName() {return name;}
+
     public Avatar toAvatar() {
       switch(this) {
-      case STANDBY:
-        return Avatar.STANDBY;
-      case ACTIVE:
-        return Avatar.ACTIVE;
-      default:
-        return Avatar.UNKNOWN;
+        case STANDBY:
+          return Avatar.STANDBY;
+        case ACTIVE:
+          return Avatar.ACTIVE;
+        default:
+          return Avatar.UNKNOWN;
       }
     }
   }

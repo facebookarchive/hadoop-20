@@ -17,11 +17,11 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import junit.framework.TestCase;
 import java.io.*;
 import java.net.URI;
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -32,43 +32,49 @@ import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import junit.framework.TestCase;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.*;
 
+import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
 import org.apache.hadoop.hdfs.server.namenode.EditLogFileInputStream;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage;
+import org.apache.hadoop.hdfs.server.protocol.AutoEditsRollerInterface;
 
 import org.apache.hadoop.test.GenericTestUtils;
+import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.log4j.Level;
 
+import static org.junit.Assert.*;
 
 import org.mockito.Mockito;
 import org.junit.Test;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
-import com.google.common.io.Files;
 
 
 /**
  * This class tests the creation and validation of a checkpoint.
  */
-public class TestEditLog extends TestCase {
+public class TestEditLog {
   
   static {
     ((Log4JLogger)FSEditLog.LOG).getLogger().setLevel(Level.ALL);
@@ -134,7 +140,7 @@ public class TestEditLog extends TestCase {
 
       for (int i = 0; i < numTransactions; i++) {
         INodeFileUnderConstruction inode = new INodeFileUnderConstruction(
-                            p, replication, blockSize, 0, "", "", null);
+            namesystem.dir.allocateNewInodeId(), p, replication, blockSize, 0, "", "", null);
         try {
           editLog.logOpenFile("/filename" + threadid + "-" + i, inode);
           editLog.logCloseFile("/filename" + threadid + "-" + i, inode);
@@ -150,6 +156,7 @@ public class TestEditLog extends TestCase {
   /**
    * Test case for an empty edit log from a prior version of Hadoop.
    */
+  @Test
   public void testPreTxIdEditLogNoEdits() throws Exception {
     FSNamesystem namesys = Mockito.mock(FSNamesystem.class);
     namesys.dir = Mockito.mock(FSDirectory.class);
@@ -163,6 +170,7 @@ public class TestEditLog extends TestCase {
    * Test case for loading a very simple edit log from a format
    * prior to the inclusion of edit transaction IDs in the log.
    */
+  @Test
   public void testPreTxidEditLogWithEdits() throws Exception {
     Configuration conf = new Configuration();
     MiniDFSCluster cluster = null;
@@ -191,6 +199,7 @@ public class TestEditLog extends TestCase {
   /**
    * Simple test for writing to and rolling the edit log.
    */
+  @Test
   public void testSimpleEditLog() throws IOException {
     // start a cluster 
     Configuration conf = new Configuration();
@@ -225,7 +234,23 @@ public class TestEditLog extends TestCase {
       editLog.logSetReplication("fakefile", (short) 2);
       editLog.logSync();
       
-      editLog.close();
+      {
+        // test checking for strea redundancy when choosing streams
+        
+        // simulate log recovery
+        editLog.endCurrentLogSegment(true);     
+        long txid = editLog.getCurrentTxId() - 1;
+        
+        List<EditLogInputStream> editStreams = new ArrayList<EditLogInputStream>();
+        // pass -1
+        assertFalse(editLog.selectInputStreams(editStreams, 0, txid, -5));
+        assertFalse(editLog.selectInputStreams(editStreams, 0, txid, 1));
+        // there is 2 streams
+        assertFalse(editLog.selectInputStreams(editStreams, 0, txid, 2));
+        // this one must return redundancy violation
+        assertTrue(editLog.selectInputStreams(editStreams, 0, txid, 3));
+      }
+      editLog.close(); 
     } finally {
       if(fileSys != null) fileSys.close();
       if(cluster != null) cluster.shutdown();
@@ -235,6 +260,7 @@ public class TestEditLog extends TestCase {
   /**
    * Tests transaction logging in dfs.
    */
+  @Test
   public void testMultiThreadedEditLog() throws IOException {
     testEditLog(2048);
     // force edit buffer to automatically sync on each log of edit log entry
@@ -375,6 +401,7 @@ public class TestEditLog extends TestCase {
     }).get();
   }
 
+  @Test
   public void testSyncBatching() throws Exception {
     // start a cluster 
     Configuration conf = new Configuration();
@@ -434,6 +461,7 @@ public class TestEditLog extends TestCase {
    * This sequence is legal and can occur if enterSafeMode() is closely
    * followed by saveNamespace.
    */
+  @Test
   public void testBatchedSyncWithClosedLogs() throws Exception {
     // start a cluster 
     Configuration conf = new Configuration();
@@ -473,6 +501,7 @@ public class TestEditLog extends TestCase {
     }
   }
   
+  @Test
   public void testEditChecksum() throws Exception {
     // start a cluster 
     Configuration conf = new Configuration();
@@ -486,21 +515,30 @@ public class TestEditLog extends TestCase {
     FSImage fsimage = namesystem.getFSImage();
     final FSEditLog editLog = fsimage.getEditLog();
     fileSys.mkdirs(new Path("/tmp"));
-    StorageDirectory sd = fsimage.storage.dirIterator(NameNodeDirType.EDITS).next();
+    
+    Iterator<StorageDirectory> iter = fsimage.storage.dirIterator(
+        NameNodeDirType.EDITS);
+    LinkedList<StorageDirectory> sds = new LinkedList<StorageDirectory>();
+    while (iter.hasNext()) {
+      sds.add(iter.next());
+    }
+    
     editLog.close();
     cluster.shutdown();
 
-    File editFile = NNStorage.getFinalizedEditsFile(sd, 0, 2);
-    assertTrue(editFile.exists());
-
-    long fileLen = editFile.length();
-    System.out.println("File name: " + editFile + " len: " + fileLen);
-    RandomAccessFile rwf = new RandomAccessFile(editFile, "rw");
-    rwf.seek(fileLen-4); // seek to checksum bytes
-    int b = rwf.readInt();
-    rwf.seek(fileLen-4);
-    rwf.writeInt(b+1);
-    rwf.close();
+    for (StorageDirectory sd : sds) {
+      File editFile = NNStorage.getFinalizedEditsFile(sd, 0, 2);
+      assertTrue(editFile.exists());
+  
+      long fileLen = editFile.length();
+      System.out.println("File name: " + editFile + " len: " + fileLen);
+      RandomAccessFile rwf = new RandomAccessFile(editFile, "rw");
+      rwf.seek(fileLen-4); // seek to checksum bytes
+      int b = rwf.readInt();
+      rwf.seek(fileLen-4);
+      rwf.writeInt(b+1);
+      rwf.close();
+    }
     
     try {
       cluster = new MiniDFSCluster(conf, NUM_DATA_NODES, false, null);
@@ -508,7 +546,10 @@ public class TestEditLog extends TestCase {
     } catch (IOException e) {
       // expected
       assertEquals("Cause of exception should be ChecksumException",
-          e.getCause().getClass(), ChecksumException.class);
+          e.getCause().getClass(), IOException.class);
+    } finally {
+      if (cluster != null)
+        cluster.shutdown();
     }
   }
 
@@ -516,6 +557,7 @@ public class TestEditLog extends TestCase {
    * Test what happens if the NN crashes when it has has started but
    * had no transactions written.
    */
+  @Test
   public void testCrashRecoveryNoTransactions() throws Exception {
     testCrashRecovery(0);
   }
@@ -524,6 +566,7 @@ public class TestEditLog extends TestCase {
    * Test what happens if the NN crashes when it has has started and
    * had a few transactions written
    */
+  @Test
   public void testCrashRecoveryWithTransactions() throws Exception {
     testCrashRecovery(150);
   }
@@ -630,22 +673,26 @@ public class TestEditLog extends TestCase {
     }
   }
   
+  @Test
   public void testCrashRecoveryEmptyLogOneDir() throws Exception {
-    doTestCrashRecoveryEmptyLog(false, true);
+    doTestCrashRecoveryEmptyLog(false, true, false);
   }
   
+  @Test
   public void testCrashRecoveryEmptyLogBothDirs() throws Exception {
-    doTestCrashRecoveryEmptyLog(true, true);
+    doTestCrashRecoveryEmptyLog(true, true, false);
   }
 
+  @Test
   public void testCrashRecoveryEmptyLogOneDirNoUpdateSeenTxId() 
       throws Exception {
-    doTestCrashRecoveryEmptyLog(false, false);
+    doTestCrashRecoveryEmptyLog(false, false, true);
   }
   
+  @Test
   public void testCrashRecoveryEmptyLogBothDirsNoUpdateSeenTxId()
       throws Exception {
-    doTestCrashRecoveryEmptyLog(true, false);
+    doTestCrashRecoveryEmptyLog(true, false, true);
   }
 
   /**
@@ -666,7 +713,8 @@ public class TestEditLog extends TestCase {
    * seen_txid. 
    */
   private void doTestCrashRecoveryEmptyLog(boolean inBothDirs, 
-                                           boolean updateTransactionIdFile) 
+                                           boolean updateTransactionIdFile,
+                                           boolean shouldSucceed) 
       throws Exception {
     // start a cluster 
     Configuration conf = new Configuration();
@@ -679,17 +727,17 @@ public class TestEditLog extends TestCase {
       URI uri = f.toURI();
       File dir = new File(uri.getPath());
       File currentDir = new File(dir, "current");
-      // We should start with only the finalized edits_1-2
+      // We should start with only the finalized edits_0-1
       GenericTestUtils.assertGlobEquals(currentDir, "edits_.*",
           NNStorage.getFinalizedEditsFileName(0, 1));
-      // Make a truncated edits_3_inprogress
+      // Make a truncated edits_2_inprogress
       File log = new File(currentDir,
           NNStorage.getInProgressEditsFileName(2));
       NNStorage storage = new NNStorage(conf, 
                                         Collections.<URI>emptyList(),
-                                        Lists.newArrayList(uri));
+                                        Lists.newArrayList(uri), null);
       if (updateTransactionIdFile) {
-        storage.writeTransactionIdFileToStorage(2);
+        storage.writeTransactionIdFileToStorage(2, null);
       }
       storage.close();
 
@@ -701,12 +749,23 @@ public class TestEditLog extends TestCase {
     
     try {
       cluster = new MiniDFSCluster(conf, NUM_DATA_NODES, false, null);
-      fail("Did not fail to start with all-corrupt logs");
+      if (!shouldSucceed) {
+        fail("Should not have succeeded in startin cluster");
+      }
     } catch (IOException ioe) {
-      GenericTestUtils.assertExceptionContains(
-          "No non-corrupt logs for txid 2", ioe);
+      if (shouldSucceed) {
+        LOG.info("Should have succeeded in starting cluster, but failed", ioe);
+        throw ioe;
+      } else {
+        GenericTestUtils.assertExceptionContains(
+          "Gap in transactions. Expected to be able to read up until " +
+          "at least txid 2 but unable to find any edit logs containing " +
+          "txid 2", ioe);
+      }
+    } finally {
+      if (cluster != null)
+        cluster.shutdown();
     }
-    cluster.shutdown();
   }
 
   
@@ -730,12 +789,12 @@ public class TestEditLog extends TestCase {
     }
   
     @Override
-    public long getFirstTxId() throws IOException {
+    public long getFirstTxId() {
       return HdfsConstants.INVALID_TXID;
     }
     
     @Override
-    public long getLastTxId() throws IOException {
+    public long getLastTxId() {
       return HdfsConstants.INVALID_TXID;
     }
   
@@ -750,8 +809,8 @@ public class TestEditLog extends TestCase {
     }
 
     @Override
-    public FSEditLogOp readOp() throws IOException {
-      return reader.readOp();
+    public FSEditLogOp nextOp() throws IOException {
+      return reader.readOp(false);
     }
 
     @Override
@@ -768,7 +827,7 @@ public class TestEditLog extends TestCase {
     public String getName() {
       return "AnonEditLogByteInputStream";
     }
-
+    
     @Override // JournalStream
     public JournalType getType() {
       return JournalType.FILE;
@@ -779,7 +838,8 @@ public class TestEditLog extends TestCase {
     }
 
     @Override
-    public void refresh(long position) throws IOException {
+    public void refresh(long position, long skippedUntilTxid)
+        throws IOException {
     }
 
     @Override
@@ -788,6 +848,7 @@ public class TestEditLog extends TestCase {
     }
   }
 
+  @Test
   public void testFailedOpen() throws Exception {
     File logDir = new File(TEST_DIR, "testFailedOpen");
     logDir.mkdirs();
@@ -809,6 +870,7 @@ public class TestEditLog extends TestCase {
    * Tests the getEditLogManifest function using mock storage for a number
    * of different situations.
    */
+  @Test
   public void testEditLogManifestMocks() throws IOException {
     NNStorage storage;
     FSEditLog log;
@@ -817,10 +879,10 @@ public class TestEditLog extends TestCase {
     storage = mockStorageWithEdits(
         "[1,100]|[101,200]|[201,]",
         "[1,100]|[101,200]|[201,]");
-    log = new FSEditLog(storage);
-    assertEquals("[[1,100,true], [101,200,true], [201,201,false]]",
+    log = createEditLog(storage);;
+    assertEquals("[[1,100,true], [101,200,true], [201,-1,false]]",
         log.getEditLogManifest(1).toString());
-    assertEquals("[[101,200,true], [201,201,false]]",
+    assertEquals("[[101,200,true], [201,-1,false]]",
         log.getEditLogManifest(101).toString());
 
     // Another simple case, different directories have different
@@ -828,7 +890,7 @@ public class TestEditLog extends TestCase {
     storage = mockStorageWithEdits(
         "[1,100]|[101,200]",
         "[1,100]|[201,300]|[301,400]"); // nothing starting at 101
-    log = new FSEditLog(storage);
+    log = createEditLog(storage);;
     assertEquals("[[1,100,true], [101,200,true], [201,300,true], [301,400,true]]",
         log.getEditLogManifest(1).toString());
     
@@ -837,7 +899,7 @@ public class TestEditLog extends TestCase {
     storage = mockStorageWithEdits(
         "[1,100]|[301,400]", // gap from 101 to 300
         "[301,400]|[401,500]");
-    log = new FSEditLog(storage);
+    log = createEditLog(storage);;
     assertEquals("[[301,400,true], [401,500,true]]",
         log.getEditLogManifest(1).toString());
     
@@ -846,7 +908,7 @@ public class TestEditLog extends TestCase {
     storage = mockStorageWithEdits(
         "[1,100]|[101,150]", // short log at 101
         "[1,50]|[101,200]"); // short log at 1
-    log = new FSEditLog(storage);
+    log = createEditLog(storage);;
     assertEquals("[[1,100,true], [101,200,true]]",
         log.getEditLogManifest(1).toString());
     assertEquals("[[101,200,true]]",
@@ -858,7 +920,7 @@ public class TestEditLog extends TestCase {
     storage = mockStorageWithEdits(
         "[1,100]|[101,]", 
         "[1,100]|[101,200]"); 
-    log = new FSEditLog(storage);
+    log = createEditLog(storage);;
     assertEquals("[[1,100,true], [101,200,true]]",
         log.getEditLogManifest(1).toString());
     assertEquals("[[101,200,true]]",
@@ -938,16 +1000,33 @@ public class TestEditLog extends TestCase {
    * @param editUris directories to create edit logs in
    * @param numrolls number of times to roll the edit log during setup
    * @param abortAtRolls Specifications for when to fail, see AbortSpec
+   * @throws IOException 
    */
   public static NNStorage setupEdits(List<URI> editUris, int numrolls, 
+      AbortSpec... abortAtRolls) throws IOException {
+    return setupEdits(editUris, numrolls, true, abortAtRolls);
+  }
+  
+  private static FSEditLog createEditLog(NNStorage storage) throws IOException {
+    Configuration conf = new Configuration();
+    // Make sure the edits dirs are set in the provided configuration object.
+    conf.set(FSConstants.DFS_NAMENODE_EDITS_DIR_KEY,
+        org.apache.commons.lang.StringUtils.join(storage.getEditsDirectories(),
+            ","));
+    return new FSEditLog(conf, null, storage,
+        NNStorageConfiguration.getNamespaceDirs(conf),
+        NNStorageConfiguration.getNamespaceEditsDirs(conf), null);
+  }
+  
+  public static NNStorage setupEdits(List<URI> editUris, int numrolls, boolean closeOnFinish,
                                      AbortSpec... abortAtRolls)
       throws IOException {
     List<AbortSpec> aborts = new ArrayList<AbortSpec>(Arrays.asList(abortAtRolls));
     NNStorage storage = new NNStorage(new Configuration(),
                                       Collections.<URI>emptyList(),
-                                      editUris);
+                                      editUris, null);
     storage.format();
-    FSEditLog editlog = new FSEditLog(storage);    
+    FSEditLog editlog = createEditLog(storage);;    
     // open the edit log and add two transactions
     // logGenerationStamp is used, simply because it doesn't 
     // require complex arguments.
@@ -979,7 +1058,9 @@ public class TestEditLog extends TestCase {
       }
       editlog.logSync();
     }
-    editlog.close();
+    if (closeOnFinish) {
+      editlog.close();
+    }
 
     FSImageTestUtil.logStorageContents(LOG, storage);
     return storage;
@@ -991,6 +1072,7 @@ public class TestEditLog extends TestCase {
    * The first on fails on odd rolls, the second on even. Test
    * that we are able to load the entire editlog regardless.
    */
+  @Test
   public void testAlternatingJournalFailure() throws IOException {
     File f1 = new File(TEST_DIR + "/alternatingjournaltest0");
     File f2 = new File(TEST_DIR + "/alternatingjournaltest1");
@@ -1009,10 +1091,14 @@ public class TestEditLog extends TestCase {
                                    new AbortSpec(9, 0),
                                    new AbortSpec(10, 1));
     long totaltxnread = 0;
-    FSEditLog editlog = new FSEditLog(storage);
+    FSEditLog editlog = createEditLog(storage);;
     long startTxId = 0;
-    Iterable<EditLogInputStream> editStreams = editlog.selectInputStreams(startTxId, 
-                                                                          TXNS_PER_ROLL*11 - 1);
+    
+    // we need to finalize the inprogress segments (this is done on startup)
+    editlog.recoverUnclosedStreams();
+    
+    List<EditLogInputStream> editStreams = new ArrayList<EditLogInputStream>();
+    editlog.selectInputStreams(editStreams, startTxId, TXNS_PER_ROLL*11 - 1, 0);
 
     for (EditLogInputStream edits : editStreams) {
       FSEditLogLoader.EditLogValidation val = FSEditLogLoader.validateEditLog(edits);
@@ -1036,6 +1122,7 @@ public class TestEditLog extends TestCase {
    * There should be 4*TXNS_PER_ROLL transactions as we rolled 3
    * times. 
    */
+  @Test
   public void testLoadingWithGaps() throws IOException {
     File f1 = new File(TEST_DIR + "/gaptest0");
     List<URI> editUris = ImmutableList.of(f1.toURI());
@@ -1057,16 +1144,111 @@ public class TestEditLog extends TestCase {
     assertEquals(1, files.length);
     assertTrue(files[0].delete());
     
-    FSEditLog editlog = new FSEditLog(storage);
+    FSEditLog editlog = createEditLog(storage);;
     long startTxId = 0;
     try {
-      Iterable<EditLogInputStream> editStreams 
-        = editlog.selectInputStreams(startTxId, 4*TXNS_PER_ROLL);
-      
+      List<EditLogInputStream> editStreams = new ArrayList<EditLogInputStream>();
+      editlog.selectInputStreams(editStreams, startTxId, 4*TXNS_PER_ROLL, 0);
       fail("Should have thrown exception");
     } catch (IOException ioe) {
       GenericTestUtils.assertExceptionContains(
-          "No non-corrupt logs for txid " + startGapTxId, ioe);
+          "Gap in transactions. Expected to be able to read up until " +
+          "at least txid 40 but unable to find any edit logs containing " +
+          "txid 10", ioe);
+    }
+  }
+
+  /**
+   * Dummy name node for testAutomaticRoll().
+   */
+  class FakeNameNode implements AutoEditsRollerInterface {
+    FSEditLog editlog;
+    volatile boolean isRunning = true;
+
+    @Override
+    public void rollEditLogAdmin()
+        throws IOException {
+      editlog.rollEditLog();
+    }
+
+    @Override
+    public boolean isNamesystemRunning() {
+      return isRunning;
+    }
+
+    @Override
+    public boolean isNamesystemInitialized() {
+      return true;
+    }
+  }
+
+  
+  /**
+   * Create an FSEditLog and apply an automatic edits roller to it
+   * Add some dummy transactions for a couple of seconds and make
+   * sure edits are automatically rolled reasonablly nubmer of times.
+   * @throws IOException
+   * @throws InterruptedException
+   */
+  @Test
+  public void testAutomaticRoll() throws IOException, InterruptedException {
+    File f1 = new File(TEST_DIR + "/testAutomaticRoll");
+    List<URI> editUris = ImmutableList.of(f1.toURI());
+
+    NNStorage storage = setupEdits(editUris, 3);
+
+    storage.format();
+    Configuration conf = new Configuration();
+    conf.setLong(FSEditLog.CONF_ROLL_TIMEOUT_MSEC, 200);
+    FakeNameNode fakeNN = new FakeNameNode();
+    AutomaticEditsRoller aer = new AutomaticEditsRoller(fakeNN);
+
+    FSImage fakeImage = new FSImage(conf);
+    FSNamesystem fakeFSN = new FSNamesystem();
+    fakeFSN.automaticEditsRoller = aer;
+    fakeFSN.automaticEditsRollingThread = new Daemon(aer);
+    fakeFSN.automaticEditsRollingThread.start();
+    fakeImage.setFSNamesystem(fakeFSN);
+
+    FSEditLog editlog = new FSEditLog(conf, fakeImage, storage, null, editUris,
+        null);
+    fakeNN.editlog = editlog;
+    
+    Daemon daemon = new Daemon(aer);
+    daemon.start();
+    
+    editlog.open();
+    
+    for (int i = 0 ; i < 200; i++) {
+      for (int j = 0; j < 5; j++) {
+        editlog.logGenerationStamp(0);
+        Thread.sleep(1);
+      }
+      editlog.logSync();
+    }
+    DFSTestUtil.waitNMilliSecond(200);
+    
+    File[] files = new File(f1, "current").listFiles(new FilenameFilter() {
+        public boolean accept(File dir, String name) {
+          if (name.startsWith(NameNodeFile.EDITS.getName())) {
+            return true;
+          }
+          return false;
+        }
+      });
+    assertTrue("Number of files " + files.length, files.length > 5);
+    
+    editlog.close();
+    
+    aer.stop();
+    
+    for (int i = 0; i < 500; i++) {
+      if (daemon.isAlive()) {
+        break;
+      } else if (i == 499) {
+        TestCase.fail();
+      }
+      DFSTestUtil.waitNMilliSecond(10);
     }
   }
 }

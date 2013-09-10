@@ -36,8 +36,10 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.datanode.DataBlockScannerSet;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.DatanodeBlockInfo;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
@@ -46,20 +48,32 @@ import org.apache.log4j.Level;
 import org.junit.Assert;
 
 public class TestDFSFileCrc extends junit.framework.TestCase {
+  {
+    DataNode.LOG.getLogger().setLevel(Level.ALL);
+    ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.ALL);
+    ((Log4JLogger)DataBlockScannerSet.LOG).getLogger().setLevel(Level.ALL);
+  }
+  
   private static final Random RAN = new Random();
 
   public void testFileCrc() throws IOException, InterruptedException {
-    testFileCrcInternal(true, true, true);
-    testFileCrcInternal(false, true, true);
-    testFileCrcInternal(true, true, false);
-    testFileCrcInternal(false, true, false);
-    testFileCrcInternal(true, false, false);
-    testFileCrcInternal(false, false, false);
+    testFileCrcInternal(true, false, false, false, 1);
+    testFileCrcInternal(true, true, true, true, 1);
+    testFileCrcInternal(false, true, true, true, 1);
+    testFileCrcInternal(true, true, false, true, 2);
+    testFileCrcInternal(false, true, false, true, 2);
+    testFileCrcInternal(true, false, false, true, 5);
+    testFileCrcInternal(false, false, false, true, 5);
   }
   
   private void testFileCrcInternal(boolean inlineChecksum,
-      boolean triggerBlockRecovery, boolean waitForScannerRebuild)
-      throws IOException, InterruptedException {
+      boolean triggerBlockRecovery, boolean waitForScannerRebuild,
+      boolean updateWhileWrite, int attempts) throws IOException,
+      InterruptedException {
+    if (waitForScannerRebuild) {
+      DataBlockScannerSet.TIME_SLEEP_BETWEEN_SCAN = 500;
+    }
+    
     MiniDFSCluster cluster = null; 
     try {
       ((Log4JLogger)HftpFileSystem.LOG).getLogger().setLevel(Level.ALL);
@@ -69,8 +83,15 @@ public class TestDFSFileCrc extends junit.framework.TestCase {
       RAN.setSeed(seed);
   
       final Configuration conf = new Configuration();
-      conf.set("slave.host.name", "localhost");
+
+      conf.set(FSConstants.SLAVE_HOST_NAME, "127.0.0.1");
       conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
+      conf.setBoolean("dfs.update.blockcrc.when.write", updateWhileWrite);
+      if (!waitForScannerRebuild) {
+        conf.setInt("dfs.datanode.scan.period.hours", -1);
+      } else {
+        conf.setInt("dfs.datanode.scan.period.hours", 1);        
+      }
    
       cluster = new MiniDFSCluster(conf, 4, true, null);;
       final FileSystem hdfs = cluster.getFileSystem();
@@ -90,15 +111,7 @@ public class TestDFSFileCrc extends junit.framework.TestCase {
         assertTrue(e.getMessage().startsWith(
           "Null block locations, mostly because non-existent file"));
       }
-      //try different number of blocks
-      int attempts = 5;
-      if (triggerBlockRecovery) {
-        if (waitForScannerRebuild) {
-          attempts = 1;
-        } else {
-          attempts = 2;
-        }
-      }
+
       for(int n = 0; n < attempts; n++) {
         //generate random data
         final byte[] data = new byte[RAN.nextInt(block_size/2-1)+n*block_size+1];
@@ -151,13 +164,16 @@ public class TestDFSFileCrc extends junit.framework.TestCase {
               DatanodeBlockInfo binfo = fsd.getDatanodeBlockInfo(nsId,
                   locatedblock.getBlock());
               TestCase.assertNotNull(binfo);
-              long waitTimeLeft = 10000;
+              long waitTimeLeft = 20000;
               while (true) {
                 if (binfo.hasBlockCrcInfo()) {
                   break;
                 } else {
                   if (waitTimeLeft > 0) {
                     waitTimeLeft -= 100;
+                    System.out.println("Sleep while waiting for datanode " + dn
+                        + " block scanner to rebuild block CRC for: "
+                        + locatedblock.getBlock());
                     Thread.sleep(100);
                   } else {
                     TestCase.fail();
@@ -180,6 +196,8 @@ public class TestDFSFileCrc extends junit.framework.TestCase {
         TestCase.assertEquals((int) checksum.getValue(), crc);
       }
     } finally {
+      DataBlockScannerSet.TIME_SLEEP_BETWEEN_SCAN = 5000;      
+
       if (cluster != null) {
         cluster.shutdown();
       }

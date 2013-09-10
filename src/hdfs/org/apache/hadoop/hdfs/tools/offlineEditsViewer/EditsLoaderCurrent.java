@@ -39,7 +39,7 @@ class EditsLoaderCurrent implements EditsLoader {
 
   private static int[] supportedVersions = { -18, -19, -20, -21, -22, -23, -24,
       -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37, -38, -39,
-      -40, -41 };
+      -40, -41, -42, -43, -44 };
 
   private EditsVisitor v;
   private int editsVersion = 0;
@@ -92,6 +92,23 @@ class EditsLoaderCurrent implements EditsLoader {
   private void visit_OP_CLOSE() throws IOException {
     visit_OP_ADD_or_OP_CLOSE(FSEditLogOpCodes.OP_CLOSE);
   }
+  
+  private void visit_Blocks() throws IOException {
+    IntToken numBlocksToken = v.visitInt(EditsElement.NUMBLOCKS);
+    for (int i = 0; i < numBlocksToken.value; i++) {
+      v.visitEnclosingElement(EditsElement.BLOCK);
+
+      v.visitLong(EditsElement.BLOCK_ID);
+      v.visitLong(EditsElement.BLOCK_NUM_BYTES);
+      v.visitLong(EditsElement.BLOCK_GENERATION_STAMP);
+      
+      if (LayoutVersion.supports(Feature.BLOCK_CHECKSUM, editsVersion)) {
+        v.visitInt(EditsElement.BLOCK_CHECKSUM);
+      }
+
+      v.leaveEnclosingElement();
+    }
+  }
 
   /**
    * Visit OP_ADD and OP_CLOSE, they are almost the same
@@ -113,6 +130,11 @@ class EditsLoaderCurrent implements EditsLoader {
       }
       
       v.visitStringUTF8(EditsElement.PATH);
+      
+      if (LayoutVersion.supports(Feature.ADD_INODE_ID, editsVersion)) {
+        v.visitLong(EditsElement.INODE_ID);
+      }
+      
       if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
         v.visitShort(EditsElement.REPLICATION);
         v.visitLong(EditsElement.MTIME);
@@ -125,16 +147,8 @@ class EditsLoaderCurrent implements EditsLoader {
         v.visitStringUTF8(EditsElement.BLOCKSIZE);
       }
       // now read blocks
-      IntToken numBlocksToken = v.visitInt(EditsElement.NUMBLOCKS);
-      for (int i = 0; i < numBlocksToken.value; i++) {
-        v.visitEnclosingElement(EditsElement.BLOCK);
-
-        v.visitLong(EditsElement.BLOCK_ID);
-        v.visitLong(EditsElement.BLOCK_NUM_BYTES);
-        v.visitLong(EditsElement.BLOCK_GENERATION_STAMP);
-
-        v.leaveEnclosingElement();
-      }
+      visit_Blocks();
+      
       // PERMISSION_STATUS
       v.visitEnclosingElement(EditsElement.PERMISSION_STATUS);
 
@@ -175,6 +189,21 @@ class EditsLoaderCurrent implements EditsLoader {
     v.visitStringUTF8(EditsElement.DESTINATION);
     v.visitLong(EditsElement.TIMESTAMP);
   }
+  
+  /**
+   * Visit OP_APPEND
+   */
+  private void visit_OP_APPEND() throws IOException {
+    visitTxId();
+    v.visitStringUTF8(EditsElement.PATH);
+    
+    // visit blocks
+    visit_Blocks();
+    
+    // client name & machine
+    v.visitStringUTF8(EditsElement.CLIENT_NAME);
+    v.visitStringUTF8(EditsElement.CLIENT_MACHINE);
+  }
 
   /**
    * Visit OP_DELETE
@@ -200,7 +229,13 @@ class EditsLoaderCurrent implements EditsLoader {
     if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
       v.visitInt(EditsElement.LENGTH);
     }
+    
     v.visitStringUTF8( EditsElement.PATH);
+    
+    if (LayoutVersion.supports(Feature.ADD_INODE_ID, editsVersion)) {
+      v.visitLong(EditsElement.INODE_ID);
+    }
+    
     if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
       v.visitLong(EditsElement.TIMESTAMP);
       v.visitLong(EditsElement.ATIME);
@@ -523,6 +558,9 @@ class EditsLoaderCurrent implements EditsLoader {
           break;
         case OP_HARDLINK: // 25
           visit_OP_HARDLINK();
+          break;
+        case OP_APPEND: //26
+          visit_OP_APPEND();
           break;
         default:
         {

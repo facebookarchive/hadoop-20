@@ -52,7 +52,11 @@ public class TestStandbyFailoverRetry extends FailoverTestUtil {
   }
 
   public void setUp(String name) throws Exception {
-    super.setUp(name);
+  	setUp(name, true);
+  }
+  
+  public void setUp(String name, boolean enableQJM) throws Exception {
+    super.setUp(name, enableQJM);
     restartDone = false;
     new WaitForRestart(cluster.getPrimaryAvatar(0).avatar).start();
     new WaitForRestart(cluster.getStandbyAvatar(0).avatar).start();
@@ -144,7 +148,7 @@ public class TestStandbyFailoverRetry extends FailoverTestUtil {
 
   @Test
   public void testFailoverRetryStandbyQuiesce() throws Exception {
-    setUp("testFailoverRetryBlocksMisMatch");
+    setUp("testFailoverRetryBlocksMisMatch", false);
     int totalBlocks = 50;
     DFSTestUtil.createFile(fs, new Path("/testFailoverRetryBlocksMisMatch"),
         (long) totalBlocks * 1024, (short) 3, System.currentTimeMillis());

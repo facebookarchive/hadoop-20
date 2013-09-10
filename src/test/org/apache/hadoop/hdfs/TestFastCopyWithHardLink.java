@@ -25,7 +25,7 @@ import org.junit.Test;
 public class TestFastCopyWithHardLink extends FastCopySetupUtil {
 
   @BeforeClass
-  public static void setUpeClass() throws Exception {
+  public static void setUpClass() throws Exception {
     conf = new Configuration();
     remoteConf = new Configuration();
     conf.setBoolean("dfs.datanode.blkcopy.hardlink", true);

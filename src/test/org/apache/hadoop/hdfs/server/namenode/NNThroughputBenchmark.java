@@ -696,7 +696,7 @@ public class NNThroughputBenchmark {
      * Host names are all the same, the ordering goes by port numbers.
      */
     private static String getNodeName(int port) throws IOException {
-      String machineName = DNS.getDefaultHost("default", "default");
+      String machineName = DNS.getDefaultIP("default");
       String sPort = String.valueOf(100000 + port);
       if(sPort.length() > 6)
         throw new IOException("Too many data-nodes.");

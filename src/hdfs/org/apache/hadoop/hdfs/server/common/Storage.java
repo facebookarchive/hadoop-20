@@ -34,10 +34,13 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
-import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.fs.FileUtil;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.hadoop.util.VersionInfo;
+
+import com.google.common.base.Preconditions;
 
 
 
@@ -87,6 +90,8 @@ public abstract class Storage extends StorageInfo {
   private   static final String STORAGE_TMP_FINALIZED = "finalized.tmp";
   private   static final String STORAGE_TMP_LAST_CKPT = "lastcheckpoint.tmp";
   private   static final String STORAGE_PREVIOUS_CKPT = "previous.checkpoint";
+  public   static final String STORAGE_BLOCK_CRC = "blockcrc";
+  public   static final String STORAGE_TMP_BLOCK_CRC = "blockcrc.tmp";
   
   // meta info property names
   protected static final String STORAGE_TYPE = "storageType";
@@ -98,13 +103,15 @@ public abstract class Storage extends StorageInfo {
     NON_EXISTENT,
     NOT_FORMATTED,
     COMPLETE_UPGRADE,
+    UPGRADE_DONE,
     RECOVER_UPGRADE,
     COMPLETE_FINALIZE,
     COMPLETE_ROLLBACK,
     RECOVER_ROLLBACK,
     COMPLETE_CHECKPOINT,
     RECOVER_CHECKPOINT,
-    NORMAL;
+    NORMAL,
+    INCONSISTENT;
   }
 
   /**
@@ -366,8 +373,7 @@ public abstract class Storage extends StorageInfo {
      * to formatting (i.e if the directory appears to contain some data)
      * @throws IOException if the SD cannot be accessed due to an IO error
      */
-    @Override
-    public boolean hasSomeData() throws IOException {
+    private boolean hasSomeData() throws IOException {
       // Its alright for a dir not to exist, or to exist (properly accessible)
       // and be completely empty.
       if (!root.exists()) return false;
@@ -517,6 +523,10 @@ public abstract class Storage extends StorageInfo {
         return StorageState.RECOVER_UPGRADE;
       }
 
+      if (hasPrevious && hasCurrent) {
+        return StorageState.UPGRADE_DONE;
+      }
+
       assert hasRemovedTmp : "hasRemovedTmp must be true";
       if (!(hasCurrent ^ hasPrevious))
         throw new InconsistentFSStateException(root,
@@ -649,6 +659,16 @@ public abstract class Storage extends StorageInfo {
       lock.channel().close();
       lock = null;
     }
+
+    @Override
+    public boolean hasSomeJournalData() throws IOException {
+      return hasSomeData();
+    }
+
+    @Override
+    public boolean hasSomeImageData() throws IOException {
+      return hasSomeData();
+    }
   }
 
   /**
@@ -777,6 +797,35 @@ public abstract class Storage extends StorageInfo {
     if (!from.renameTo(to))
       throw new IOException("Failed to rename "
                             + from.getCanonicalPath() + " to " + to.getCanonicalPath());
+  }
+
+  public static void upgradeDirectory(StorageDirectory sd) throws IOException {
+    File curDir = sd.getCurrentDir();
+    File prevDir = sd.getPreviousDir();
+    File tmpDir = sd.getPreviousTmp();
+    assert curDir.exists() : "Current directory must exist.";
+    assert !prevDir.exists() : "prvious directory must not exist.";
+    assert !tmpDir.exists() : "prvious.tmp directory must not exist.";
+
+    // rename current to tmp
+    rename(curDir, tmpDir);
+
+    if (!curDir.mkdir()) {
+      throw new IOException("Cannot create directory " + curDir);
+    }
+  }
+
+  public static void completeUpgrade(StorageDirectory sd) throws IOException {
+    // Write the version file, since saveFsImage above only makes the
+    // fsimage, and the directory is otherwise empty.
+    sd.write();
+    InjectionHandler
+        .processEventIO(InjectionEvent.FSIMAGE_UPGRADE_AFTER_SAVE_IMAGE);
+
+    File prevDir = sd.getPreviousDir();
+    File tmpDir = sd.getPreviousTmp();
+    // rename tmp to previous
+    rename(tmpDir, prevDir);
   }
 
   public static void deleteDir(File dir) throws IOException {
@@ -932,12 +981,20 @@ public abstract class Storage extends StorageInfo {
    */
   public interface FormatConfirmable {
     /**
-     * @return true if the storage seems to have some valid data in it,
+     * @return true if the storage seems to have some valid journal data in it,
      * and the user should be required to confirm the format. Otherwise,
      * false.
      * @throws IOException if the storage cannot be accessed at all.
      */
-    public boolean hasSomeData() throws IOException;
+    public boolean hasSomeJournalData() throws IOException;
+    
+    /**
+     * @return true if the storage seems to have some valid image data in it,
+     * and the user should be required to confirm the format. Otherwise,
+     * false.
+     * @throws IOException if the storage cannot be accessed at all.
+     */
+    public boolean hasSomeImageData() throws IOException;
     
     /**
      * @return a string representation of the formattable item, suitable
@@ -964,7 +1021,7 @@ public abstract class Storage extends StorageInfo {
       boolean interactive)
       throws IOException {
     for (FormatConfirmable item : items) {
-      if (!item.hasSomeData())
+      if (!(item.hasSomeJournalData() || item.hasSomeImageData()))
         continue;
       if (force) { // Don't confirm, always format.
         System.err.println(
@@ -984,5 +1041,14 @@ public abstract class Storage extends StorageInfo {
     }
     
     return true;
+  }
+  
+  /**
+   * @return the storage directory, with the precondition that this storage
+   * has exactly one storage directory
+   */
+  public StorageDirectory getSingularStorageDir() {
+    Preconditions.checkState(storageDirs.size() == 1);
+    return storageDirs.get(0);
   }
 }

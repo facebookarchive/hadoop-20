@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.hdfs;
 
+import static org.junit.Assert.assertTrue;
+
 import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -25,29 +27,40 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.Random;
+import java.util.zip.CRC32;
+
 import junit.framework.TestCase;
-import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
-import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
-import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
-import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
-import org.apache.hadoop.io.IOUtils;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.BlockLocation;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
+import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumWriter;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.namenode.INode;
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
+import org.apache.hadoop.hdfs.util.GSet;
+import org.apache.hadoop.io.IOUtils;
 
 /**
  */
@@ -136,15 +149,32 @@ public class DFSTestUtil extends TestCase {
     }
   }
   
-  public static void createFile(FileSystem fs, Path fileName, long fileLen, 
-      short replFactor, long seed) throws IOException {
+  public static long createFile(FileSystem fs, Path fileName, long fileLen,
+      short replFactor, long seed, InetSocketAddress[] favoredNodes)
+          throws IOException {
+    return createFile(fs, fileName, fileLen, replFactor, seed, favoredNodes,
+        fs.getDefaultBlockSize());
+  }
+  
+  public static long createFile(FileSystem fs, Path fileName, long fileLen,
+      short replFactor, long seed, InetSocketAddress[] favoredNodes, long blockSize) 
+          throws IOException {
     if (!fs.mkdirs(fileName.getParent())) {
       throw new IOException("Mkdirs failed to create " + 
                             fileName.getParent().toString());
     }
+    CRC32 crc = new CRC32();
     FSDataOutputStream out = null;
     try {
-      out = fs.create(fileName, replFactor);
+      if (favoredNodes == null && blockSize == fs.getDefaultBlockSize()){
+        out = fs.create(fileName, replFactor);
+      } else {
+        out = ((DistributedFileSystem) fs).create(fileName, FsPermission.getDefault(), true, fs
+            .getConf().getInt("io.file.buffer.size", 4096), replFactor, blockSize,
+            fs.getConf().getInt("io.bytes.per.checksum", FSConstants.DEFAULT_BYTES_PER_CHECKSUM),
+            null, favoredNodes);
+      }
+
       byte[] toWrite = new byte[1024];
       Random rb = new Random(seed);
       long bytesToWrite = fileLen;
@@ -153,15 +183,22 @@ public class DFSTestUtil extends TestCase {
         int bytesToWriteNext = (1024<bytesToWrite)?1024:(int)bytesToWrite;
 
         out.write(toWrite, 0, bytesToWriteNext);
+        crc.update(toWrite, 0, bytesToWriteNext);
         bytesToWrite -= bytesToWriteNext;
       }
       out.close();
       out = null;
+      return crc.getValue();
     } finally {
       IOUtils.closeStream(out);
     }
   }
   
+  public static long createFile(FileSystem fs, Path fileName, long fileLen,
+      short replFactor, long seed) throws IOException {
+    return createFile(fs, fileName, fileLen, replFactor, seed, null);
+  }
+
   /** check if the files have been copied correctly. */
   public boolean checkFiles(FileSystem fs, String topdir) throws IOException {
     
@@ -265,6 +302,43 @@ public class DFSTestUtil extends TestCase {
   static void setLogLevel2All(org.apache.commons.logging.Log log) {
     ((org.apache.commons.logging.impl.Log4JLogger)log
         ).getLogger().setLevel(org.apache.log4j.Level.ALL);
+  }
+  
+  //
+  // validates that file matches the crc.
+  //
+  public static boolean validateFile(FileSystem fileSys, Path name, long length,
+                                  long crc) 
+    throws IOException {
+
+    long numRead = 0;
+    CRC32 newcrc = new CRC32();
+    FSDataInputStream stm = fileSys.open(name);
+    final byte[] b = new byte[4192];
+    int num = 0;
+    while (num >= 0) {
+      num = stm.read(b);
+      if (num < 0) {
+        break;
+      }
+      numRead += num;
+      newcrc.update(b, 0, num);
+    }
+    stm.close();
+
+    if (numRead != length) {
+      LOG.info("Number of bytes read " + numRead +
+               " does not match file size " + length);
+      return false;
+    }
+
+    LOG.info(" Newcrc " + newcrc.getValue() + " old crc " + crc);
+    if (newcrc.getValue() != crc) {
+      LOG.info("CRC mismatch of file " + name + ": " +
+               newcrc.getValue() + " vs. " + crc);
+      return false;
+    }
+    return true;
   }
 
   public static String readFile(File f) throws IOException {
@@ -413,5 +487,58 @@ public class DFSTestUtil extends TestCase {
     } catch (InterruptedException e) {
       return;
     }
+  }
+  
+  /** Make sure two inode map are the equal */
+  public static void assertInodemapEquals(GSet<INode, INode> o1, GSet<INode, INode> o2) {
+    Iterator<INode> itr1 = o1.iterator();
+    Iterator<INode> itr2 = o2.iterator();
+    while (itr1.hasNext()) {
+      assertTrue(itr2.hasNext());
+      assertEquals(itr1.next(), itr2.next());
+    }
+    assertFalse(itr2.hasNext());
+  }
+  
+  public static void corruptBlock(Block block, MiniDFSCluster dfs) throws IOException {
+    boolean corrupted = false;
+    for (int i = 0; i < dfs.getNumDataNodes(); i++) {
+      corrupted |= corruptReplica(block, i, dfs);
+    }
+    assertTrue("could not corrupt block", corrupted);
+  }
+  
+  public static boolean corruptReplica(Block block, int replica, MiniDFSCluster cluster) throws IOException {
+    Random random = new Random();
+    boolean corrupted = false;
+    for (int i=replica*2; i<replica*2+2; i++) {
+      File blockFile = new File(cluster.getBlockDirectory("data" + (i+1)), block.getBlockName());
+      if (blockFile.exists()) {
+        corruptFile(blockFile, random);
+        corrupted = true;
+        continue;
+      }
+      File blockFileInlineChecksum = new File(cluster.getBlockDirectory("data"
+          + (i + 1)), BlockInlineChecksumWriter.getInlineChecksumFileName(
+          block, FSConstants.CHECKSUM_TYPE, cluster.conf.getInt(
+              "io.bytes.per.checksum", FSConstants.DEFAULT_BYTES_PER_CHECKSUM)));
+      if (blockFileInlineChecksum.exists()) {
+        corruptFile(blockFileInlineChecksum, random);
+        corrupted = true;
+        continue;
+      }
+    }
+    return corrupted;
+  }
+  
+  public static void corruptFile(File file, Random random) throws IOException {
+    // Corrupt replica by writing random bytes into replica
+    RandomAccessFile raFile = new RandomAccessFile(file, "rw");
+    FileChannel channel = raFile.getChannel();
+    String badString = "BADBAD";
+    int rand = random.nextInt((int)channel.size()/2);
+    raFile.seek(rand);
+    raFile.write(badString.getBytes());
+    raFile.close();    
   }
 }

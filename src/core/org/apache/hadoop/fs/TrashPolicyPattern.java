@@ -36,12 +36,15 @@ import org.apache.hadoop.conf.Configuration;
  * not under any of the base pathes.
  * 
  * For example, if
- * fs.trash.base.paths = /namespaces/*
+ * fs.trash.base.paths = /namespace/*
  * fs.trash.unmatched.paths = /
  * 
- * Then file /namespaces/ns1/x/y/z will be moved to
- * /namespaces/ns1/.Trash/Current/namespaces/ns1/x/y/z
+ * Then file /namespace/ns1/x/y/z will be moved to
+ * /namespace/ns1/.Trash/Current/namespace/ns1/x/y/z
  * but /x/y/z will be moved to /.Trash/x/y/z
+ * 
+ * fs.trash.base.paths follows the pattern of globStatus(),
+ * so it can be something like "{/namespace/*,/user/*}"
  */
 public class TrashPolicyPattern extends TrashPolicyBase {
   private Path basePathPattern;
@@ -59,7 +62,7 @@ public class TrashPolicyPattern extends TrashPolicyBase {
   public void initialize(Configuration conf, FileSystem fs, Path home) {
     super.initialize(conf, fs, home);
     basePathPattern = new Path(conf.get("fs.trash.base.paths",
-        "/namespaces/*/"));
+        "{/namespace/*/,/user/*/}"));
     unmatchedTrashPath = new Path(conf.get("fs.trash.unmatched.paths",
         "/"));
   }
@@ -97,6 +100,12 @@ public class TrashPolicyPattern extends TrashPolicyBase {
     return fs.globStatus(basePathPattern);
   }
 
+  @Override
+  protected Path getExtraTrashPath() throws IOException {
+    return unmatchedTrashPath;
+  }
+
+  
   @Override
   protected TrashPolicyBase getTrashPolicy(Path trashBasePath,
       Configuration conf) throws IOException {

@@ -28,6 +28,7 @@ import org.apache.hadoop.hdfs.RaidDFSUtil;
 import org.apache.hadoop.hdfs.TestRaidDfs;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptFileStatus;
 import org.apache.hadoop.util.StringUtils;
 import org.junit.Test;
 import java.io.File;
@@ -94,6 +95,9 @@ public class TestFileCorruptions  extends TestCase {
     localConf.set("raid.corruptfile.counter.dirs", "/user/dhruba/raidtest,/user/dhruba1");
     localConf.setInt("raid.corruptfilecount.interval", 1000);
     localConf.set("mapred.raid.http.address", "localhost:0");
+    localConf.setInt(
+        DistBlockIntegrityMonitor.RAIDNODE_MAX_NUM_DETECTION_TIME_COLLECTED_KEY,
+        1);
 
     try {
       cnode = RaidNode.createRaidNode(null, localConf);
@@ -122,22 +126,47 @@ public class TestFileCorruptions  extends TestCase {
         corruptBlock(file1Loc.get(idx).getBlock(), dfsCluster);
       RaidDFSUtil.reportCorruptBlocks(dfs, file1, corruptBlockIdxs, blockSize);
       cnode = RaidNode.createRaidNode(null, localConf);
-      Thread.sleep(8000);
-      Map<String, Long> result = cnode.getUnRecoverableFileCounterMap();
-      assertEquals("We expect 1 corrupt files",
-          result.get("/user/dhruba/raidtest"), new Long(1L));
-      assertEquals("We expect 0 corrupt files",
-          result.get("/user/dhruba1"), new Long(0L));
+      long startTime = System.currentTimeMillis();
+      Map<String, Map<CorruptFileStatus, Long>> result = null;
+      while (System.currentTimeMillis() - startTime < 120000) { 
+        result = cnode.getCorruptFilesCounterMap();
+        Long counter = result.get("/user/dhruba/raidtest").get(
+            CorruptFileStatus.RAID_UNRECOVERABLE);
+        if (counter != null && counter > 0) {
+          break;
+        }
+        LOG.info("Waiting for 1 corrupt file");
+        Thread.sleep(1000);
+      }
+      assertEquals("We expect 1 corrupt files", result.get(
+          "/user/dhruba/raidtest").get(CorruptFileStatus.RAID_UNRECOVERABLE)
+          , new Long(1L));
+      assertEquals("We expect 0 corrupt files", result.get(
+          "/user/dhruba1").get(CorruptFileStatus.RAID_UNRECOVERABLE), 
+          new Long(0L));
       // corrupt file2
       for (int idx: corruptBlockIdxs)
         corruptBlock(file2Loc.get(idx).getBlock(), dfsCluster);
       RaidDFSUtil.reportCorruptBlocks(dfs, file2, corruptBlockIdxs, blockSize);
-      Thread.sleep(8000);
-      result = cnode.getUnRecoverableFileCounterMap();
-      assertEquals("We expect 2 corrupt files",
-          result.get("/user/dhruba/raidtest"), new Long(2L));
-      assertEquals("We expect 0 corrupt files",
-          result.get("/user/dhruba1"), new Long(0L));
+      startTime = System.currentTimeMillis();
+      while (System.currentTimeMillis() - startTime < 120000) { 
+        result = cnode.getCorruptFilesCounterMap();
+        Long counter = result.get("/user/dhruba/raidtest").get(
+            CorruptFileStatus.RAID_UNRECOVERABLE);
+        if (counter != null && counter > 1) {
+          break;
+        }
+        LOG.info("Waiting for 2 corrupt files");
+        Thread.sleep(1000);
+      }
+      LOG.info("Handle " + cnode.getNumDetectionsPerSec() + " files per second");
+      assertTrue(cnode.getNumDetectionsPerSec() > 0);
+      assertEquals("We expect 2 corrupt files", result.get(
+          "/user/dhruba/raidtest").get(CorruptFileStatus.RAID_UNRECOVERABLE),
+          new Long(2L));
+      assertEquals("We expect 0 corrupt files", result.get(
+          "/user/dhruba1").get(CorruptFileStatus.RAID_UNRECOVERABLE), 
+          new Long(0L));
     } catch (Exception e) {
       LOG.info("Test testCorruptFileCounter exception " + e.getMessage(),
                e);
@@ -164,6 +193,7 @@ public class TestFileCorruptions  extends TestCase {
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
     conf.set("raid.server.address", "localhost:0");
     conf.set("mapred.raid.http.address", "localhost:0");
+    conf.setInt(BlockIntegrityMonitor.BLOCKCHECK_INTERVAL, 3000);
     
     conf.setBoolean("dfs.permissions", false);
     Utils.loadTestCodecs(conf, 5, 1, 3, "/destraid", "/destraidrs");

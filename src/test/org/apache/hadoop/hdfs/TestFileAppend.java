@@ -19,8 +19,10 @@ package org.apache.hadoop.hdfs;
 
 import junit.framework.TestCase;
 import java.io.*;
+import java.lang.reflect.Field;
 import java.net.*;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.log4j.Level;
@@ -32,12 +34,21 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.BlockLocation;
+import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
+import org.apache.hadoop.hdfs.DFSClient.MultiDataOutputStream;
+import org.apache.hadoop.hdfs.profiling.DFSWriteProfilingData;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.protocol.PacketBlockReceiverProfileData;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 /**
  * This class tests the building blocks that are needed to
@@ -45,7 +56,7 @@ import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
  */
 public class TestFileAppend extends TestCase {
   {
-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+    DataNode.LOG.getLogger().setLevel(Level.ALL);
     ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.ALL);
   }
 
@@ -112,8 +123,13 @@ public class TestFileAppend extends TestCase {
         }
       }
     }
+    checkContent(fileSys, name, numBlocks * blockSize);
+  }
+  
+  private void checkContent(FileSystem fileSys, Path name, int length)
+      throws IOException {
     FSDataInputStream stm = fileSys.open(name);
-    byte[] expected = new byte[numBlocks * blockSize];
+    byte[] expected = new byte[length];
     if (simulatedStorage) {
       for (int i= 0; i < expected.length; i++) {  
         expected[i] = SimulatedFSDataset.DEFAULT_DATABYTE;
@@ -124,7 +140,7 @@ public class TestFileAppend extends TestCase {
       }
     }
     // do a sanity check. Read the file
-    byte[] actual = new byte[numBlocks * blockSize];
+    byte[] actual = new byte[length];
     stm.readFully(0, actual);
     checkData(actual, 0, expected, "Read 1");
   }
@@ -152,9 +168,12 @@ public class TestFileAppend extends TestCase {
    */
   public void testCopyOnWrite() throws IOException {
     Configuration conf = new Configuration();
+    conf.setBoolean(FSConstants.DFS_USE_INLINE_CHECKSUM_KEY, true);
     if (simulatedStorage) {
       conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
     }
+    conf.setBoolean(FSConstants.FS_OUTPUT_STREAM_AUTO_PRINT_PROFILE, true);
+ 
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
     FileSystem fs = cluster.getFileSystem();
     InetSocketAddress addr = new InetSocketAddress("localhost",
@@ -218,29 +237,75 @@ public class TestFileAppend extends TestCase {
       cluster.shutdown();
     }
   }
+  
+  public void testPacketBlockReceiverProfileData() throws IOException {
+    PacketBlockReceiverProfileData profile = new PacketBlockReceiverProfileData();
+    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+    DataOutputStream dos = new DataOutputStream(baos);
+    profile.write(dos);
+    dos.close();
+    DataInputStream dis = new DataInputStream(new ByteArrayInputStream(
+        baos.toByteArray()));
+    profile.readFields(dis);
+    dis.close();
+  }
 
   /**
    * Test a simple flush on a simple HDFS file.
    */
   public void testSimpleFlush() throws IOException {
+    testSimpleFlushInternal(true, true);
+    testSimpleFlushInternal(true, false);
+    testSimpleFlushInternal(false, true);
+    testSimpleFlushInternal(false, false);
+  }
+
+  
+  private void testSimpleFlushInternal(boolean datnodeInlineChecksum,
+      boolean clientInlineChecksum) throws IOException {
     Configuration conf = new Configuration();
+    conf.setBoolean(FSConstants.DFS_USE_INLINE_CHECKSUM_KEY, datnodeInlineChecksum);
     if (simulatedStorage) {
       conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
     }
     initBuffer(fileSize);
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
-    FileSystem fs = cluster.getFileSystem();
+    MiniDFSCluster cluster = new MiniDFSCluster(0, conf, 3, true, true, true,
+        null, null, null, null, true, false, 1, false, false);
+
+    conf.setBoolean(FSConstants.DFS_USE_INLINE_CHECKSUM_KEY,
+        clientInlineChecksum);
+
+    cluster.waitActive();
+    
+    FileSystem fs = cluster.getFileSystem(conf);
+    
     try {
 
+      DFSWriteProfilingData profile = new DFSWriteProfilingData();      
+      DFSClient.setProfileDataForNextOutputStream(profile);
+      
+      
       // create a new file.
       Path file1 = new Path("/simpleFlush.dat");
-      FSDataOutputStream stm = createFile(fs, file1, 1);
+      FSDataOutputStream stm = createFile(fs, file1, 3);
       System.out.println("Created file simpleFlush.dat");
 
       // write to file
       int mid = fileSize/2;
-      stm.write(fileContents, 0, mid);
-      stm.sync();
+      try {
+        stm.write(fileContents, 0, mid);
+        stm.sync();
+        if (!datnodeInlineChecksum && clientInlineChecksum) {
+          TestCase
+              .fail("Client should fail writing to datanode with inline checksum disabled with inline checksum enabled in client side");
+        }
+      } catch (IOException ioe) {
+        if (datnodeInlineChecksum || !clientInlineChecksum) {
+          throw ioe;
+        } else {
+          return;
+        }
+      }
       System.out.println("Wrote and Flushed first part of file.");
 
       // write the remainder of the file
@@ -251,6 +316,105 @@ public class TestFileAppend extends TestCase {
       System.out.println("Wrote and Flushed second part of file.");
 
       // verify that full blocks are sane
+      checkFile(fs, file1, 1);
+
+      stm.close();
+      System.out.println("Closed file.");
+
+      // verify that entire file is good
+      checkFullFile(fs, file1);
+      
+      System.out.println("Profile: " + profile.toString());
+
+    } catch (IOException e) {
+      System.out.println("Exception :" + e);
+      throw e; 
+    } catch (Throwable e) {
+      System.out.println("Throwable :" + e);
+      e.printStackTrace();
+      throw new IOException("Throwable : " + e);
+    } finally {
+      fs.close();
+      cluster.shutdown();
+    }
+  }
+
+  /**
+   * Test a simple flush on a simple HDFS file.
+   */
+  public void testSimpleFlushSmallWrite() throws IOException {
+    testSimpleFlushSmallWriteInternal(false);
+    testSimpleFlushSmallWriteInternal(true);
+  }
+  
+  /**
+   * Test a simple flush on a simple HDFS file.
+   */
+  private void testSimpleFlushSmallWriteInternal(boolean inlineChecksum) throws IOException {
+    Configuration conf = new Configuration();
+    if (simulatedStorage) {
+      conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
+    }
+    conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
+    initBuffer(fileSize);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
+    FileSystem fs = cluster.getFileSystem();
+    try {
+
+      // create a new file.
+      Path file1 = new Path("/simpleFlushSmallWrite.dat");
+      FSDataOutputStream stm = createFile(fs, file1, 1);
+      System.out.println("Created file simpleFlush.dat");
+
+      // write to file
+      stm.write(fileContents, 0, 1);
+      stm.sync();
+
+      stm.write(fileContents, 1, 1);
+      stm.sync();
+
+      stm.write(fileContents, 2, 1);
+      stm.sync();
+      
+      stm.close();
+      System.out.println("Closed file.");
+      checkContent(fs, file1, 3);
+      
+      stm = fs.append(file1);
+      System.out.println("opened file for append.");
+      stm.write(fileContents, 3, 1);
+      stm.sync();
+
+      stm.write(fileContents, 4, 1);
+      stm.sync();
+
+      stm.write(fileContents, 5, 1);
+      stm.sync();
+
+      checkContent(fs, file1, 6);
+
+      stm.write(fileContents, 6, 512);
+      stm.sync();
+      checkContent(fs, file1, 518);
+
+      stm.write(fileContents, 518, 1024);
+      stm.sync();
+      checkContent(fs, file1, 1542);
+
+      stm.write(fileContents, 1542, 511);
+      stm.sync();
+      checkContent(fs, file1, 2053);
+
+      stm.write(fileContents, 2053, 513);
+      stm.sync();
+      checkContent(fs, file1, 2566);
+      
+      System.out.println("Writing the rest of the data to file");
+      stm.write(fileContents, 2566, fileSize - 2566);
+      stm.sync();
+
+      stm.close();
+
       checkFile(fs, file1, 1);
 
       stm.close();
@@ -277,6 +441,7 @@ public class TestFileAppend extends TestCase {
    */
   public void testComplexFlush() throws IOException {
     Configuration conf = new Configuration();
+    conf.setBoolean(FSConstants.DFS_USE_INLINE_CHECKSUM_KEY, true);
     if (simulatedStorage) {
       conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
     }
@@ -325,8 +490,10 @@ public class TestFileAppend extends TestCase {
     final int DATANODE_NUM = 2;
     final int fileLen = 6;
     Configuration conf = new Configuration();
+    conf.setBoolean(FSConstants.DFS_USE_INLINE_CHECKSUM_KEY, true);
     final int timeout = 2000;
     conf.setInt("dfs.socket.timeout",timeout);
+    conf.setBoolean(FSConstants.FS_OUTPUT_STREAM_AUTO_PRINT_PROFILE, true);
 
     final Path p = new Path("/pipelineHeartbeat/foo");
     System.out.println("p=" + p);
@@ -337,6 +504,9 @@ public class TestFileAppend extends TestCase {
     initBuffer(fileLen);
 
     try {
+      DFSWriteProfilingData profile = new DFSWriteProfilingData();      
+      DFSClient.setProfileDataForNextOutputStream(profile);
+      
       // create a new file.
       FSDataOutputStream stm = createFile(fs, p, DATANODE_NUM);
 
@@ -371,4 +541,144 @@ public class TestFileAppend extends TestCase {
     }
   }
 
+  /**
+   * Test a simple flush on a simple HDFS file.
+   * @throws InterruptedException 
+   * @throws NoSuchFieldException 
+   * @throws SecurityException 
+   * @throws IllegalAccessException 
+   * @throws IllegalArgumentException 
+   */
+  public void testLocatedBlockExpire() throws IOException,
+      InterruptedException, SecurityException, NoSuchFieldException,
+      IllegalArgumentException, IllegalAccessException {
+    Configuration conf = new Configuration();
+
+    final AtomicInteger invokeCount = new AtomicInteger(0);
+    
+    InjectionHandler.set(new InjectionHandler() {
+      @Override
+      protected void _processEventIO(InjectionEventI event, Object... args)
+          throws IOException {
+        if (event == InjectionEvent.DFSCLIENT_GET_LOCATED_BLOCKS) {
+          invokeCount.incrementAndGet();
+        }
+      }
+    });
+    
+    if (simulatedStorage) {
+      conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
+    }
+    // Disable background block location renewal thread
+    // (it is enabled by default in unit tests)
+    conf.setBoolean("dfs.client.block.location.renewal.enabled", false);
+    conf.setInt("dfs.client.locatedblock.expire.timeout", 1000);
+    conf.setInt("dfs.client.locatedblock.expire.random.timeout", 2);
+    conf.setLong("dfs.read.prefetch.size", fileSize - blockSize * 2);
+    initBuffer(fileSize);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    FileSystem fs = cluster.getFileSystem();
+    try {
+
+      // create a new file.
+      Path file1 = new Path("/testLocatedBlockExpire");
+      FSDataOutputStream stm = createFile(fs, file1, 2);
+      System.out.println("Created file testLocatedBlockExpire");
+
+      // write to file
+      stm.write(fileContents, 0, fileSize);
+      stm.close();
+      System.out.println("Closed file.");
+
+      TestCase.assertEquals(0, invokeCount.get());
+
+      // open the file and remove one datanode from every block
+      FSDataInputStream in = fs.open(file1);
+      TestCase.assertEquals(1, invokeCount.get());
+      
+      List<LocatedBlock> lbs = ((DFSDataInputStream)in).getAllBlocks();
+      for (LocatedBlock lb : lbs) {
+        Field f = lb.getClass().getDeclaredField("locs"); //NoSuchFieldException
+        f.setAccessible(true);
+        DatanodeInfo[] di = (DatanodeInfo[]) f.get(lb);
+        DatanodeInfo[] newDi = new DatanodeInfo[] { di[0] };
+        f.set(lb, newDi);
+      }
+      
+      TestCase.assertEquals(2, invokeCount.get());
+      
+      in.read(fileSize / 4, new byte[fileSize], 0, fileSize / 2);
+
+      TestCase.assertEquals(2, invokeCount.get());
+
+      
+      // double check the location size is still 1;
+      lbs = ((DFSDataInputStream)in).getAllBlocks();
+      for (LocatedBlock lb : lbs) {
+        Field f = lb.getClass().getDeclaredField("locs"); //NoSuchFieldException
+        f.setAccessible(true);
+        DatanodeInfo[] di = (DatanodeInfo[]) f.get(lb);
+        TestCase.assertEquals(1, di.length);
+      }
+      
+      // sleep up to the located block expire time
+      Thread.sleep(1000);
+      // all block locations expire now. Refetch [file_size/2, file_size]
+      in.read(fileSize / 2, new byte[fileSize], 0, fileSize / 4 - 1);      
+      TestCase.assertEquals(3, invokeCount.get());
+      
+      Thread.sleep(500);
+      // reread within range so no need to refetch
+      in.seek(fileSize / 4 * 3 + 1);
+      in.read(new byte[fileSize], 0, fileSize / 4 - 2);
+      TestCase.assertEquals(3, invokeCount.get());
+      // need to refetch as the previous refetch doesn't cover it.
+      in.seek(blockSize);
+      in.read(new byte[fileSize], 0, fileSize / 4 + blockSize);
+      TestCase.assertEquals(4, invokeCount.get());
+
+      Thread.sleep(500);
+      // [fileSize-blockSize, fileSize] expired. need to refetch.
+      in.read(fileSize - blockSize, new byte[fileSize], 0, blockSize);
+      TestCase.assertEquals(5, invokeCount.get());
+      in.read(fileSize - blockSize * 2, new byte[fileSize], 0, blockSize);
+      TestCase.assertEquals(5, invokeCount.get());
+
+      Thread.sleep(500);
+      // All but [fileSize-blockSize, fileSize] expired. Refetch.
+      in.read(fileSize / 4, new byte[fileSize], 0, fileSize / 4 - 1);
+      TestCase.assertEquals(6, invokeCount.get());
+
+      Thread.sleep(100);
+      // prefetch [fileSize/2, fileSize]
+      in.seek(fileSize / 2);
+      in.read(fileSize / 2, new byte[fileSize], 0, fileSize / 2 - 1);
+      TestCase.assertEquals(7, invokeCount.get());
+
+      Thread.sleep(100);
+      // need to prefetch [0, prefetchSize]
+      in.read(0, new byte[fileSize], 0, fileSize / 2 - 1);
+      TestCase.assertEquals(8, invokeCount.get());
+
+      // All blocks' locations should be in cache with two locations (updated from namenodes)
+      lbs = ((DFSDataInputStream)in).getAllBlocks();
+      for (LocatedBlock lb : lbs) {
+        Field f = lb.getClass().getDeclaredField("locs"); //NoSuchFieldException
+        f.setAccessible(true);
+        DatanodeInfo[] di = (DatanodeInfo[]) f.get(lb);
+        TestCase.assertEquals(2, di.length);
+      }
+      TestCase.assertEquals(8, invokeCount.get());
+      
+      in.close();
+    } catch (IOException e) {
+      System.out.println("Exception :" + e);
+      throw e; 
+    } finally {
+      fs.close();
+      cluster.shutdown();
+    }
+  }
+
+  
 }

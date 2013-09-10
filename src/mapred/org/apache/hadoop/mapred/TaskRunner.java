@@ -46,6 +46,12 @@ abstract class TaskRunner extends Thread {
       "mapreduce.job.user.classpath.first";
   public static final String MAPREDUCE_TASK_SYSTEM_CLASSPATH_PROPERTY =
       "MAPREDUCE_TASK_SYSTEM_CLASSPATH";
+  /** Number of milliseconds to delay starting a task (default of 0) */
+  public static final String MAPREDUCE_TASK_DELAY_MS =
+      "mapreduce.task.delay.ms";
+  /** Default is to use no delay */
+  public static final long MAPREDUCE_TASK_DELAY_MS_DEFAULT = 0;
+
   volatile boolean killed = false;
   private TaskTracker.TaskInProgress tip;
   private Task t;
@@ -148,6 +154,29 @@ abstract class TaskRunner extends Thread {
   }
 
   /**
+   * Corona will schedule tasks immediately after a failure, which can cause
+   * the new task to potentially coincide with the failed task JVM still
+   * running.  Concurrent running JVMs can cause failure if they expect an
+   * initial amount of memory available.  As a temporary workaround, there
+   * is an option to set a customizable delay to starting every task in
+   * milliseconds based on the cluster/job configuration.
+   *
+   * @return Milliseconds of delay
+   */
+  private static long delayStartingTask(JobConf conf) {
+    long delayMs =
+        conf.getLong(MAPREDUCE_TASK_DELAY_MS, MAPREDUCE_TASK_DELAY_MS_DEFAULT);
+    try {
+      Thread.sleep(delayMs);
+    } catch (InterruptedException e) {
+      LOG.info("delayStartingTask: Unexpected interruption of " +
+          delayMs + " ms");
+    }
+
+    return delayMs;
+  }
+
+  /**
    * Get the maximum virtual memory of the child map/reduce tasks.
    * @param jobConf job configuration
    * @return the maximum virtual memory of the child task or <code>-1</code> if
@@ -223,8 +252,8 @@ abstract class TaskRunner extends Thread {
     // the TT's jars.
     String debugRuntime = conf.get("mapred.task.debug.runtime.classpath");
     if (debugRuntime != null) {
-      classPath.append(debugRuntime);
       classPath.append(pathSeparator);
+      classPath.append(debugRuntime);
     }
     // Determine system classpath for tasks. Default to tasktracker's
     // classpath.
@@ -236,8 +265,8 @@ abstract class TaskRunner extends Thread {
     if (LOG.isDebugEnabled()) {
       LOG.debug("System classpath " + systemClasspath);
     }
-    classPath.append(systemClasspath);
     classPath.append(pathSeparator);
+    classPath.append(systemClasspath);
   }
 
   @Override
@@ -655,7 +684,7 @@ abstract class TaskRunner extends Thread {
       }
 
       // Add main class and its arguments
-      vargs.add(Child.class.getName());  // main of Child
+      vargs.add(conf.getTaskRunnerChildClassName());  // main of Child
       // pass umbilical address
       InetSocketAddress address = tracker.getTaskTrackerReportAddress();
       vargs.add(address.getAddress().getHostAddress());
@@ -732,7 +761,11 @@ abstract class TaskRunner extends Thread {
       }
       JvmManager.JvmEnv jvmEnv = jvmManager.constructJvmEnv(setup,vargs,stdout,stderr,logSize,
           workDir, env, conf);
-      LOG.info("Running task " + taskid + " in the jvm " + jvmEnv);
+
+      long delayedMs = delayStartingTask(conf);
+      LOG.info("Running task " + taskid +
+          ((delayedMs == 0) ? "" : " after a delay of " + delayedMs + " ms ") +
+          " in the jvm " + jvmEnv);
       jvmManager.launchJvm(this, jvmEnv);
       synchronized (lock) {
         while (!done) {
@@ -757,14 +790,18 @@ abstract class TaskRunner extends Thread {
         LOG.fatal(t.getTaskID()+" reporting FSError", ie);
       }
     } catch (Throwable throwable) {
-      LOG.warn(t.getTaskID() + errorInfo, throwable);
-      Throwable causeThrowable = new Throwable(errorInfo, throwable);
-      ByteArrayOutputStream baos = new ByteArrayOutputStream();
-      causeThrowable.printStackTrace(new PrintStream(baos));
-      try {
-        tracker.reportDiagnosticInfo(t.getTaskID(), baos.toString());
-      } catch (IOException e) {
-        LOG.warn(t.getTaskID()+" Reporting Diagnostics", e);
+      if (tracker.isKilledByCGroup(t.getTaskID())) {
+          LOG.info(t.getTaskID() + " is killed by CGroup");
+      } else { 
+        LOG.warn(t.getTaskID() + errorInfo, throwable);
+        Throwable causeThrowable = new Throwable(errorInfo, throwable);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        causeThrowable.printStackTrace(new PrintStream(baos));
+        try {
+          tracker.reportDiagnosticInfo(t.getTaskID(), baos.toString());
+        } catch (IOException e) {
+          LOG.warn(t.getTaskID()+" Reporting Diagnostics", e);
+        }
       }
     } finally {
       try{

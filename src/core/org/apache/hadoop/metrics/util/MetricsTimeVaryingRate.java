@@ -78,6 +78,7 @@ public class MetricsTimeVaryingRate extends MetricsBase {
   /** Print the min/max? */
   private final boolean printMinMax;
   final private ReentrantLock lock;
+  private MinMax previousIntervalMinMax;
 
   /**
    * Constructor - create a new metric
@@ -87,7 +88,7 @@ public class MetricsTimeVaryingRate extends MetricsBase {
    */
   public MetricsTimeVaryingRate(final String name,
                                 final MetricsRegistry registry) {
-    this(name, registry, NO_DESCRIPTION, false);
+    this(name, registry, NO_DESCRIPTION, true);
   }
 
   /**
@@ -98,7 +99,7 @@ public class MetricsTimeVaryingRate extends MetricsBase {
    */
   public MetricsTimeVaryingRate(final String name, final MetricsRegistry
       registry, final String description) {
-    this(name, registry, description, false);
+    this(name, registry, description, true);
   }
 
   /**
@@ -114,6 +115,7 @@ public class MetricsTimeVaryingRate extends MetricsBase {
     currentData = new Metrics();
     previousIntervalData = new Metrics();
     minMax = new MinMax();
+    previousIntervalMinMax = new MinMax();
     this.printMinMax = printMinMax;
     lock = new ReentrantLock(false); 
     registry.add(name, this);
@@ -158,6 +160,8 @@ public class MetricsTimeVaryingRate extends MetricsBase {
       previousIntervalData.time = (currentData.numOperations == 0) ?
                               0 : currentData.time / currentData.numOperations;
       currentData.reset();
+      previousIntervalMinMax.maxTime = minMax.maxTime;
+      previousIntervalMinMax.minTime = minMax.minTime;
     } finally {
       lock.unlock();
     }
@@ -211,6 +215,19 @@ public class MetricsTimeVaryingRate extends MetricsBase {
   }
   
   /**
+   * The number of operations in the current interval
+   * @return - ops in current interval
+   */
+  public int getCurrentIntervalNumOps() {
+    lock.lock();
+    try {
+      return currentData.numOperations;
+    } finally {
+      lock.unlock();
+    }
+  }
+
+  /**
    * The average rate of an operation in the previous interval
    * @return - the average rate.
    */
@@ -232,7 +249,10 @@ public class MetricsTimeVaryingRate extends MetricsBase {
   public long getMinTime() {
     lock.lock();
     try {
-      return  minMax.minTime;
+      if (printMinMax) {
+        return previousIntervalMinMax.minTime;
+      }
+      return minMax.minTime;
     } finally {
       lock.unlock();
     }
@@ -246,6 +266,9 @@ public class MetricsTimeVaryingRate extends MetricsBase {
   public long getMaxTime() {
     lock.lock();
     try {
+      if (printMinMax) {
+        return previousIntervalMinMax.maxTime;
+      }
       return minMax.maxTime;
     } finally {
       lock.unlock();

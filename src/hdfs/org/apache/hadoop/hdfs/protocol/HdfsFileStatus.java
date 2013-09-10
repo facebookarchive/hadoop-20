@@ -17,10 +17,12 @@
  */
 package org.apache.hadoop.hdfs.protocol;
 
-import java.io.DataInput;
-import java.io.DataOutput;
-import java.io.IOException;
-
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.LocatedBlockFileStatus;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.DFSUtil;
@@ -29,9 +31,15 @@ import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
 
+import java.io.DataInput;
+import java.io.DataOutput;
+import java.io.IOException;
+
 /** Interface that represents the over the wire information for a file.
  */
-public class HdfsFileStatus implements Writable {
+// DO NOT remove final without consulting {@link WrapperWritable#create(V object)}
+@ThriftStruct
+public final class HdfsFileStatus implements Writable {
   static {                                      // register a ctor
     WritableFactories.setFactory
       (HdfsFileStatus.class,
@@ -71,10 +79,12 @@ public class HdfsFileStatus implements Writable {
    * @param group the group of the path
    * @param path the local name in java UTF8 encoding the same as that in-memory
    */
-  public HdfsFileStatus(long length, boolean isdir, int block_replication,
-                    long blocksize, long modification_time, long access_time,
-                    FsPermission permission, String owner, String group, 
-                    byte[] path) {
+  @ThriftConstructor
+  public HdfsFileStatus(@ThriftField(1) long length, @ThriftField(2) boolean isdir,
+      @ThriftField(3) int block_replication, @ThriftField(4) long blocksize,
+      @ThriftField(5) long modification_time, @ThriftField(6) long access_time,
+      @ThriftField(7) FsPermission permission, @ThriftField(8) String owner,
+      @ThriftField(9) String group, @ThriftField(10) byte[] path) {
     this.length = length;
     this.isdir = isdir;
     this.block_replication = (short)block_replication;
@@ -88,10 +98,76 @@ public class HdfsFileStatus implements Writable {
     this.path = path;
   }
 
+  public HdfsFileStatus(HdfsFileStatus elem) {
+    this(elem.length, elem.isdir, elem.block_replication, elem.blocksize, elem.modification_time,
+        elem.access_time, elem.permission, elem.owner, elem.group, elem.path);
+  }
+
+  /**
+   * Convert an HdfsFileStatus to a FileStatus
+   * @param stat an HdfsFileStatus
+   * @param src parent path in string representation
+   * @return a FileStatus object
+   */
+  public static FileStatus toFileStatus(HdfsFileStatus stat, String src) {
+    if (stat == null) {
+      return null;
+    }
+    return new FileStatus(stat.getLen(), stat.isDir(), stat.getReplication(),
+        stat.getBlockSize(), stat.getModificationTime(),
+        stat.getAccessTime(),
+        stat.getPermission(), stat.getOwner(), stat.getGroup(),
+        stat.getFullPath(new Path(src))); // full path
+  }
+
+  /**
+   * Convert an HdfsFileStatus and its block locations to a LocatedFileStatus
+   * @param stat an HdfsFileStatus
+   * @param locs the file's block locations
+   * @param src parent path in string representation
+   * @return a FileStatus object
+   */
+  public static LocatedFileStatus toLocatedFileStatus(HdfsFileStatus stat, LocatedBlocks locs,
+      String src) {
+    if (stat == null) {
+      return null;
+    }
+    return new LocatedFileStatus(stat.getLen(),
+        stat.isDir(), stat.getReplication(),
+        stat.getBlockSize(), stat.getModificationTime(),
+        stat.getAccessTime(),
+        stat.getPermission(), stat.getOwner(), stat.getGroup(),
+        stat.getFullPath(new Path(src)), // full path
+        DFSUtil.locatedBlocks2Locations(locs));
+  }
+
+  /**
+   * Convert an HdfsFileStatus and its block locations to a LocatedFileStatus
+   * @param stat an HdfsFileStatus
+   * @param locs the file's block locations
+   * @param src parent path in string representation
+   * @return a FileStatus object
+   */
+  public static LocatedBlockFileStatus toLocatedBlockFileStatus(HdfsFileStatus stat,
+      LocatedBlocks locs, String src) {
+    if (stat == null) {
+      return null;
+    }
+    return new LocatedBlockFileStatus(stat.getLen(),
+        stat.isDir(), stat.getReplication(),
+        stat.getBlockSize(), stat.getModificationTime(),
+        stat.getAccessTime(),
+        stat.getPermission(), stat.getOwner(), stat.getGroup(),
+        stat.getFullPath(new Path(src)), // full path
+        DFSUtil.locatedBlocks2BlockLocations(locs),
+        locs.isUnderConstruction());
+  }
+
   /**
    * Get the length of this file, in bytes.
    * @return the length of this file, in bytes.
    */
+  @ThriftField(1)
   final public long getLen() {
     return length;
   }
@@ -100,6 +176,7 @@ public class HdfsFileStatus implements Writable {
    * Is this a directory?
    * @return true if this is a directory
    */
+  @ThriftField(2)
   final public boolean isDir() {
     return isdir;
   }
@@ -108,6 +185,7 @@ public class HdfsFileStatus implements Writable {
    * Get the block size of the file.
    * @return the number of bytes
    */
+  @ThriftField(4)
   final public long getBlockSize() {
     return blocksize;
   }
@@ -116,6 +194,7 @@ public class HdfsFileStatus implements Writable {
    * Get the replication factor of a file.
    * @return the replication factor of a file.
    */
+  @ThriftField(3)
   final public short getReplication() {
     return block_replication;
   }
@@ -124,6 +203,7 @@ public class HdfsFileStatus implements Writable {
    * Get the modification time of the file.
    * @return the modification time of file in milliseconds since January 1, 1970 UTC.
    */
+  @ThriftField(5)
   final public long getModificationTime() {
     return modification_time;
   }
@@ -132,6 +212,7 @@ public class HdfsFileStatus implements Writable {
    * Get the access time of the file.
    * @return the access time of file in milliseconds since January 1, 1970 UTC.
    */
+  @ThriftField(6)
   final public long getAccessTime() {
     return access_time;
   }
@@ -140,6 +221,7 @@ public class HdfsFileStatus implements Writable {
    * Get FsPermission associated with the file.
    * @return permssion
    */
+  @ThriftField(7)
   final public FsPermission getPermission() {
     return permission;
   }
@@ -148,6 +230,7 @@ public class HdfsFileStatus implements Writable {
    * Get the owner of the file.
    * @return owner of the file
    */
+  @ThriftField(8)
   final public String getOwner() {
     return owner;
   }
@@ -156,6 +239,7 @@ public class HdfsFileStatus implements Writable {
    * Get the group associated with the file.
    * @return group for the file. 
    */
+  @ThriftField(9)
   final public String getGroup() {
     return group;
   }
@@ -180,6 +264,7 @@ public class HdfsFileStatus implements Writable {
    * Get the Java UTF8 representation of the local name
    * @return the local name in java UTF8
    */
+  @ThriftField(10)
   final public byte[] getLocalNameInBytes() {
     return path;
   }

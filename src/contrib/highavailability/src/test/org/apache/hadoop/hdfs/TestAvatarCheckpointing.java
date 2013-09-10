@@ -17,6 +17,10 @@
  */
 package org.apache.hadoop.hdfs;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -28,22 +32,21 @@ import java.util.Set;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.TestFileCreation;
-import org.apache.hadoop.hdfs.TestFileHardLink;
-import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
-import org.apache.hadoop.hdfs.server.namenode.FinalizeCheckpointException;
-import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
-import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.io.IOUtils;
-import org.apache.hadoop.util.InjectionEventI;
-import org.apache.hadoop.util.InjectionHandler;
-import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-
+import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLogLoader;
+import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil.CheckpointTrigger;
+import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+import org.apache.hadoop.hdfs.server.namenode.FinalizeCheckpointException;
+import org.apache.hadoop.hdfs.server.namenode.INodeId;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.raid.RaidCodecBuilder;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.junit.After;
 import org.junit.AfterClass;
-import static org.junit.Assert.*;
 import org.junit.BeforeClass;
 import org.junit.Test;
 
@@ -54,18 +57,21 @@ public class TestAvatarCheckpointing {
   protected static MiniAvatarCluster cluster;
   protected static Configuration conf;
   protected static FileSystem fs;
+  protected static DistributedFileSystem dfs;
   protected static Random random = new Random();
-
+  public static final int numRSParityBlocks = 3;
+  public static final int numDataBlocks = 3;
+  
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     MiniAvatarCluster.createAndStartZooKeeper();
   }
   
-  private static void setUp(String name) throws Exception {
-    setUp(3600, name, true);
+  protected static void setUp(String name, boolean enableQJM) throws Exception {
+    setUp(3600, name, true, enableQJM);
   }
   
-  private static void setUp(long ckptPeriod, String name, boolean waitForCheckpoint)
+  protected static void setUp(long ckptPeriod, String name, boolean waitForCheckpoint, boolean enableQJM)
       throws Exception {
     LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
@@ -74,9 +80,12 @@ public class TestAvatarCheckpointing {
     conf.setBoolean("fs.checkpoint.enabled", true);
     conf.setLong("fs.checkpoint.period", ckptPeriod);
     conf.setBoolean("fs.checkpoint.wait", waitForCheckpoint);
+    RaidCodecBuilder.loadDefaultFullBlocksCodecs(conf, numRSParityBlocks,
+        numDataBlocks);
     
-    cluster = new MiniAvatarCluster(conf, 2, true, null, null);
+    cluster = new MiniAvatarCluster.Builder(conf).numDataNodes(2).enableQJM(enableQJM).build();
     fs = cluster.getFileSystem();
+    dfs = (DistributedFileSystem)fs;
   }
 
   @After
@@ -108,59 +117,50 @@ public class TestAvatarCheckpointing {
   }
   
   //////////////////////////////
-  
   @Test
-  public void testHardLinkWithCheckPoint() throws Exception {
-    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null, null, false);
-    InjectionHandler.set(h);
-    setUp("testHardLinkWithCheckPoint");
-    
-    // Create a new file
-    Path root = new Path("/user/");
-    Path file10 = new Path(root, "file1");
-    FSDataOutputStream stm1 = TestFileCreation.createFile(fs, file10, 1);
-    byte[] content = TestFileCreation.writeFile(stm1);
-    stm1.close();
+  public void testInodeIdWithCheckPoint() throws Exception {
+  	TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null, null, false);
+  	InjectionHandler.set(h);
+  	setUp("testInodeIdWithCheckPoint", false);
+  	long expectedLastINodeId = INodeId.ROOT_INODE_ID;
 
-    LOG.info("Create the hardlinks");
-    Path file11 =  new Path(root, "file-11");
-    Path file12 =  new Path(root, "file-12");
-    fs.hardLink(file10, file11);
-    fs.hardLink(file11, file12);
+  	DFSTestUtil.createFile(fs, new Path("/testtwo/fileone"), 1024, (short) 1, 0);
+  	AvatarNode primaryAvatar = cluster.getPrimaryAvatar(0).avatar;
+  	AvatarNode standbyAvatar = cluster.getStandbyAvatar(0).avatar;
+  	FSNamesystem primaryNS = primaryAvatar.namesystem;
+  	FSNamesystem standbyNS = standbyAvatar.namesystem;
+  	expectedLastINodeId += 2;
 
-    LOG.info("Verify the hardlinks");
-    TestFileHardLink.verifyLinkedFileIdenticial(fs, cluster.getPrimaryAvatar(0).avatar,
-        fs.getFileStatus(file10), fs.getFileStatus(file11), content);
-    TestFileHardLink.verifyLinkedFileIdenticial(fs, cluster.getPrimaryAvatar(0).avatar,
-        fs.getFileStatus(file10), fs.getFileStatus(file12), content);
+  	DFSAvatarTestUtil.assertTxnIdSync(primaryAvatar, standbyAvatar);
+  	DFSTestUtil.assertInodemapEquals(primaryNS.dir.getInodeMap(), standbyNS.dir.getInodeMap());
+  	assertEquals(expectedLastINodeId, standbyNS.dir.getLastInodeId());
 
-    LOG.info("NN checkpointing");
-    h.doCheckpoint();
-    
-    // Restart the namenode
-    LOG.info("NN restarting");
-    cluster.restartAvatarNodes();
-    
-    // Verify the hardlinks again
-    LOG.info("Verify the hardlinks again after the NN restarts");
-    TestFileHardLink.verifyLinkedFileIdenticial(fs, cluster.getPrimaryAvatar(0).avatar, 
-        fs.getFileStatus(file10), fs.getFileStatus(file11), content);
-    TestFileHardLink.verifyLinkedFileIdenticial(fs, cluster.getPrimaryAvatar(0).avatar, 
-        fs.getFileStatus(file10), fs.getFileStatus(file12), content);
+  	h.doCheckpoint();
+  	cluster.restartAvatarNodes();
+  	primaryAvatar = cluster.getPrimaryAvatar(0).avatar;
+  	standbyAvatar = cluster.getStandbyAvatar(0).avatar;
+  	primaryNS = primaryAvatar.namesystem;
+  	standbyNS = standbyAvatar.namesystem;
+
+  	DFSTestUtil.assertInodemapEquals(primaryNS.dir.getInodeMap(), standbyNS.dir.getInodeMap());
+  	assertEquals(expectedLastINodeId, standbyNS.dir.getLastInodeId());
   }
   
   @Test
   public void testFailSuccFailQuiesce() throws Exception {
+  	doTestFailSuccFailQuiesce(false);
+  }
+  
+  protected void doTestFailSuccFailQuiesce(boolean enableQJM) throws Exception {
     LOG.info("TEST: ----> testFailCheckpointOnceAndSucceed");
     // fail once
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
         null, true);
     InjectionHandler.set(h);
-    setUp("testFailSuccFailQuiesce");
+    setUp("testFailSuccFailQuiesce", enableQJM);
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    
     
     try {
       h.failNextCheckpoint = true;
@@ -195,71 +195,25 @@ public class TestAvatarCheckpointing {
     // another roll adds 2 transactions
     assertEquals(29, getCurrentTxId(primary));
     
-    createEdits(20);
-    standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(49, getCurrentTxId(primary));
-    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-  }
-  
-  @Test
-  public void testFailCheckpointMultiAndCrash() throws Exception {
-    LOG.info("TEST: ----> testFailCheckpointMultiAndCrash");
-    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
-        null, true);
-    InjectionHandler.set(h);
-    setUp("testFailCheckpointMultiAndCrash");
-    createEdits(20);
-    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
-    AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-    
-    try {
-      h.failNextCheckpoint = true;
-      h.doCheckpoint();
-      fail("Should get IOException here");
-    } catch (IOException e) { 
-      // checkpoint fails during finalization (see the checkpointing handler)
-      assertTrue(e instanceof FinalizeCheckpointException);
-      assertTrue(AvatarSetupUtil.isIngestAlive(standby));
-      LOG.info("Expected: Checkpoint failed", e);
+    if (!enableQJM) {
+	    createEdits(20);
+	    standby.quiesceStandby(getCurrentTxId(primary)-1);
+	    assertEquals(49, getCurrentTxId(primary));
+	    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
     }
-    
-    // current txid should be 20 + SLS + ENS + SLS + initial ckpt
-    assertEquals(25, getCurrentTxId(primary));
-    
-    try {
-      h.doCheckpoint();
-      fail("Should get IOException here");
-    } catch (IOException e) { 
-      // checkpoint fails during finalization (see the checkpointing handler)
-      assertTrue(e instanceof FinalizeCheckpointException);
-      assertTrue(AvatarSetupUtil.isIngestAlive(standby));
-      LOG.info("Expected: Checkpoint failed", e);
-    }
-    
-    // roll adds 2 transactions
-    assertEquals(27, getCurrentTxId(primary));
-    
-    try {
-      h.doCheckpoint();
-      fail("Should get IOException here");
-    } catch (Exception e) {
-      // checkpoint fails during finalization (see the checkpointing handler)
-      assertTrue(e instanceof FinalizeCheckpointException);
-      assertTrue(AvatarSetupUtil.isIngestAlive(standby));
-      LOG.info("Expected: Checkpoint failed", e);
-    }
-    
-    // roll adds 2 transactions
-    assertEquals(29, getCurrentTxId(primary));
   }
   
   @Test
   public void testFailCheckpointOnceAndRestartStandby() throws Exception {
+  	doTestFailCheckpointOnceAndRestartStandby(false);
+  }
+  
+  protected void doTestFailCheckpointOnceAndRestartStandby(boolean enableQJM) throws Exception {
     LOG.info("TEST: ----> testFailCheckpointOnceAndRestartStandby");
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
         null, true);
     InjectionHandler.set(h);
-    setUp("testFailCheckpointOnceAndRestartStandby");
+    setUp("testFailCheckpointOnceAndRestartStandby", enableQJM);
     createEdits(20);
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -294,82 +248,41 @@ public class TestAvatarCheckpointing {
       Thread.sleep(1000);
     }
     
+    LOG.info("Start another checkpointing...");
     // checkpoint should succeed
     h.doCheckpoint();
     
+    LOG.info("Second checkpointing succeeded.");
     // roll adds two transactions
     assertEquals(29, getCurrentTxId(primary));
     
-    createEdits(20);
-    standby.quiesceStandby(getCurrentTxId(primary)-1);
-    assertEquals(49, getCurrentTxId(primary));
-    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
-  }
-  
-  @Test
-  public void testFailCheckpointOnCorruptImage() throws Exception {
-    LOG.info("TEST: ----> testFailCheckpointOnCorruptImage");
-    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(
-        null, null, false);
-    InjectionHandler.set(h);
-    
-    // first checkpoint will succeed (most recent ckptxid = 1)
-    setUp(3600, "testFailCheckpointOnCorruptImage", true);   
-    // image will be corrupted for second - manual checkpoint
-    h.corruptImage = true;
-    
-    createEdits(20);
-    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
-    AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-   
-    // do second checkpoint
-    try {
-      h.doCheckpoint();
-      fail("Should get IOException here");
-    } catch (IOException e) {  
-      // checkpoint fails during finalizations (see the checkpointing handler)
-      assertTrue(e instanceof FinalizeCheckpointException);
-      assertTrue(AvatarSetupUtil.isIngestAlive(standby));
+    if (!enableQJM) {
+	    createEdits(20);
+	    standby.quiesceStandby(getCurrentTxId(primary)-1);
+	    assertEquals(49, getCurrentTxId(primary));
+	    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby));
     }
-    assertEquals(1, primary.getCheckpointSignature().getMostRecentCheckpointTxId());
-  }
-  
-  @Test
-  public void testCheckpointReprocessEdits() throws Exception {
-    LOG.info("TEST: ----> testCheckpointReprocessEdits");
-    TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(null,
-        null, false);   
-    setUp("testCheckpointReprocessEdits");
-    createEdits(20);
-    AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
-    AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
-
-    h.reprocessIngest = true;
-    // set the handler later no to interfere with the previous checkpoint
-    InjectionHandler.set(h);
-    // checkpoint should be ok
-    h.doCheckpoint();
-    assertEquals(23, primary.getCheckpointSignature()
-        .getMostRecentCheckpointTxId());
   }
   
   protected static TestAvatarCheckpointingHandler testQuiesceInterruption(
-      InjectionEvent stopOnEvent, boolean testCancellation, boolean rollAfterQuiesce)
+      InjectionEvent stopOnEvent, boolean testCancellation, boolean rollAfterQuiesce,
+      boolean enableQJM)
       throws Exception {
     return testQuiesceInterruption(stopOnEvent,
         InjectionEvent.STANDBY_QUIESCE_INITIATED, false, testCancellation,
-        rollAfterQuiesce);
+        rollAfterQuiesce, enableQJM);
   }
  
   protected static TestAvatarCheckpointingHandler testQuiesceInterruption(
       InjectionEvent stopOnEvent, InjectionEvent waitUntilEvent, boolean scf,
-      boolean testCancellation, boolean rollAfterQuiesce) throws Exception {
+      boolean testCancellation, boolean rollAfterQuiesce,
+      boolean enableQJM) throws Exception {
     LOG.info("TEST Quiesce during checkpoint : " + stopOnEvent
         + " waiting on: " + waitUntilEvent);
     TestAvatarCheckpointingHandler h = new TestAvatarCheckpointingHandler(
         stopOnEvent, waitUntilEvent, scf);
     InjectionHandler.set(h);
-    setUp(3, "testQuiesceInterruption", false); //simulate interruption, no ckpt failure   
+    setUp(3, "testQuiesceInterruption", false, enableQJM); //simulate interruption, no ckpt failure   
     
     AvatarNode primary = cluster.getPrimaryAvatar(0).avatar;
     AvatarNode standby = cluster.getStandbyAvatar(0).avatar;
@@ -379,15 +292,21 @@ public class TestAvatarCheckpointing {
       LOG.info("Waiting for event : " + stopOnEvent);
       Thread.sleep(1000);
     }
-    standby.quiesceStandby(getCurrentTxId(primary)-1);
-    // edits + SLS + ELS + SLS (checkpoint fails, but roll happened)
-    assertEquals(43, getCurrentTxId(primary));
-
-    // if quiesce happened before roll, the standby will be behind by 1 transaction
-    // which will be reclaimed by opening the log after
-    long extraTransaction = rollAfterQuiesce ? 1 : 0;
     
-    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby) + extraTransaction);
+    if (!enableQJM) {
+    	standby.quiesceStandby(getCurrentTxId(primary)-1);
+    	// only assert this for FileJournalManager.
+    	// edits + SLS + ELS + SLS (checkpoint fails, but roll happened)
+	    assertEquals(43, getCurrentTxId(primary));
+	    
+	    // if quiesce happened before roll, the standby will be behind by 1 transaction
+	    // which will be reclaimed by opening the log after
+	    long extraTransaction = rollAfterQuiesce ? 1 : 0;
+	    assertEquals(getCurrentTxId(primary), getCurrentTxId(standby) + extraTransaction);
+    } else {
+    	standby.quiesceStandby(FSEditLogLoader.TXID_IGNORE);
+    }
+    
     // make sure the checkpoint indeed failed
     assertTrue(h.receivedEvents
         .contains(InjectionEvent.STANDBY_EXIT_CHECKPOINT_EXCEPTION));
@@ -407,7 +326,7 @@ public class TestAvatarCheckpointing {
     private InjectionEvent waitUntilEvent;
 
     private boolean simulateCheckpointFailure = false;
-    private boolean failNextCheckpoint = false;
+    boolean failNextCheckpoint = false;
 
     public boolean corruptImage = false;
     public boolean reprocessIngest = false;

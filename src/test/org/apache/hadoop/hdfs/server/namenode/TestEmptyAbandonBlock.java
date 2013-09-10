@@ -36,7 +36,7 @@ public class TestEmptyAbandonBlock {
     LocatedBlock lbk = nn.addBlock(fileName, fs.getClient().getClientName());
     INodeFileUnderConstruction cons = (INodeFileUnderConstruction) nn.namesystem.dir
         .getINode(fileName);
-    cons.setTargets(null);
+    cons.setTargets(null, -1);
     nn.abandonBlock(lbk.getBlock(), fileName, fs.getClient().getClientName());
     assertEquals(0, nn.getBlockLocations(fileName, 0, Long.MAX_VALUE)
         .locatedBlockCount());

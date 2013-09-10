@@ -26,6 +26,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FSDataOutputStream;
 
+import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.compress.CompressionCodec;
@@ -66,7 +67,7 @@ public class TextOutputFormat<K, V> extends FileOutputFormat<K, V> {
     public LineRecordWriter(DataOutputStream out) {
       this(out, "\t");
     }
-
+    
     /**
      * Write the object to the byte stream, handling Text as a special
      * case.
@@ -77,6 +78,9 @@ public class TextOutputFormat<K, V> extends FileOutputFormat<K, V> {
       if (o instanceof Text) {
         Text to = (Text) o;
         out.write(to.getBytes(), 0, to.getLength());
+      } else if (o instanceof BytesWritable) {
+        BytesWritable bytes = (BytesWritable) o;        
+        out.write(bytes.getBytes(), 0, bytes.getLength());
       } else {
         out.write(o.toString().getBytes(utf8));
       }

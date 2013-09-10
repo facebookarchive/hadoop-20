@@ -77,7 +77,7 @@ class FSImagePreTransactionalStorageInspector extends FSImageStorageInspector {
   }
   
   @Override
-  void inspectDirectory(StorageDirectory sd) throws IOException {
+  public void inspectDirectory(StorageDirectory sd) throws IOException {
     // Was the file just formatted?
     if (!sd.getVersionFile().exists()) {
       hasOutOfDateStorageDirs = true;
@@ -194,7 +194,7 @@ class FSImagePreTransactionalStorageInspector extends FSImageStorageInspector {
     
     return new FSImageFile(latestNameSD, 
         NNStorage.getStorageFile(latestNameSD, NameNodeFile.IMAGE),
-        HdfsConstants.INVALID_TXID);
+        HdfsConstants.INVALID_TXID, null);
   }
 
   @Override
@@ -290,13 +290,13 @@ class FSImagePreTransactionalStorageInspector extends FSImageStorageInspector {
     return 0L;
   }
 
-  static Collection<EditLogInputStream> getEditLogStreams(NNStorage storage, Configuration conf)
-      throws IOException {
+  static Collection<EditLogInputStream> getEditLogStreams(
+      Collection<EditLogInputStream> editStreams, NNStorage storage,
+      Configuration conf) throws IOException {
     FSImagePreTransactionalStorageInspector inspector 
-      = new FSImagePreTransactionalStorageInspector(conf);
+        = new FSImagePreTransactionalStorageInspector(conf);
     storage.inspectStorageDirs(inspector);
 
-    List<EditLogInputStream> editStreams = new ArrayList<EditLogInputStream>();
     for (File f : inspector.getLatestEditsFiles()) {
       editStreams.add(new EditLogFileInputStream(f));
     }

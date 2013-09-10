@@ -20,7 +20,6 @@ package org.apache.hadoop.hdfs.server.namenode;
 import java.util.*;
 import java.io.*;
 import org.apache.hadoop.conf.*;
-import org.apache.commons.logging.*;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -35,6 +34,7 @@ public class FsckServlet extends HttpServlet {
   public void doGet(HttpServletRequest request,
                     HttpServletResponse response
                     ) throws ServletException, IOException {
+    NameNode.getNameNodeMetrics().numFsckDoGet.inc();
     Map<String,String[]> pmap = request.getParameterMap();
     ServletContext context = getServletContext();
     NameNode nn = (NameNode) context.getAttribute("name.node");

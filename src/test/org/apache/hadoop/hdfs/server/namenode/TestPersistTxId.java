@@ -1,6 +1,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
+import java.io.PushbackInputStream;
 import java.util.Random;
 
 import org.apache.commons.logging.Log;
@@ -92,6 +93,15 @@ public class TestPersistTxId {
     // Closing each file would generate 10 edits.
     fs.close();
     assertEquals(60, getLastWrittenTxId());
+    
+    // we will answer "Continue" at txid mismatch
+    PushbackInputStream stream = new PushbackInputStream(System.in,
+        100);
+    System.setIn(stream);
+    // PushbackInputStream processes in reverse order.
+    byte input[] = "c".getBytes();
+    stream.unread(input);
+
     // Restart namenode and verify that it does not fail.
     cluster.restartNameNode(0,
         new String[] {StartupOption.IGNORETXIDMISMATCH.getName()});

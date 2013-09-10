@@ -38,6 +38,7 @@ export PLATFORM = $(shell echo $$OS_NAME | tr [A-Z] [a-z])
 # List the sub-directories here
 SUBDIRS = src/org/apache/hadoop/io/compress/zlib \
 					src/org/apache/hadoop/io/compress/lzma \
+					src/org/apache/hadoop/io/compress/lz4 \
 					src/org/apache/hadoop/io/compress/snappy \
 					src/org/apache/hadoop/syscall \
 					lib

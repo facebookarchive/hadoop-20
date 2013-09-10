@@ -21,11 +21,11 @@ package org.apache.hadoop.io;
 import java.lang.reflect.Array;
 
 import java.io.*;
-import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import org.apache.hadoop.conf.*;
+import org.apache.hadoop.io.FastWritableRegister.FastWritable;
 
 /** A polymorphic Writable that writes an instance with it's class name.
  * Handles arrays, strings and primitive types without a Writable wrapper.
@@ -71,21 +71,6 @@ public class ObjectWritable implements Writable, Configurable {
   public void write(DataOutput out) throws IOException {
     writeObject(out, instance, declaredClass, conf);
   }
-
-  private static final Map<String, Class<?>> PRIMITIVE_NAMES = new HashMap<String, Class<?>>();
-  static {
-    PRIMITIVE_NAMES.put("boolean", Boolean.TYPE);
-    PRIMITIVE_NAMES.put("byte", Byte.TYPE);
-    PRIMITIVE_NAMES.put("char", Character.TYPE);
-    PRIMITIVE_NAMES.put("short", Short.TYPE);
-    PRIMITIVE_NAMES.put("int", Integer.TYPE);
-    PRIMITIVE_NAMES.put("long", Long.TYPE);
-    PRIMITIVE_NAMES.put("float", Float.TYPE);
-    PRIMITIVE_NAMES.put("double", Double.TYPE);
-    PRIMITIVE_NAMES.put("void", Void.TYPE);
-    // String is very frequent parameter, we can obtain it very efficiently from here
-    PRIMITIVE_NAMES.put("java.lang.String", String.class);
-  }
   
   private final static int CACHE_MAX_SIZE = 10000;
   private final static int CACHE_CONCURRENCY_LEVEL = 500;
@@ -101,6 +86,20 @@ public class ObjectWritable implements Writable, Configurable {
   private final static ConcurrentMap<String, Class<?>> cachedClassObjects 
     = new ConcurrentHashMap<String, Class<?>>(
       CACHE_MAX_SIZE, 0.75f, CACHE_CONCURRENCY_LEVEL);
+  
+  static {
+    cachedClassObjects.put("boolean", Boolean.TYPE);
+    cachedClassObjects.put("byte", Byte.TYPE);
+    cachedClassObjects.put("char", Character.TYPE);
+    cachedClassObjects.put("short", Short.TYPE);
+    cachedClassObjects.put("int", Integer.TYPE);
+    cachedClassObjects.put("long", Long.TYPE);
+    cachedClassObjects.put("float", Float.TYPE);
+    cachedClassObjects.put("double", Double.TYPE);
+    cachedClassObjects.put("void", Void.TYPE);
+    // String is very frequent parameter, we can obtain it very efficiently from here
+    cachedClassObjects.put("java.lang.String", String.class);
+  }
 
   private static class NullInstance extends Configured implements Writable {
     private Class<?> declaredClass;
@@ -111,14 +110,7 @@ public class ObjectWritable implements Writable, Configurable {
     }
     public void readFields(DataInput in) throws IOException {
       String className = UTF8.readString(in);
-      declaredClass = PRIMITIVE_NAMES.get(className);
-      if (declaredClass == null) {
-        try {
-          declaredClass = getConf().getClassByName(className);
-        } catch (ClassNotFoundException e) {
-          throw new RuntimeException(e.toString());
-        }
-      }
+      declaredClass = getClassWithCaching(className, getConf());
     }
     public void write(DataOutput out) throws IOException {
       writeStringCached(out, declaredClass.getName());
@@ -134,6 +126,15 @@ public class ObjectWritable implements Writable, Configurable {
     if (instance == null) {                       // null
       instance = new NullInstance(declaredClass, conf);
       declaredClass = Writable.class;
+    }
+    
+    // handle FastWritable first (including ShortVoid)
+    if (instance instanceof FastWritable) {
+      FastWritable fwInstance = (FastWritable) instance;
+      byte[] serializedName = fwInstance.getSerializedName();
+      out.write(serializedName, 0, serializedName.length);
+      fwInstance.write(out);
+      return;
     }
     
     // write declared name
@@ -219,7 +220,7 @@ public class ObjectWritable implements Writable, Configurable {
    * Prepares a byte array for given name together with lenght
    * as the two trailing bytes.
    */
-  private static byte[] prepareCachedNameBytes(String entityName) {
+  public static byte[] prepareCachedNameBytes(String entityName) {
     UTF8 name = new UTF8();
     name.set(entityName, true);
     byte nameBytes[] = name.getBytes();
@@ -246,25 +247,34 @@ public class ObjectWritable implements Writable, Configurable {
    */
   private static Class<?> getClassWithCaching(String className,
       Configuration conf) {
-    Class<?> classs = PRIMITIVE_NAMES.get(className);
+    Class<?> classs = cachedClassObjects.get(className);
     if (classs == null) {
-      classs = cachedClassObjects.get(className);
-      if (classs == null) {
-        try {
-          classs = conf.getClassByName(className);
-          if (cachedClassObjects.size() < CACHE_MAX_SIZE) {
-            cachedClassObjects.put(className, classs);
-          }
-        } catch (ClassNotFoundException e) {
-          throw new RuntimeException("readObject can't find class " + className, e);
+      try {
+        classs = conf.getClassByName(className);
+        if (cachedClassObjects.size() < CACHE_MAX_SIZE) {
+          cachedClassObjects.put(className, classs);
         }
-      } 
-    } 
+      } catch (ClassNotFoundException e) {
+        throw new RuntimeException("readObject can't find class " + className,
+            e);
+      }
+    }
     // for sanity check if the class is not null
     if (classs == null) {
       throw new RuntimeException("readObject can't find class " + className);
     }
     return classs;
+  }
+ 
+  private static boolean initializedSupportJobConf = false;
+  private static boolean supportJobConf = true;
+  
+  private static void setObjectWritable(ObjectWritable objectWritable,
+      Class<?> declaredClass, Object instance) {
+    if (objectWritable != null) { // store values
+      objectWritable.declaredClass = declaredClass;
+      objectWritable.instance = instance;
+    }
   }
     
   /** Read a {@link Writable}, {@link String}, primitive type, or an array of
@@ -273,7 +283,34 @@ public class ObjectWritable implements Writable, Configurable {
   public static Object readObject(DataInput in, ObjectWritable objectWritable, Configuration conf)
     throws IOException {
     String className = UTF8.readString(in);
+    
+    // fast processing of ShortVoid
+    if (FastWritableRegister.isVoidType(className)) {
+      setObjectWritable(objectWritable, ShortVoid.class, ShortVoid.instance);
+      return ShortVoid.instance;
+    }
+    
+    // handle fast writable objects first
+    FastWritable fwInstance = FastWritableRegister.tryGetInstance(className,
+        conf);
+    if (fwInstance != null) {
+      fwInstance.readFields(in);
+      setObjectWritable(objectWritable, fwInstance.getClass(), fwInstance);
+      return fwInstance;
+    }
+    
     Class<?> declaredClass = getClassWithCaching(className, conf);
+    
+    // read once whether we should support jobconf
+    // HDFS does not need to support this, which saves on Writable.newInstance
+    if (!initializedSupportJobConf) {
+      supportJobConf = conf.getBoolean("rpc.support.jobconf", true);
+      // since this is not synchronized, there is a race condition here
+      // but we are ok with two instances initializing this
+      // if the operations are re-ordered, it is still fine, another thread
+      // might use "true" instead of false for one time
+      initializedSupportJobConf = true;
+    }
 
     Object instance;
     
@@ -316,7 +353,7 @@ public class ObjectWritable implements Writable, Configurable {
       String str = UTF8.readString(in);
       Class instanceClass = getClassWithCaching(str, conf);
       
-      Writable writable = WritableFactories.newInstance(instanceClass, conf);
+      Writable writable = WritableFactories.newInstance(instanceClass, conf, supportJobConf);
       writable.readFields(in);
       instance = writable;
 
@@ -325,12 +362,7 @@ public class ObjectWritable implements Writable, Configurable {
         instance = null;
       }
     }
-
-    if (objectWritable != null) {                 // store values
-      objectWritable.declaredClass = declaredClass;
-      objectWritable.instance = instance;
-    }
-
+    setObjectWritable(objectWritable, declaredClass, instance);
     return instance;
       
   }

@@ -1467,7 +1467,7 @@ public class JobClient extends Configured implements MRConstants, Tool  {
       int len = WritableUtils.readVInt(in);
       locations = new String[len];
       for(int i=0; i < len; ++i) {
-        locations[i] = Text.readString(in);
+        locations[i] = Text.readString(in).intern();
       }
     }
 

@@ -256,7 +256,7 @@ public class TestServerClientTracker {
     List<Long> receivedHeartbeats = new ArrayList<Long>();
     
     @Override
-    public void heartbeat(long serverId) throws InvalidServerIdException,
+    public void heartbeat(String serverId) throws InvalidServerIdException,
         TException {
       if (failingClient)
         throw new TException();

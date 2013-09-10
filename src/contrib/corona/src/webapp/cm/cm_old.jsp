@@ -260,7 +260,7 @@
       }
       sb.append("<tr>");
       sb.append(getPoolInfoTableData(redirects, poolInfo));
-      sb.append("<td>" + configManager.getComparator(poolInfo) + "</td>");
+      sb.append("<td>" + configManager.getPoolComparator(poolInfo) + "</td>");
       sb.append("<td>" + configManager.isPoolPreemptable(poolInfo) + "</td>");
 
       int metricsIndex = 0;

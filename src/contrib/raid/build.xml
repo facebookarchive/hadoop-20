@@ -31,9 +31,9 @@ to call at top-level: ant deploy-contrib compile-core-test
   </target>
 
   <property name="build.webapp" value="${build.dir}/webapps"/>
+  <property name="build.base.webapp" value="${build.dir}/../../webapps"/>
   <property name="build.src" value="${build.dir}/src" />
   <property name="src.webapp.raid" value="${basedir}/webapps/raid"/>
-  <property name="src.conf" value="${basedir}/conf"/>
 
   <target name="compile" depends="init, ivy-retrieve-common, buildha" unless="skip.contrib">
     <echo message="contrib: ${name}"/>
@@ -62,7 +62,9 @@ to call at top-level: ant deploy-contrib compile-core-test
 
     <copy todir="${build.classes}">
      <fileset dir="${src.dir}" includes="raid-default.xml"/>
-     <fileset dir="${src.conf}" includes="log4j.properties"/>
+    </copy>
+    <copy todir="${build.base.webapp}">
+     <fileset dir="${build.webapp}" includes="**"/>
     </copy>
   </target>
 
@@ -108,6 +110,7 @@ to call at top-level: ant deploy-contrib compile-core-test
       <sysproperty key="taskcontroller-user" value="${taskcontroller-user}"/>
       <classpath>
         <pathelement location="${emma.instr.dir}" />
+        <pathelement location="${src.test}" />
         <path refid="test.classpath" />
         <path refid="emma.lib" />
       </classpath>

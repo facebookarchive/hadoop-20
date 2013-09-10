@@ -86,7 +86,7 @@ public class TestDirectoryPlacementMonitor extends TestCase {
         LOG.info("Stripe " + i + " " + sb);
       }
       placementMonitor.checkBlockLocations(
-          srcLstBI, parityLstBI, Codec.getCodec("dir-rs"),
+          srcLstBI, parityLstBI, Codec.getCodec("dir-rs"), null,
           dirStat, resolver);
       Map<Integer, Long> hist =
           placementMonitor.blockHistograms.get("dir-rs");

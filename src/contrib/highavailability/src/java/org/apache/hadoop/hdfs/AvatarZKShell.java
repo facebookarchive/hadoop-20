@@ -24,7 +24,6 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 import javax.security.auth.login.LoginException;
 
@@ -33,12 +32,11 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
-import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.Avatar;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.InstanceId;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+import org.apache.hadoop.hdfs.server.namenode.AvatarNodeZkUtil;
 import org.apache.hadoop.io.retry.RetryPolicies;
 import org.apache.hadoop.io.retry.RetryPolicy;
 import org.apache.hadoop.io.retry.RetryProxy;
@@ -51,7 +49,6 @@ import org.apache.hadoop.util.ToolRunner;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.WatchedEvent;
 import org.apache.zookeeper.Watcher;
-import org.apache.zookeeper.data.Stat;
 
 /**
  * A {@link AvatarZKShell} that allows browsing configured avatar policies.
@@ -140,9 +137,6 @@ public class AvatarZKShell extends Configured implements Tool {
 
   private static AvatarProtocol createAvatarnode(AvatarProtocol rpcAvatarnode)
       throws IOException {
-    RetryPolicy createPolicy = RetryPolicies
-        .retryUpToMaximumCountWithFixedSleep(5, 5000, TimeUnit.MILLISECONDS);
-
     Map<Class<? extends Exception>, RetryPolicy> remoteExceptionToPolicyMap = new HashMap<Class<? extends Exception>, RetryPolicy>();
 
     Map<Class<? extends Exception>, RetryPolicy> exceptionToPolicyMap = new HashMap<Class<? extends Exception>, RetryPolicy>();
@@ -173,14 +167,14 @@ public class AvatarZKShell extends Configured implements Tool {
    * Displays format of commands.
    */
   private static void printUsage(String cmd) {
-    String prefix = "Usage: java " + AvatarZKShell.class.getSimpleName();
     if ("-updateZK".equals(cmd)) {
-      System.err
-          .println("Usage: java AvatarShell [-service serviceName]" + " [-updateZK -{zero|one}]");
+      System.err.println("Usage: java AvatarZKShell [-service serviceName]"
+          + " [-updateZK -{zero|one}]");
     } else if ("-clearZK".equals(cmd)) {
-      System.err.println("Usage: java AvatarShell [-servie serviceName]" + " [-clearZK]");
+      System.err.println("Usage: java AvatarZKShell [-service serviceName]"
+          + " [-clearZK]");
     } else {
-      System.err.println("Usage: java AvatarZKShell [-servie serviceName]");
+      System.err.println("Usage: java AvatarZKShell [-service serviceName]");
       System.err.println("           [-updateZK -{zero|one} [-force]]");
       System.err.println("           [-clearZK]");
       System.err.println("           [-createZK -{zero|one}]");
@@ -231,6 +225,11 @@ public class AvatarZKShell extends Configured implements Tool {
     String serviceName = null;
     String instance = null;
     boolean force = false;
+    
+    // enforce to specify service if configured
+    if (!AvatarShell.isServiceSpecified("AvatarZKShell", conf, argv)) {
+      return -1;
+    }
 
     for(int i=0; i < argv.length; i++) {
       String cmd = argv[i];
@@ -297,22 +296,21 @@ public class AvatarZKShell extends Configured implements Tool {
     try {
       for (String service : services) {
         AvatarNode.initializeGenericKeys(originalConf, service);
-
         if ("-updateZK".equals(zkCmd) || "-createZK".equals(zkCmd)) {
           if (instance == null || (conf=updateConf(instance, originalConf)) == null) {
             printUsage(zkCmd);
             return -1;
           }
         }
-
+        
         if ("-updateZK".equals(zkCmd)) {
-          updateZooKeeper(force);
+          updateZooKeeper(force, service, instance);
         } else if ("-clearZK".equals(zkCmd)) {
-          clearZooKeeper();
+          clearZooKeeper(service);
         } else if ("-createZK".equals(zkCmd)) {
-          updateZooKeeper(true, false);
+          updateZooKeeper(true, false, service, instance);
         } else if ("-getZK".equals(zkCmd)) {
-          getZooKeeper();
+          getZooKeeper(service);
         }
       }
     } catch (IllegalArgumentException arge) {
@@ -335,88 +333,26 @@ public class AvatarZKShell extends Configured implements Tool {
       //
       exitCode = -1;
       System.err.println(zkCmd.substring(1) + ": " + e.getLocalizedMessage());
+      e.printStackTrace();
     } catch (Throwable re) {
       exitCode = -1;
       System.err.println(zkCmd.substring(1) + ": " + re.getLocalizedMessage());
+      re.printStackTrace();
     } finally {
     }
     return exitCode;
   }
 
-  public void getZooKeeper() throws IOException, KeeperException, InterruptedException {
-    String connection = conf.get("fs.ha.zookeeper.quorum");
-    if (connection == null)
-      return;
-    AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
-    InetSocketAddress defaultAddr = NameNode.getClientProtocolAddress(originalConf);
-    String defaultName = defaultAddr.getHostName() + ":"
-        + defaultAddr.getPort();
-    System.out.println("Default name is " + defaultName);
-    String registration = zk.getPrimaryAvatarAddress(defaultName, new Stat(), false);
-
-    System.out.println("Primary node according to ZooKeeper: " + registration);
-  }
-  public void clearZooKeeper() throws IOException {
-    String connection = conf.get("fs.ha.zookeeper.quorum");
-    if (connection == null)
-      return;
-    AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
-
-    // Clear NameNode address in ZK
-    InetSocketAddress defaultAddr;
-    String[] aliases;
-
-    defaultAddr = NameNode.getClientProtocolAddress(originalConf);
-
-    String defaultName = defaultAddr.getHostName() + ":"
-        + defaultAddr.getPort();
-
-    LOG.info("Clear Client Address information in ZooKeeper: " + defaultName);
-
-    zk.clearPrimary(defaultName);
-
-    aliases = conf.getStrings("fs.default.name.aliases");
-    if (aliases != null) {
-      for (String alias : aliases) {
-        zk.clearPrimary(alias);
-      }
-    }
-    LOG.info("Clear Service Address information in ZooKeeper");
-    // Clear service address in ZK
-
-    defaultAddr = NameNode.getDNProtocolAddress(originalConf);
-    if (defaultAddr != null) {
-      String defaultServiceName = defaultAddr.getHostName() + ":"
-          + defaultAddr.getPort();
-      zk.clearPrimary(defaultServiceName);
-    }
-    aliases = conf.getStrings("dfs.namenode.dn-address.aliases");
-    if (aliases != null) {
-      for (String alias : aliases) {
-        zk.clearPrimary(alias);
-      }
-    }
-    LOG.info("Clear Http Address information in ZooKeeper");
-    // Clear http address in ZK
-    // Stolen from NameNode so we have the same code in both places
-    defaultAddr = NetUtils.createSocketAddr(originalConf
-        .get("dfs.http.address"));
-
-    String defaultHttpAddress = defaultAddr.getHostName() + ":"
-        + defaultAddr.getPort();
-
-    zk.clearPrimary(defaultHttpAddress);
-
-    aliases = conf.getStrings("dfs.http.address.aliases");
-    if (aliases != null) {
-      for (String alias : aliases) {
-        zk.clearPrimary(alias);
-      }
-    }
+  public void getZooKeeper(String serviceName) throws IOException, KeeperException, InterruptedException {
+    AvatarNodeZkUtil.printZookeeperEntries(originalConf, conf, serviceName, System.out);
   }
 
-  public void updateZooKeeper(boolean force) throws IOException {
-    updateZooKeeper(force, true);
+  public void clearZooKeeper(String serviceName) throws IOException {
+    AvatarNodeZkUtil.clearZookeeper(originalConf, conf, serviceName);
+  }
+
+  public void updateZooKeeper(boolean force, String serviceName, String instance) throws IOException {
+    updateZooKeeper(force, true, serviceName, instance);
   }
 
   /*
@@ -434,7 +370,7 @@ public class AvatarZKShell extends Configured implements Tool {
    *
    * If any part of the path does not exist it is created automatically
    */
-  public void updateZooKeeper(boolean force, boolean overwrite)
+  public void updateZooKeeper(boolean force, boolean toOverwrite, String serviceName, String primary)
       throws IOException {
     if (!force) {
       initAvatarRPC();
@@ -445,75 +381,7 @@ public class AvatarZKShell extends Configured implements Tool {
                 + "the AvatarNode in Standby mode");
       }
     }
-    String connection = conf.get("fs.ha.zookeeper.quorum");
-    if (connection == null)
-      return;
-    AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
-
-    // Update NameNode address in ZK
-    LOG.info("Update Client Address information in ZooKeeper");
-    InetSocketAddress defaultAddr;
-    String[] aliases;
-
-    InetSocketAddress addr = NameNode.getClientProtocolAddress(conf);
-    if (addr == null) {
-      System.err.println( FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY +
-          " for primary service is not defined");
-      return;
-    }
-    defaultAddr = NameNode.getClientProtocolAddress(originalConf);
-    if (defaultAddr == null) {
-      System.err.println( FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY +
-          " for default service is not defined");
-      return;
-    }
-    String primaryAddress = addr.getHostName() + ":" + addr.getPort();
-    String defaultName = defaultAddr.getHostName() + ":"
-        + defaultAddr.getPort();
-    zk.registerPrimary(defaultName, primaryAddress, overwrite);
-    /** TO DO later: need to handle alias leave it as it is now*/
-    aliases = conf.getStrings("fs.default.name.aliases");
-    if (aliases != null) {
-      for (String alias : aliases) {
-        zk.registerPrimary(alias, primaryAddress, overwrite);
-      }
-    }
-    LOG.info("Update Service Address information in ZooKeeper");
-    // Update service address in ZK
-    addr = NameNode.getDNProtocolAddress(conf);
-
-    defaultAddr = NameNode.getDNProtocolAddress(originalConf);
-    if (defaultAddr != null) {
-      String primaryServiceAddress = addr.getHostName() + ":" + addr.getPort();
-      String defaultServiceName = defaultAddr.getHostName() + ":"
-          + defaultAddr.getPort();
-      zk.registerPrimary(defaultServiceName, primaryServiceAddress, overwrite);
-    }
-    aliases = conf.getStrings("dfs.namenode.dn-address.aliases");
-    if (aliases != null) {
-      String primaryServiceAddress = addr.getHostName() + ":" + addr.getPort();
-      for (String alias : aliases) {
-        zk.registerPrimary(alias, primaryServiceAddress, overwrite);
-      }
-    }
-    LOG.info("Update Http Address information in ZooKeeper");
-    // Update http address in ZK
-    // Stolen from NameNode so we have the same code in both places
-    addr = NetUtils.createSocketAddr(conf.get("dfs.http.address"));
-    String primaryHttpAddress = addr.getHostName() + ":" + addr.getPort();
-    defaultAddr = NetUtils.createSocketAddr(conf
-        .get("dfs.http.address"));
-
-    String defaultHttpAddress = defaultAddr.getHostName() + ":"
-        + defaultAddr.getPort();
-    zk.registerPrimary(defaultHttpAddress, primaryHttpAddress, overwrite);
-
-    aliases = conf.getStrings("dfs.http.address.aliases");
-    if (aliases != null) {
-      for (String alias : aliases) {
-        zk.registerPrimary(alias, primaryHttpAddress, overwrite);
-      }
-    }
+    AvatarNodeZkUtil.updateZooKeeper(originalConf, conf, toOverwrite, serviceName, primary);
   }
 
   public static class DummyWatcher implements Watcher {
@@ -528,6 +396,7 @@ public class AvatarZKShell extends Configured implements Tool {
    * main() has some simple utility methods
    */
   public static void main(String argv[]) throws Exception {
+    DnsMonitorSecurityManager.setTheManager();
     AvatarZKShell shell = null;
 
     shell = new AvatarZKShell();

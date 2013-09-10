@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.namenode.bookkeeper;
 
+import com.google.common.collect.ImmutableMap;
 import junit.framework.AssertionFailedError;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.commons.logging.Log;
@@ -29,6 +30,8 @@ import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLogTestUtil;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.BeforeClass;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.io.File;
@@ -51,18 +54,25 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
   // Mock BookkeeperJournalManager which implements openForReading() method
   // trivially, allowing BookKeeperEditLogInputStream to be tested before
   // BookKeeperJournalManager is fully implemented
-  static class MockBookKeeperJournalManager extends BookKeeperJournalManager {
+  static class TestLedgerProvider implements LedgerHandleProvider {
+
     @Override
     public LedgerHandle openForReading(long ledgerId) throws IOException {
       return openLedger(ledgerId, false);
     }
   }
 
-  private static final BookKeeperJournalManager MOCK_JOURNAL_MANAGER =
-      new MockBookKeeperJournalManager();
+  private static LedgerHandleProvider ledgerProvider;
 
   private File tempEditsFile = null;
   private int origSizeFlushBuffer;
+
+  @BeforeClass
+  public static void setUpStatic() throws Exception {
+    BookKeeperSetupUtil.setUpStatic();
+    ledgerProvider = new TestLedgerProvider();
+  }
+
 
   @Before
   public void setUp() throws Exception {
@@ -144,27 +154,20 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
         numEdits, bkEditsOut, fileEditsOut);
 
     BookKeeperEditLogInputStream bkEditsIn =
-        new BookKeeperEditLogInputStream(MOCK_JOURNAL_MANAGER,
+        new BookKeeperEditLogInputStream(ledgerProvider,
             ledgerId,
             0,
             1,
-            numEdits);
+            numEdits,
+            false);
     EditLogFileInputStream fileEditsIn =
         new EditLogFileInputStream(tempEditsFile);
 
     assertEquals("Length in bytes must be equal!",
         bkEditsIn.length(), fileEditsIn.length());
 
-    for (int i = 1; i <= numEdits; i++) {
-      FSEditLogOp opFromBk = bkEditsIn.readOp();
-      FSEditLogOp opFromFile = fileEditsIn.readOp();
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("txId = " + i + ", " + "opFromBk = " + opFromBk +
-            ", opFromFile = " + opFromFile);
-      }
-      assertEquals("Operation read from file and BookKeeper must be same",
-          opFromBk, opFromFile);
-    }
+    FSEditLogTestUtil.assertStreamsAreEquivalent(numEdits,
+        ImmutableMap.of("BookKeeper", bkEditsIn, "File", fileEditsIn));
     assertNull("BookKeeper edit log must end at txid 100", bkEditsIn.readOp());
   }
 
@@ -173,6 +176,7 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
    * read the next transaction.
    */
   @Test
+  @Ignore
   public void testReadAndRefreshAfterEachTransaction() throws Exception {
     int randomNumEdits[] = genRandomNumEdits();
     for (int numEdits : randomNumEdits) {
@@ -196,11 +200,13 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
         numEdits, bkEditsOut, fileEditsOut);
 
     BookKeeperEditLogInputStream bkEditsIn =
-        new BookKeeperEditLogInputStream(MOCK_JOURNAL_MANAGER,
+        new BookKeeperEditLogInputStream(ledgerProvider,
             ledgerId,
             0,
             1,
-            numEdits);
+            numEdits,
+            false);
+
     EditLogFileInputStream fileEditsIn =
         new EditLogFileInputStream(tempEditsFile);
 
@@ -212,8 +218,8 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
     for (int i = 1; i <= numEdits; i++) {
       assertEquals("Position in file must be equal position in bk",
           lastBkPos, lastFilePos);
-      bkEditsIn.refresh(lastBkPos);
-      fileEditsIn.refresh(lastFilePos);
+      bkEditsIn.refresh(lastBkPos, -1);
+      fileEditsIn.refresh(lastFilePos, -1);
       FSEditLogOp opFromBk = bkEditsIn.readOp();
       FSEditLogOp opFromFile = fileEditsIn.readOp();
       if (LOG.isDebugEnabled()) {
@@ -226,7 +232,68 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
       lastBkPos = bkEditsIn.getPosition();
       lastFilePos = fileEditsIn.getPosition();
     }
-    assertNull("BookKeeper edit log must end at txid 100", bkEditsIn.readOp());
+    assertNull("BookKeeper edit log must end at last txId", bkEditsIn.readOp());
+  }
+
+  /**
+   * After each read, save the last known position, re-create the object,
+   * and then refresh to the saved position.
+   */
+  @Test
+  @Ignore
+  public void testRefreshInAReCreatedInstance() throws Exception {
+    int numEdits = 100;
+    FSEditLog.sizeFlushBuffer = 100;
+
+    LedgerHandle ledgerOut = createLedger();
+    long ledgerId = ledgerOut.getId();
+    BookKeeperEditLogOutputStream bkEditsOut =
+        new BookKeeperEditLogOutputStream(ledgerOut);
+    EditLogFileOutputStream fileEditsOut =
+        new EditLogFileOutputStream(tempEditsFile, null);
+
+    FSEditLogTestUtil.createAndPopulateStreams(1,
+        numEdits, bkEditsOut, fileEditsOut);
+
+    BookKeeperEditLogInputStream bkEditsIn =
+        new BookKeeperEditLogInputStream(ledgerProvider,
+            ledgerId,
+            0,
+            1,
+            numEdits,
+            false);
+    EditLogFileInputStream fileEditsIn =
+        new EditLogFileInputStream(tempEditsFile);
+    long lastBkPos = bkEditsIn.getPosition();
+    long lastFilePos = fileEditsIn.getPosition();
+    for (int i = 0; i <= numEdits; i++) {
+      assertEquals("Position in file must be equal to position in bk",
+          lastBkPos, lastFilePos);
+      bkEditsIn.refresh(lastBkPos, -1);
+      fileEditsIn.refresh(lastFilePos, -1);
+      FSEditLogOp opFromBk = bkEditsIn.readOp();
+      FSEditLogOp opFromFile = fileEditsIn.readOp();
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("txId = " + i + ", " + "opFromBk = " + opFromBk +
+            ", opFromFile = " + opFromFile);
+      }
+      assertEquals(
+          "Operation read from file and BookKeeper must be same after refresh",
+          opFromBk, opFromFile);
+      lastBkPos = bkEditsIn.getPosition();
+      lastFilePos = fileEditsIn.getPosition();
+      bkEditsIn =
+          new BookKeeperEditLogInputStream(ledgerProvider,
+              ledgerId,
+              0,
+              1,
+              numEdits,
+              false);
+      fileEditsIn =
+          new EditLogFileInputStream(tempEditsFile);
+    }
+    bkEditsIn.refresh(lastBkPos, -1);
+    assertNull("BookKeeper edit log must end at last txId", bkEditsIn.readOp());
   }
 
   /**
@@ -250,14 +317,15 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
     LedgerHandle ledgerOut = createLedger();
     long ledgerId = ledgerOut.getId();
     BookKeeperEditLogInputStream bkEditsIn =
-        new BookKeeperEditLogInputStream(MOCK_JOURNAL_MANAGER,
+        new BookKeeperEditLogInputStream(ledgerProvider,
             ledgerId,
             0,
             1,
-            -1);
+            -1,
+            true);
     EditLogFileOutputStream fileEditsOut =
         new EditLogFileOutputStream(tempEditsFile, null);
-
+    bkEditsIn.init();
     // Set the edit log buffer flush size smaller than the size of
     // of the buffer in BufferedInputStream in BookKeeperJournalInputStream
     FSEditLog.sizeFlushBuffer = bkEditsIn.bin.available() / 3;
@@ -275,7 +343,7 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
     int maxTries = 10;
     for (int i = 0; i < maxTries; i++) {
       try {
-        bkEditsIn.refresh(0);
+        bkEditsIn.refresh(0, -1);
         assertEquals("refresh succeeded", bkEditsIn.logVersion,
             FSConstants.LAYOUT_VERSION);
       } catch (AssertionFailedError e) {
@@ -356,11 +424,12 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
       @Override
       public Void call() throws Exception {
         BookKeeperEditLogInputStream in =
-            new BookKeeperEditLogInputStream(MOCK_JOURNAL_MANAGER,
+            new BookKeeperEditLogInputStream(ledgerProvider,
                 ledgerId,
                 0,
                 1,
-                -1);
+                -1,
+                true);
 
         long numOps = 0;
         long maxTxId = -1;
@@ -372,7 +441,7 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
             Thread.sleep(1000);
             LOG.info("Refreshing to " + lastPos);
 
-            in.refresh(lastPos); // Then refresh to last known good position
+            in.refresh(lastPos, -1); // Then refresh to last known good position
           } else {
             long txId = op.getTransactionId();
             if (txId > maxTxId) {
@@ -391,7 +460,7 @@ public class TestBookKeeperEditLogInputStream extends BookKeeperSetupUtil {
         // Once producer is shutdown, scan again from last known good position
         // until the end of the ledger. This mirrors the Ingest logic (last
         // read when being quiesced).
-        in.refresh(lastPos);
+        in.refresh(lastPos, -1);
         do {
           op = in.readOp();
           if (op != null) {

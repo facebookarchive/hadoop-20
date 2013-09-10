@@ -17,19 +17,25 @@
  */
 package org.apache.hadoop.hdfs.protocol;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.Text;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * Contains a list of paths corresponding to corrupt files and a cookie
  * used for iterative calls to NameNode.listCorruptFileBlocks.
  *
  */
-public class CorruptFileBlocks implements Writable {
+// DO NOT remove final without consulting {@link WrapperWritable#create(V object)}
+@ThriftStruct
+public final class CorruptFileBlocks implements Writable {
   // used for hashCode
   private static final int PRIME = 16777619;
 
@@ -45,10 +51,21 @@ public class CorruptFileBlocks implements Writable {
     this.cookie = cookie;
   }
 
+  @ThriftConstructor
+  public CorruptFileBlocks(@ThriftField(1) List<String> files, @ThriftField(2) String cookie) {
+    this(files.toArray(new String[files.size()]), cookie);
+  }
+
   public String[] getFiles() {
     return files;
   }
 
+  @ThriftField(1)
+  public List<String> getTFiles() {
+    return Arrays.asList(files);
+  }
+
+  @ThriftField(2)
   public String getCookie() {
     return cookie;
   }

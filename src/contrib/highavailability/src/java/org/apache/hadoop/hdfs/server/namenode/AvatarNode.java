@@ -48,6 +48,7 @@ import org.apache.hadoop.ipc.*;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.ReconfigurationException;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.io.MD5Hash;
@@ -55,11 +56,14 @@ import org.apache.hadoop.io.Text;
 import org.apache.hadoop.metrics.util.MBeanUtil;
 import org.apache.hadoop.hdfs.AvatarFailoverSnapshot;
 import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.FastProtocolHDFS;
+import org.apache.hadoop.hdfs.FastWritableHDFS;
 import org.apache.hadoop.hdfs.FileStatusExtended;
 import org.apache.hadoop.hdfs.OpenFilesInfo;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.util.FlushableLogger;
 import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
@@ -77,12 +81,14 @@ import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.Transition;
 import org.apache.hadoop.hdfs.server.common.IncorrectVersionException;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
 import org.apache.hadoop.hdfs.server.datanode.DatanodeProtocols;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.ClusterJspHelper.NameNodeKey;
 import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
+import org.apache.hadoop.hdfs.server.namenode.metrics.AvatarNodeMetrics;
 import org.apache.hadoop.hdfs.server.namenode.metrics.AvatarNodeStatusMBean;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.hdfs.util.LightWeightBitSet;
@@ -134,6 +140,9 @@ public class AvatarNode extends NameNode
   }
 
   public static final Log LOG = LogFactory.getLog(AvatarNode.class.getName());
+  // immediate flush logger
+  private static final Log FLOG = FlushableLogger.getLogger(LOG);
+  
   private static final int    INVALIDATES_CLEANUP_INTERVAL = 60 * 1000;
   
   public static final String FAILOVER_SNAPSHOT_FILE = "failover_snapshot_file";
@@ -171,6 +180,8 @@ public class AvatarNode extends NameNode
   private String failoverFsck = "";
   private String oldPrimaryFsck = "";
   private volatile FailoverState failoverState = FailoverState.BEFORE_FAILOVER;
+  
+  private final AvatarNodeMetrics metrics;
 
   static public enum FailoverState {
     BEFORE_FAILOVER("BeforeFailover"),
@@ -198,6 +209,9 @@ public class AvatarNode extends NameNode
       InetSocketAddress nameNodeAddr, NamenodeProtocol primaryNamenode)
       throws IOException {
     super(conf);    
+    
+    // wrap namenode metrics
+    this.metrics = new AvatarNodeMetrics(super.getNameNodeMetrics());
     
     // check if we talk to primary
     if (startInfo.isStandby
@@ -249,6 +263,7 @@ public class AvatarNode extends NameNode
       // processing transactions from the primary and checkpointing
       standby = new Standby(this, startupConf, confg, nameNodeAddr, primaryNamenode); 
       standbyThread = new Thread(standby);
+      standbyThread.setName("Standby");
       standbyThread.start();
       cleaner = new Cleaner();
       cleanerThread = new Thread(cleaner);
@@ -312,6 +327,10 @@ public class AvatarNode extends NameNode
     }
   }
   
+  public AvatarNodeMetrics getAvatarNodeMetrics() {
+    return metrics;
+  }
+  
   @Override
   public String getInstance() {
     return this.instance.toString();
@@ -339,11 +358,10 @@ public class AvatarNode extends NameNode
     InetSocketAddress socAddr = AvatarNode.getAddress(conf);
     int handlerCount = conf.getInt("hdfs.avatarnode.handler.count", 3);
 
-    // create rpc server 
+    // create rpc server
     // no point to deserialize job file in Avatar node.
-    this.server = RPC.getServer(this, socAddr.getHostName(), 
-                                socAddr.getPort(),
-                                handlerCount, false, conf, false);
+    this.server = RPC.getServer(this, socAddr.getAddress().getHostAddress(), socAddr.getPort(),
+        handlerCount, false, conf, false);
 
     // The rpc-server port can be ephemeral... ensure we have the 
     // correct info
@@ -389,6 +407,11 @@ public class AvatarNode extends NameNode
    * @inheritDoc
    */
   public boolean isInitialized() throws IOException {
+    
+    // check permissions, if this fails, the failover will not
+    // progress, and this will prevent shutting down the primary avatar
+    super.namesystem.checkSuperuserPrivilege();
+    
     if (currentAvatar == Avatar.ACTIVE) {
       // check for upgrades
       if (!getFSImage().isUpgradeFinalized()) {
@@ -432,13 +455,15 @@ public class AvatarNode extends NameNode
     public void run() {
       try {
         node.runInfo.shutdown = true;
-        LOG.info("Shutdown thread for: " + node.currentAvatar + " starting...");
+        LOG.info("Failover: Shutdown thread for " + node.currentAvatar
+            + " starting...");
         if (node.currentAvatar == Avatar.STANDBY) {
           // make sure that all transactions are consumed
           try {
-            node.standby.quiesce(FSEditLogLoader.TXID_IGNORE);
+          	// do not recover the unclosed segment here.
+            node.standby.quiesce(FSEditLogLoader.TXID_IGNORE, false);
           } catch (Throwable e) {
-            LOG.warn("Standby: ", e);
+            LOG.warn("Failover: standby error ", e);
           }
         }
         // Need to stop RPC threads before capturing any final data about the
@@ -485,7 +510,10 @@ public class AvatarNode extends NameNode
         }
         InjectionHandler.processEvent(InjectionEvent.AVATARNODE_SHUTDOWN_COMPLETE);
       } catch (Exception e) {
-        LOG.error("shutdownAvatar() failed", e);
+        LOG.error("Failover: shutdownAvatar() failed", e);
+      } finally {
+        LOG.info("Failover: Shutdown thread for " + node.currentAvatar
+            + " DONE.");
       }
     }
   }
@@ -528,13 +556,13 @@ public class AvatarNode extends NameNode
    * @throws IOException
    */
   public synchronized void shutdown(boolean synchronous) throws IOException {
-    LOG.info("Shutdown: Asynchronous shutdown for: " + currentAvatar);
+    LOG.info("Failover: Asynchronous shutdown for: " + currentAvatar);
     
     // check permissions before any other actions
     super.namesystem.checkSuperuserPrivilege();
     
     if (runInfo.shutdown) {
-      LOG.info("Shutdown: Node already shut down");
+      LOG.info("Failover: Node already shut down");
       return;
     }
     
@@ -550,7 +578,7 @@ public class AvatarNode extends NameNode
     shutdownThread.start();
     
     if (synchronous) {
-      LOG.info("Shutdown: Waiting for shutdown to complete");
+      LOG.info("Failover: Waiting for shutdown to complete");
       try {
         shutdownThread.join();
       } catch (InterruptedException ie) {
@@ -591,12 +619,6 @@ public class AvatarNode extends NameNode
     standby.quiesce(txId);
   }
 
-  public static String getClusterAddress(Configuration conf)
-    throws UnknownHostException {
-    InetSocketAddress addr = NameNode.getClientProtocolAddress(conf);
-    return addr.getHostName() + ":" + addr.getPort();
-  }
-
   public void shutdownStandby() {
     standby.shutdown();
 
@@ -626,13 +648,16 @@ public class AvatarNode extends NameNode
    * Stops all RPC threads and ensures that all RPC handlers have exited.
    * Stops all communication to the namenode.
    */
-  protected void stopRPC(boolean interruptClientHadlers) throws IOException {
+  protected void stopRPC(boolean interruptClientHandlers) throws IOException {
     try {
-      super.stopRPC(interruptClientHadlers);
-      LOG.info("stopRPC: Stopping avatardatanode server");
-      this.server.stop(interruptClientHadlers);
-      this.server.waitForHandlers();
-      this.server.stopResponder();
+      // stop avatardatanode server
+      stopRPCInternal(server, "avatardatanode", interruptClientHandlers);
+      
+      // stop namenode rpc (client, datanode)
+      super.stopRPC(interruptClientHandlers);
+     
+      // wait for avatardatanode rpc
+      stopWaitRPCInternal(server, "avatardatanode");
     } catch (InterruptedException ex) {
       throw new IOException("stopRPC() interrupted", ex);
     }
@@ -642,28 +667,45 @@ public class AvatarNode extends NameNode
     // TODO for unit test it can happen than rollEditLog happens after 
     // obtaining the txid so we might have a difference of 2 !!!
     long zkLastTxId = zkTxId.getTransactionId();
-    long totalBlocks = zkTxId.getTotalBlocks();
+    long zkTotalBlocks = zkTxId.getTotalBlocks();
+    long zkTotalInodes = zkTxId.getTotalInodes();
+    
+    // local values
     long lastTxId = super.getLastWrittenTxId();
-    long totalInodes = zkTxId.getTotalInodes();
-
+    long totalBlocks = super.namesystem.getBlocksTotal();
+    long totalINodes = super.namesystem.getFilesAndDirectoriesTotal();
+    
     // Verify transacation ids.
     if (lastTxId < 0 || zkLastTxId < 0) {
       throw new StandbyStateException(
-          "Invalid transacation ids, txid in NameNode : "
-          + lastTxId + " txid in Zookeeper : " + zkLastTxId);
+          "Invalid transacation ids, txid in NameNode : " + lastTxId
+              + " txid in Zookeeper : " + zkLastTxId);
     } else if (lastTxId != zkLastTxId) {
       throw new StandbyStateException("The transacation id in the namenode : "
           + lastTxId + " does not match the transaction id in zookeeper : "
-          + zkLastTxId);
-    } else if (totalBlocks != super.namesystem.getBlocksTotal()) {
-      throw new StandbyStateException("Total blocks in ZK : " + totalBlocks
-          + " don't match up with total blocks on Standby : "
-          + super.namesystem.getBlocksTotal());
-    } else if (totalInodes != super.namesystem.getFilesAndDirectoriesTotal()) {
-      throw new StandbyStateException("Total inodes in ZK : " + totalInodes
-          + " don't match up with total inodes on Standby : "
-          + super.namesystem.getFilesAndDirectoriesTotal());
+          + zkLastTxId
+          + formatErrorMessage(lastTxId, zkLastTxId, "transactions"));
+    } else if (zkTotalBlocks != totalBlocks) {
+      throw new StandbyStateException("Total blocks in ZK : " + zkTotalBlocks
+          + " don't match up with total blocks on Standby : " + totalBlocks
+          + formatErrorMessage(totalBlocks, zkTotalBlocks, "blocks"));
+    } else if (zkTotalInodes != totalINodes) {
+      throw new StandbyStateException("Total inodes in ZK : " + zkTotalInodes
+          + " don't match up with total inodes on Standby : " + totalINodes
+          + formatErrorMessage(totalINodes, zkTotalInodes, "inodes"));
     }
+  }
+  
+  private String formatErrorMessage(long localNumber, long remoteNumber,
+      String what) {
+    long diff = localNumber - remoteNumber;
+    return " Standby has " + Math.abs(diff) + " "
+        + ((diff > 0) ? "more " : "fewer ") + what + ".";
+  }
+
+  private static File buildSnapshotFilePath(String pathDir) {
+    return new File(pathDir, Path.SEPARATOR
+        + FAILOVER_SNAPSHOT_FILE);
   }
 
   
@@ -671,10 +713,15 @@ public class AvatarNode extends NameNode
       throws IOException {
     URI sharedEditsDirectory = remote ? getRemoteSharedEditsURI(confg)
         : getLocalSharedEditsURI(confg);
-    if (!isFile(sharedEditsDirectory))
+    if (!isFile(sharedEditsDirectory)) {
+      String failoverDataDir = conf
+          .get("dfs.avatarnode.failover.test.data.dir");
+      if (failoverDataDir != null) {
+        return buildSnapshotFilePath(failoverDataDir);
+      }
       return null;
-    return new File(sharedEditsDirectory.getPath(), "current" + Path.SEPARATOR
-        + FAILOVER_SNAPSHOT_FILE);
+    }
+    return buildSnapshotFilePath(sharedEditsDirectory.getPath());
   }
 
   private void writeFailoverTestData(String fsck) throws IOException {
@@ -780,6 +827,17 @@ public class AvatarNode extends NameNode
     fscker.fsck();
     return stringWriter.toString();
   }
+  
+  /**
+   * Clean failover-outstanding datanodes.
+   * Used for fast failover, once the overreplication processing starts.
+   */
+  void clearOutstandingNodes() {
+    if (standbySafeMode != null) {
+      standbySafeMode.removeOutStandingDatanodes(false);
+    }
+    standbySafeMode = null;
+  }
 
   @Override
   public synchronized void performFailover() throws IOException {
@@ -830,9 +888,6 @@ public class AvatarNode extends NameNode
     }
 
     currentAvatar = Avatar.ACTIVE;
-    // Setting safe mode to null here so that we don't throw NPE in
-    // getNameNodeSpecificKeys().
-    standbySafeMode = null;
     confg.setClass("dfs.safemode.impl", NameNodeSafeModeInfo.class,
         SafeModeInfo.class);
   }
@@ -969,18 +1024,21 @@ public class AvatarNode extends NameNode
         super.namesystem.writeUnlock();
       }
       super.namesystem.clearReplicationQueues();
-    } catch (IOException e) {
+    } catch (Exception e) {
+      metrics.numCleanerThreadExceptions.inc();
       LOG.error("Standby Cleaner : exception when cleaning " +
       		"replication queues", e);
     }
   }
 
   private boolean ignoreDatanodes() {
-    return currentAvatar == Avatar.STANDBY &&
+    boolean ignore = currentAvatar == Avatar.STANDBY &&
             (standby == null 
             || standby.fellBehind()
             || InjectionHandler
               .falseCondition(InjectionEvent.STANDBY_FELL_BEHIND));
+    metrics.ignoreDataNodes.set(ignore ? 1 : 0);
+    return ignore;
   }
 
   @Override
@@ -1014,24 +1072,24 @@ public class AvatarNode extends NameNode
     if (standbySafeMode != null
         && standbySafeMode.reportHeartBeat(registration)) {
       LOG.info("Sending Clear Primary command to : " + registration);
-      DatanodeCommand fDelCmd = AvatarDatanodeCommand.CLEARPRIMARY;
-      if (cmds == null) {
-        return new DatanodeCommand[] { fDelCmd };
-      } else {
-        DatanodeCommand[] newCmds = Arrays.copyOf(cmds, cmds.length + 1);
-        newCmds[cmds.length] = fDelCmd;
-        return newCmds;
-      }
+      cmds = addCommand(cmds, AvatarDatanodeCommand.CLEARPRIMARY);
     } else if (ignoreDatanodes()) {
-      if (cmds == null) {
-        return new DatanodeCommand[]{AvatarDatanodeCommand.BACKOFF};
-      } else {
-        DatanodeCommand[] newCmds = Arrays.copyOf(cmds, cmds.length+1);
-        newCmds[cmds.length] = AvatarDatanodeCommand.BACKOFF;
-        return newCmds;
-      }
+      cmds = addCommand(cmds, AvatarDatanodeCommand.BACKOFF);
+    } else if (standbySafeMode != null &&
+        standbySafeMode.getPrepareFailover()) {
+      cmds = addCommand(cmds, AvatarDatanodeCommand.PREPAREFAILOVER);
+    } 
+    return cmds;
+  }
+  
+  private DatanodeCommand[] addCommand(DatanodeCommand[] cmds,
+      DatanodeCommand toAdd) {
+    if (cmds == null) {
+      return new DatanodeCommand[] { toAdd };
     } else {
-      return cmds;
+      DatanodeCommand[] newCmds = Arrays.copyOf(cmds, cmds.length + 1);
+      newCmds[cmds.length] = toAdd;
+      return newCmds;
     }
   }
   
@@ -1049,14 +1107,16 @@ public class AvatarNode extends NameNode
    * Determines whether or not the given block should be retried by the datanode
    * if its not present in the blocksMap.
    */
-  public boolean shouldRetryAbsentBlock(Block block) {
+  public boolean shouldRetryAbsentBlock(Block block, Block storedBlock) {
     // If this block does not belong to anyfile and its GS
     // is no less than the avatar node's GS,
     // AvatarNode may not consume the file/block creation edit log yet,
     // so adding it to the retry list.
     return (currentAvatar == Avatar.STANDBY &&
         (!namesystem.getPersistBlocks() ||
-         block.getGenerationStamp() >= namesystem.getGenerationStamp()));
+         block.getGenerationStamp() >= namesystem.getGenerationStamp()) &&
+         (storedBlock == null || block.getGenerationStamp()
+             > storedBlock.getGenerationStamp()));
   }
 
   public DatanodeCommand blockReportNew(DatanodeRegistration nodeReg, BlockReport rep) throws IOException {
@@ -1082,6 +1142,13 @@ public class AvatarNode extends NameNode
       return super.blockReport(nodeReg, rep);
     }
   }
+  
+  private void updateIBRMetrics(int reported, int retried) {
+    if (metrics != null) {
+      metrics.numReportedBlocks.inc(reported);
+      metrics.numRetryBlocks.inc(retried);
+    }
+  }
 
   /**
    * @inheritDoc
@@ -1097,6 +1164,7 @@ public class AvatarNode extends NameNode
       LOG.info("Standby fell behind. Telling " + nodeReg.toString() +
       " to retry incremental block report of " + blocksReceivedAndDeleted.length
       + " blocks later.");
+      metrics.numIgnoredDatanodes.inc();
       return blocksReceivedAndDeleted;
     }
     List<Block> failed = new ArrayList<Block>();
@@ -1114,9 +1182,8 @@ public class AvatarNode extends NameNode
             continue;
           }
           BlockInfo storedBlock = namesystem.blocksMap.getStoredBlock(blockRD);
-          if (!DFSUtil.isDeleted(blockRD) && (storedBlock == null) &&
-              (!namesystem.getPersistBlocks() ||
-              blockRD.getGenerationStamp() >= namesystem.getGenerationStamp())) {
+          if (!DFSUtil.isDeleted(blockRD)
+              && shouldRetryAbsentBlock(blockRD, storedBlock)) {
             // If this block does not belong to anyfile and its GS
             // is no less than the avatar node's GS,
             // AvatarNode may not consume the file/block creation edit log yet,
@@ -1146,6 +1213,7 @@ public class AvatarNode extends NameNode
       }
     }
     super.blockReceivedAndDeleted(nodeReg, blocksReceivedAndDeleted);
+    updateIBRMetrics(blocksReceivedAndDeleted.length, failed.size());
     return failed.toArray(new Block[failed.size()]);
   }
 
@@ -1178,6 +1246,7 @@ public class AvatarNode extends NameNode
         failedMap = LightWeightBitSet.getBitSet(noAck);
         for (int i = 0; i < noAck; i++)
           LightWeightBitSet.set(failedMap, i);
+        metrics.numIgnoredDatanodes.inc();
         return failedMap;
       }
       
@@ -1197,13 +1266,13 @@ public class AvatarNode extends NameNode
             continue;
           }
           BlockInfo storedBlock = namesystem.blocksMap.getStoredBlock(blockRD);
-          if (!DFSUtil.isDeleted(blockRD) && (storedBlock == null) &&
-              (!namesystem.getPersistBlocks() ||
-              blockRD.getGenerationStamp() >= namesystem.getGenerationStamp())) {
+          if ((!DFSUtil.isDeleted(blockRD)
+              && shouldRetryAbsentBlock(blockRD, storedBlock))) {
             // If this block does not belong to anyfile and its GS
             // is no less than the avatar node's GS,
             // AvatarNode may not consume the file/block creation edit log yet,
-            // so adding it to the failed list.
+            // so adding it to the failed list. Also, if the stored block GS is
+            // less than the reported GS then we need to retry the block.
             // - do not process any requestes for blocks with the same block id
             // (also add them to the failed list.
             // - do not block other requests
@@ -1234,6 +1303,8 @@ public class AvatarNode extends NameNode
       }
     }
     super.blockReceivedAndDeleted(nodeReg, receivedAndDeletedBlocks);
+    updateIBRMetrics(receivedAndDeletedBlocks.getLength(),
+        failedMap != null ? LightWeightBitSet.cardinality(failedMap) : 0);
     return failedMap;
   }
   
@@ -1249,6 +1320,7 @@ public class AvatarNode extends NameNode
   /**
    * Roll the edit log manually.
    */
+  @Override
   public void rollEditLogAdmin() throws IOException {
     enforceActive("Cannot roll edit log on standby");
     // no verification of the checkpointer address since this is dfsadmin call
@@ -1266,15 +1338,45 @@ public class AvatarNode extends NameNode
  
   @Override
   public void saveNamespace() throws IOException {
-    enforceActive("Cannot save namespace on standby");
-    super.saveNamespace(false, false);
+    this.saveNamespace(false, false);
   }
 
   @Override
   public void saveNamespace(boolean force, boolean uncompressed)
   throws IOException {
-    enforceActive("Cannot save namespace on standby");
-    super.saveNamespace(force, uncompressed);
+    // for manually triggered SN, reset earlier cancellations
+    namesystem.clearCancelSaveNamespace();
+    if (currentAvatar == Avatar.ACTIVE) {
+      // regular saving process
+      super.saveNamespace(force, uncompressed);
+    } else /* STANDBY */ {     
+      // "force" is not needed for standby since it's always
+      // in safemode
+      standby.triggerCheckpoint(uncompressed);
+    }
+  }
+  
+  /**
+   * @inheritDoc
+   */
+  @Override
+  public boolean setSafeMode(SafeModeAction action) throws IOException {
+    if (action == SafeModeAction.SAFEMODE_PREP_FAILOVER) {
+      if (currentAvatar == Avatar.ACTIVE) {
+        // for now, we do not take any actions
+      } else /* STANDBY */ {
+        if (standby != null) {
+          standby.disableCheckpoint();
+          namesystem.cancelSaveNamespace("Prepare for failover");
+        }
+        if (standbySafeMode != null) {         
+          // inform the safemode to prepare failover
+          standbySafeMode.setPrepareFailover(true);
+        }
+      }
+      return namesystem.isInSafeMode();
+    }
+    return super.setSafeMode(action);
   }
   
   void enforceActive(String msg) throws IOException {
@@ -1307,13 +1409,13 @@ public class AvatarNode extends NameNode
 
   /**
    * Returns the hostname:port for the AvatarNode. The default
-   * port for the AvatarNode is one more than the port of the
-   * underlying namenode.
+   * port for the AvatarNode is (the client RPC port 
+   * of the underlying namenode + 1)
    */
   public static InetSocketAddress getAddress(Configuration conf) {
-    InetSocketAddress u = NameNode.getAddress(conf);
+    InetSocketAddress u = NameNode.getClientProtocolAddress(conf);
     int port = conf.getInt(AvatarNode.DFS_AVATARNODE_PORT_KEY, u.getPort() + 1);
-    return new InetSocketAddress(u.getHostName(), port);
+    return new InetSocketAddress(u.getAddress(), port);
   }
 
  /**
@@ -1435,9 +1537,9 @@ public class AvatarNode extends NameNode
   final private static String DFS_AVATARNODE_PORT_KEY = "dfs.avatarnode.port";
   final private static String DFS_SHARED_NAME_DIR0_KEY = "dfs.name.dir.shared0";
   final private static String DFS_SHARED_NAME_DIR1_KEY = "dfs.name.dir.shared1";
-  final private static String DFS_SHARED_EDITS_DIR0_KEY =
+  final public static String DFS_SHARED_EDITS_DIR0_KEY =
     "dfs.name.edits.dir.shared0";
-  final private static String DFS_SHARED_EDITS_DIR1_KEY = 
+  final public static String DFS_SHARED_EDITS_DIR1_KEY = 
     "dfs.name.edits.dir.shared1";
   final private static String ZERO = "0";
   final private static String ONE = "1";
@@ -1454,6 +1556,10 @@ public class AvatarNode extends NameNode
     DATANODE_PROTOCOL_ADDRESS+ONE,
     DFS_NAMENODE_HTTP_ADDRESS_KEY+ZERO,
     DFS_NAMENODE_HTTP_ADDRESS_KEY+ONE,
+    DFS_SHARED_NAME_DIR0_KEY,
+    DFS_SHARED_NAME_DIR1_KEY,
+    DFS_SHARED_EDITS_DIR0_KEY,
+    DFS_SHARED_EDITS_DIR1_KEY,
   };
 
   /**  
@@ -1478,10 +1584,10 @@ public class AvatarNode extends NameNode
     }    
     NameNode.initializeGenericKeys(conf, serviceKey);
     
+    DFSUtil.setGenericConf(conf, serviceKey, AVATARSERVICE_SPECIFIC_KEYS);    
+    
     // adjust meta directory names for this service
     adjustMetaDirectoryNames(conf, serviceKey);
-    
-    DFSUtil.setGenericConf(conf, serviceKey, AVATARSERVICE_SPECIFIC_KEYS);    
   }
   
   /** Append service name to each avatar meta directory name
@@ -1489,11 +1595,43 @@ public class AvatarNode extends NameNode
    * @param conf configuration of NameNode
    * @param serviceKey the non-empty name of the name node service
    */
-  protected static void adjustMetaDirectoryNames(Configuration conf, String serviceKey) {
+  public static void adjustMetaDirectoryNames(Configuration conf, String serviceKey) {
     adjustMetaDirectoryName(conf, DFS_SHARED_NAME_DIR0_KEY, serviceKey);
     adjustMetaDirectoryName(conf, DFS_SHARED_NAME_DIR1_KEY, serviceKey);
     adjustMetaDirectoryName(conf, DFS_SHARED_EDITS_DIR0_KEY, serviceKey);
     adjustMetaDirectoryName(conf, DFS_SHARED_EDITS_DIR1_KEY, serviceKey);
+  }
+  
+  @Override
+  public void reconfigurePropertyImpl(String property, String newVal) throws ReconfigurationException {
+    String expectation = "";
+    switch(instance) {
+      case NODEZERO:
+        expectation = DFS_NAMENODE_RPC_ADDRESS1_KEY;
+        break;
+      case NODEONE:
+        expectation = DFS_NAMENODE_RPC_ADDRESS0_KEY;
+        break;
+    }
+    if (property.equals(expectation)) {
+      getConf().set(property, newVal);
+      return;
+    }
+    super.reconfigurePropertyImpl(property, newVal);
+  }
+  
+  @Override
+  public List<String> getReconfigurableProperties() {
+    List<String> allProps = super.getReconfigurableProperties();
+    switch (instance) {
+      case NODEONE:
+        allProps.add(DFS_NAMENODE_RPC_ADDRESS0_KEY);
+        break;
+      case NODEZERO:
+        allProps.add(DFS_NAMENODE_RPC_ADDRESS1_KEY);
+        break;
+    }
+    return allProps;
   }
 
   /**
@@ -1518,15 +1656,62 @@ public class AvatarNode extends NameNode
     throw new IOException(message);
   }
 
+  private static String getWildcardDir(String instance, Configuration conf,
+      String dirKey) {
+    String dir = conf.get(dirKey);
+    dir = dir.replaceAll(FSConstants.DFS_NAMENODE_NAME_DIR_WILDCARD,
+        instance);
+    return dir;
+  }
+
+  /**
+   * When avatarone and avatarzero both write to the filer in the case where the
+   * filer is not the shared directory (when we use QJM). We need both the nodes
+   * to write to different directories. For this purpose we configure
+   * dfs.name.dir and dfs.name.edits.dir as follows
+   *
+   * <property>
+   * <name>dfs.name.dir</name>
+   * <value>/hadoop/<cluster>/,/mnt/fsimage/<cluster>/%</value>
+   * </property>
+   *
+   * Then depending upon the instance we replace '%' with zero or one in this
+   * function to ensure both nodes write to different locations.
+   */
+  private static void processNameDirectories(Configuration conf,
+      InstanceId instanceId) {
+    if (instanceId == InstanceId.NODEONE || instanceId == InstanceId.NODEZERO) {
+      String instance = (instanceId == InstanceId.NODEZERO) ? "zero" : "one";
+
+      // Edits directory.
+      String editDirs = getWildcardDir(instance, conf,
+          FSConstants.DFS_NAMENODE_EDITS_DIR_KEY);
+      conf.set(FSConstants.DFS_NAMENODE_EDITS_DIR_KEY, editDirs);
+
+      // Image directory.
+      String imageDirs = getWildcardDir(instance, conf,
+          FSConstants.DFS_NAMENODE_NAME_DIR_KEY);
+      conf.set(FSConstants.DFS_NAMENODE_NAME_DIR_KEY, imageDirs);
+    }
+  }
+
   public static AvatarNode createAvatarNode(String argv[],
                                             Configuration conf,
                                             RunInfo runInfo) throws IOException {
     if (conf == null) {
       conf = new Configuration();
     }
+
+
     Configuration startupConf = conf;   // save configuration at startup
     StartupInfo startInfo = parseArguments(argv);
     StartupOption startOpt = startInfo.startOpt;
+
+    if (startInfo.instance != null) {
+      processNameDirectories(conf, startInfo.instance);
+      processNameDirectories(startupConf, startInfo.instance);
+    }
+
     if (startOpt == null) {
       printUsage();
       return null;
@@ -1547,10 +1732,8 @@ public class AvatarNode extends NameNode
     // is the one registered with the zookeeper
     // and if the node is starting as standby there has to be a master
     // already so that the node doesn't move the log and the image
-    InetSocketAddress defaultAddr = NameNode.getClientProtocolAddress(startupConf);
-    String fsname = defaultAddr.getHostName() + ":" + defaultAddr.getPort();
-    InetSocketAddress actualAddr = NameNode.getClientProtocolAddress(conf);
-    String actualName = actualAddr.getHostName() + ":" + actualAddr.getPort();
+    String fsname = startupConf.get(NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY);
+    String actualName = conf.get(NameNode.DFS_NAMENODE_RPC_ADDRESS_KEY);
 
     String errorMsg = null;
     String zkRegistry = AvatarNodeZkUtil.getPrimaryRegistration(startupConf, startupConf, fsname);
@@ -1596,7 +1779,7 @@ public class AvatarNode extends NameNode
     InetSocketAddress nameNodeAddr = null;
     if (startInfo.isStandby) {
       nameNodeAddr = getRemoteNamenodeAddress(conf, startInfo.instance);
-      LOG.info("Connecting to the primary namenode: " + nameNodeAddr);
+      FLOG.info("Connecting to the primary namenode: " + nameNodeAddr);
       primaryNamenode = (NamenodeProtocol) RPC.waitForProxy(
           NamenodeProtocol.class, NamenodeProtocol.versionID, nameNodeAddr,
           conf);
@@ -1708,9 +1891,10 @@ public class AvatarNode extends NameNode
       
       // connect to primary
       String fsName = getRemoteNamenodeHttpName(conf, startInfo.instance);
-      NNStorage tempStorage = new NNStorage(newconf,
+      
+      FSImage tempImage = new FSImage(newconf,
           NNStorageConfiguration.getNamespaceDirs(newconf),
-          NNStorageConfiguration.getNamespaceEditsDirs(newconf));
+          NNStorageConfiguration.getNamespaceEditsDirs(newconf), null);
       
       // will block until Primary has left the safemode
       CheckpointSignature cs = getCheckpointSignature(primaryNamenode);
@@ -1723,40 +1907,48 @@ public class AvatarNode extends NameNode
      
       if (isFile(ownSharedImage)) {
         File destFile = new File (ownSharedImage.getPath());
-        StandbyStorageRetentionManager.backupFiles(localFs, destFile, conf);
+        NNStorageDirectoryRetentionManager.backupFiles(localFs, destFile, conf);
       }
       if (isFile(ownSharedEdits)) {
         File destFile = new File (ownSharedEdits.getPath());
-        StandbyStorageRetentionManager.backupFiles(localFs, destFile, newconf);
+        NNStorageDirectoryRetentionManager.backupFiles(localFs, destFile, newconf);
       }
 
       // setup storage
+      NNStorage tempStorage = tempImage.storage;
       tempStorage.format();
       tempStorage.setStorageInfo(cs);
       tempStorage.writeAll();
+      tempImage.editLog.transitionNonFileJournals(tempStorage, false,
+          Transition.FORMAT, null);
+      tempImage.transitionNonFileImages(tempStorage, false, Transition.FORMAT);
+      
+      // we need to become the active writer to upload image successfully to
+      // non-file images storage
+      tempImage.editLog.recoverUnclosedStreams();
 
       // Download the image to all storage directories
-      LOG.info("Downloading image to all storage directories.");
-      MD5Hash digest = downloadImageToStorage(fsName, lastCheckpointTxId, tempStorage);
+      FLOG.info("Downloading image to all storage directories.");
+      MD5Hash digest = downloadImageToStorage(fsName, lastCheckpointTxId, tempImage);
       List<StorageDirectory> badSds = new ArrayList<StorageDirectory>();
       tempStorage.checkpointUploadDone(lastCheckpointTxId, digest);
-      LOG.info("Downloading image to all storage directories. DONE");
-      FSImage.saveDigestAndRenameCheckpointImage(lastCheckpointTxId, digest,
-          tempStorage);
-      tempStorage.reportErrorsOnDirectories(badSds);
-      tempStorage.close(); 
+      FLOG.info("Downloading image to all storage directories. DONE");
+      tempImage.saveDigestAndRenameCheckpointImage(lastCheckpointTxId, digest);
+      tempStorage.reportErrorsOnDirectories(badSds, tempImage);
+      tempStorage.close();
+      tempImage.close();
     }
     return newconf;
   }
   
   private static MD5Hash downloadImageToStorage(String fsName,
-      long lastCheckpointTxId, NNStorage tempStorage) throws IOException {
+      long lastCheckpointTxId, FSImage tempImage) throws IOException {
     IOException e = null;
     for (int i = 0; i < 3; i++) {
       try {
         // disable throttling for image download
         return TransferFsImage.downloadImageToStorage(fsName,
-            lastCheckpointTxId, tempStorage, true, true);
+            lastCheckpointTxId, tempImage, true, true);
       } catch (SocketTimeoutException ex) {
         e = ex;
         LOG.info("Downloading image - socked timeout exception. Will retry...");
@@ -1842,21 +2034,22 @@ public class AvatarNode extends NameNode
     throws IOException {
     String fs = null;
     if (instance == InstanceId.NODEZERO) {
-      fs = conf.get(AvatarNode.DFS_NAMENODE_RPC_ADDRESS1_KEY);
+      fs = conf.get(DFS_NAMENODE_RPC_ADDRESS1_KEY);
       if (fs == null)
         fs = conf.get("fs.default.name1");
     } else if (instance == InstanceId.NODEONE) {
-      fs = conf.get(AvatarNode.DFS_NAMENODE_RPC_ADDRESS0_KEY);
+      fs = conf.get(DFS_NAMENODE_RPC_ADDRESS0_KEY);
       if (fs == null)
         fs = conf.get("fs.default.name0");
     } else {
       throw new IOException("Unknown instance " + instance);
     }
-    if (fs != null) {
-      conf = new Configuration(conf);
-      conf.set("fs.default.name", fs);
+    if(fs != null) {
+      Configuration newConf = new Configuration(conf);
+      newConf.set(FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY, fs);
+      conf = newConf;
     }
-    return NameNode.getAddress(conf);
+    return NameNode.getClientProtocolAddress(conf);
   }
 
   /**
@@ -2019,6 +2212,7 @@ public class AvatarNode extends NameNode
   /**
    */
   public static void main(String argv[]) throws Exception {
+    org.apache.hadoop.hdfs.DnsMonitorSecurityManager.setTheManager();
     Exception exception = null;
     AvatarNode avatarnode = null;
     RunInfo runInfo = new RunInfo();
@@ -2028,6 +2222,8 @@ public class AvatarNode extends NameNode
       exception = null;
       try {
         StringUtils.startupShutdownMessage(AvatarNode.class, argv, LOG);
+        FastWritableHDFS.init();
+        FastProtocolHDFS.init();
         avatarnode = createAvatarNode(argv, null, runInfo);
         if (avatarnode != null) {
           avatarnode.waitForRestart();

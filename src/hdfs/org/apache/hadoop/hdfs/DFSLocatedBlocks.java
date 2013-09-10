@@ -18,7 +18,9 @@
 package org.apache.hadoop.hdfs;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -31,18 +33,84 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
  */
 public class DFSLocatedBlocks extends LocatedBlocks {
 
+  static final int DEFAULT_BLOCK_EXPIRE_TIME = -1;
+  static final double DEFAULT_BLOCK_EXPIRE_RANDOM_FACTOR = 0.1d;
+
+  private final int blkLocInfoExpireTimeout;
   private volatile long fileLength = 0; // an optimization to get fileLength without locks
   private ReentrantReadWriteLock lock;
+  private Map<LocatedBlock, Long> blkLocInfoExpireMap;
+  private long timeBlkLocInfoExpire;
+  
+  /**
+   * Deprecate block location information that has lived for too long
+   */
+  public void blockLocationInfoExpiresIfNeeded() {
+    if (blkLocInfoExpireTimeout < 0) {
+      return;
+    }
+    long timeNow = System.currentTimeMillis();
+    if (timeBlkLocInfoExpire < timeNow) {
+      this.writeLock();
+      try {
+        long newTimeBlockExpire = Long.MAX_VALUE;
+        List<LocatedBlock> listToRemove = new ArrayList<LocatedBlock>();
+        for (LocatedBlock lb : blkLocInfoExpireMap.keySet()) {
+          long expireTime = blkLocInfoExpireMap.get(lb);
+          if (expireTime < timeNow) {
+            if (DFSClient.LOG.isDebugEnabled()) {
+              DFSClient.LOG.debug("Expire cached block location for " + lb);
+            }
+            listToRemove.add(lb);
+          } else if (expireTime < newTimeBlockExpire) {
+            newTimeBlockExpire = expireTime;
+          } else {
+          }
+        }
+        super.getLocatedBlocks().removeAll(listToRemove);
+        for (LocatedBlock lb : listToRemove) {
+          blkLocInfoExpireMap.remove(lb);
+        }
+        this.timeBlkLocInfoExpire = newTimeBlockExpire;
+      } finally {
+        this.writeUnlock();
+      }
+    }
+  }
+  
+  /**
+   * Initial the blockExpireMap, which keeps track of the expiration time of all
+   * block location info.
+   * 
+   * @param expireTime
+   *          time for the located block to expire
+   */
+  private void initBlkLocInfoExpireMap(long expireTime) {
+    if (blkLocInfoExpireTimeout < 0) {
+      return;
+    }
 
-  public DFSLocatedBlocks(LocatedBlocks lbs) {
+    this.blkLocInfoExpireMap = new HashMap<LocatedBlock, Long>(this
+        .getLocatedBlocks().size());
+    for (LocatedBlock lb : this.getLocatedBlocks()) {
+      blkLocInfoExpireMap.put(lb, expireTime);
+    }
+    timeBlkLocInfoExpire = expireTime;
+  }
+
+  public DFSLocatedBlocks(LocatedBlocks lbs, int blockExpireTimeout) {
     super(lbs.getFileLength(), lbs.getLocatedBlocks(), lbs.isUnderConstruction());
+    this.blkLocInfoExpireTimeout = blockExpireTimeout;
     this.fileLength = lbs.getFileLength();
     lock = new ReentrantReadWriteLock(true); // fair
+    initBlkLocInfoExpireMap(System.currentTimeMillis() + blockExpireTimeout);
   }
   
   public DFSLocatedBlocks(long flength, List<LocatedBlock> blks, boolean isUnderConstuction) {
     super(flength, blks, isUnderConstuction);
+    this.blkLocInfoExpireTimeout = DEFAULT_BLOCK_EXPIRE_TIME;
     this.fileLength = flength;
+    initBlkLocInfoExpireMap(System.currentTimeMillis() + blkLocInfoExpireTimeout);
   }
   
   /**
@@ -125,6 +193,16 @@ public class DFSLocatedBlocks extends LocatedBlocks {
       writeUnlock();
     }
   }
+  
+  @Override
+  public void setLastBlockSize(long blockId, long blockSize) {
+    writeLock();
+    try {
+      super.setLastBlockSize(blockId, blockSize);
+    } finally {
+      writeUnlock();
+    }
+  }
 
   public void insertRange(List<LocatedBlock> newBlocks) {
     if (newBlocks.isEmpty())
@@ -133,6 +211,25 @@ public class DFSLocatedBlocks extends LocatedBlocks {
     writeLock();
     try {
       super.insertRange(newBlocks);
+      Map<LocatedBlock, Long> newBlockExpireMap = new HashMap<LocatedBlock, Long>(
+          this.getLocatedBlocks().size());
+      long expireTime = System.currentTimeMillis() + blkLocInfoExpireTimeout;
+      long newTimeBlockExpire = expireTime;
+      for (LocatedBlock lb : this.getLocatedBlocks()) {
+        if (blkLocInfoExpireTimeout >= 0) {
+          if (blkLocInfoExpireMap.containsKey(lb)) {
+            long expireTimeForBlock = blkLocInfoExpireMap.get(lb);
+            newBlockExpireMap.put(lb, expireTimeForBlock);
+            if (expireTimeForBlock < newTimeBlockExpire) {
+              newTimeBlockExpire = expireTimeForBlock;
+            }
+          } else {
+            newBlockExpireMap.put(lb, expireTime);
+          }
+        }
+      }
+      this.blkLocInfoExpireMap = newBlockExpireMap;
+      this.timeBlkLocInfoExpire = newTimeBlockExpire;
     } finally {
       writeUnlock();
     }

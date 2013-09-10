@@ -40,12 +40,18 @@ public class PermissionChecker {
    * @param supergroup supergroup that the owner belongs to
    */
   public PermissionChecker(String owner, String supergroup
-      ) throws AccessControlException{
-    UserGroupInformation ugi = UserGroupInformation.getCurrentUGI();
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("ugi=" + ugi);
-    }
+  ) throws AccessControlException{
+    this(owner, supergroup, UserGroupInformation.getCurrentUGI());
+  }
 
+  /**
+   * Checks if the caller has the required permission.
+   * @param owner username of the owner
+   * @param supergroup supergroup that the owner belongs to
+   * @param ugi ugi of the caller
+   */
+  public PermissionChecker(String owner, String supergroup,
+      UserGroupInformation ugi) throws AccessControlException{
     if (ugi != null) {
       user = ugi.getUserName();
       groups.addAll(Arrays.asList(ugi.getGroupNames()));

@@ -19,9 +19,12 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.PriorityQueue;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.ExecutionException;
@@ -34,13 +37,21 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.qjournal.client.QuorumJournalManager;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants.Transition;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLogOp.Writer;
 import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
+import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.io.ArrayOutputStream;
 import org.apache.hadoop.util.InjectionHandler;
 
+import com.google.common.collect.ComparisonChain;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableListMultimap;
 import com.google.common.collect.Multimaps;
@@ -52,6 +63,22 @@ import com.google.common.collect.Multimaps;
  * synchronization.
  */
 public class JournalSet implements JournalManager {
+  
+  static final public Comparator<EditLogInputStream>
+  EDIT_LOG_INPUT_STREAM_COMPARATOR = new Comparator<EditLogInputStream>() {
+    @Override
+    public int compare(EditLogInputStream a, EditLogInputStream b) {
+      return ComparisonChain.start().
+        compare(a.getFirstTxId(), b.getFirstTxId()).
+        compare(b.getLastTxId(), a.getLastTxId()).
+        result();
+    }
+  };
+  
+  static final int NO_REDUNDANT_REQUIRED = 0;
+  
+  // buffer used for serializing operations when writing to journals
+  private final ArrayOutputStream tempWriteBuffer = new ArrayOutputStream(1024);
 
   static final Log LOG = LogFactory.getLog(FSEditLog.class);
   
@@ -61,6 +88,9 @@ public class JournalSet implements JournalManager {
   private int minimumNumberOfJournals;
   private int minimumNumberOfNonLocalJournals;
   private final NNStorage storage;
+  private final FSImage image;
+  
+  private final NameNodeMetrics metrics;
   
   /**
    * Container for a JournalManager paired with its currently
@@ -149,6 +179,14 @@ public class JournalSet implements JournalManager {
     public String toStringShort() {
       return journal.toString();
     }
+    
+    public String toHTMLString() {
+      return journal.toHTMLString();
+    }
+    
+    public String generateHTMLReport() {
+      return stream == null ? "" : stream.generateHtmlReport();
+    }
 
     void setCurrentStreamForTests(EditLogOutputStream stream) {
       this.stream = stream;
@@ -187,11 +225,13 @@ public class JournalSet implements JournalManager {
   
   private volatile boolean forceJournalCheck = false;
 
-  JournalSet(Configuration conf, NNStorage storage, int numJournals) {
-    minimumNumberOfJournals 
+  JournalSet(Configuration conf, FSImage image, NNStorage storage,
+      int numJournals, NameNodeMetrics metrics) {
+    minimumNumberOfJournals
       = conf.getInt("dfs.name.edits.dir.minimum", 1);
     minimumNumberOfNonLocalJournals 
       = conf.getInt("dfs.name.edits.dir.minimum.nonlocal", 0);
+    this.image = image;
     this.storage = storage;
     ThreadFactory namedThreadFactory =
         new ThreadFactoryBuilder()
@@ -199,6 +239,7 @@ public class JournalSet implements JournalManager {
             .build();
     this.executor = Executors.newFixedThreadPool(numJournals,
         namedThreadFactory);
+    this.metrics = metrics;
   }
   
   @Override
@@ -236,88 +277,178 @@ public class JournalSet implements JournalManager {
     }, "close journal");
     executor.shutdown();
   }
-
   
   /**
-   * Find the best editlog input stream to read from txid.
-   * If a journal throws an CorruptionException while reading from a txn id,
-   * it means that it has more transactions, but can't find any from fromTxId. 
-   * If this is the case and no other journal has transactions, we should throw
-   * an exception as it means more transactions exist, we just can't load them.
-   *
-   * @param fromTxnId Transaction id to start from.
-   * @return A edit log input stream with tranactions fromTxId 
-   *         or null if no more exist
+   * Selects input streams starting with fromTxnId from this journal set.
+   * First, we get the streams from all of our JournalManager objects.  
+   * Then we chain them (group them) into groups corresponding to log segments.
+   * Each group will be represented by a single redundant stream, with a 
+   * number of underlying streams (each from a single Journal Manager).
+   * 
+   * @param validateInProgressSegments - validate non-finalized segments
+   * @param fromTxnId the first transaction id we want to read
+   * @throws IOException
    */
   @Override
-  public EditLogInputStream getInputStream(long fromTxnId) throws IOException {
-    JournalManager bestjm = null;
-    long bestjmNumTxns = 0;
-    CorruptionException corruption = null;
-
+  synchronized public void selectInputStreams(
+      Collection<EditLogInputStream> streams, long fromTxId,
+      boolean inProgressOk, boolean validateInProgressSegments)
+      throws IOException {
+    selectInputStreams(streams, fromTxId, inProgressOk,
+        validateInProgressSegments, NO_REDUNDANT_REQUIRED);
+  }
+  
+  /**
+   * Selects input streams. Returns true if each stream meets min redundancy,
+   * false otherwise.
+   */
+  synchronized public boolean selectInputStreams(
+      Collection<EditLogInputStream> streams, long fromTxId,
+      boolean inProgressOk, boolean validateInProgressSegments,
+      int minRedundancy) throws IOException {
+    final PriorityQueue<EditLogInputStream> allStreams = 
+        new PriorityQueue<EditLogInputStream>(64,
+            EDIT_LOG_INPUT_STREAM_COMPARATOR);
     for (JournalAndStream jas : journals) {
-      JournalManager candidate = jas.getManager();
-      long candidateNumTxns = 0;
+      if (jas.isDisabled()) {
+        LOG.info("Skipping jas " + jas + " since it's disabled");
+        continue;
+      }
       try {
-        candidateNumTxns = candidate.getNumberOfTransactions(fromTxnId);
-      } catch (CorruptionException ce) {
-        corruption = ce;
+        jas.getManager().selectInputStreams(allStreams, fromTxId, inProgressOk,
+            validateInProgressSegments);
       } catch (IOException ioe) {
-        continue; // error reading disk, just skip
+        LOG.warn("Unable to determine input streams from " + jas.getManager()
+            + ". Skipping.", ioe);
+      }
+    }
+    return chainAndMakeRedundantStreams(streams, allStreams, fromTxId,
+        inProgressOk, minRedundancy);
+  }
+  
+  /**
+   * Check if any journal manager has unfinalized segments.
+   * @param fromTxId starting txid
+   */
+  synchronized boolean hasUnfinalizedSegments(long fromTxId) {
+    List<EditLogInputStream> streams = new ArrayList<EditLogInputStream>();
+    for (JournalAndStream jas : journals) {
+      if (jas.isDisabled()) {
+        continue;
+      }
+      try {
+        // get all streams, including inProgress ones.
+        jas.getManager().selectInputStreams(streams, fromTxId, true, false);
+        for (EditLogInputStream elis : streams) {
+          if (elis.isInProgress()) {
+            // we found an input stream that is in progress
+            return true;
+          }
+        }
+      } catch (IOException ioe) {
+        LOG.warn("Unable to determine input streams from " + jas.getManager()
+            + ". Skipping.", ioe);
+      }
+    }
+    // all streams are finalized
+    return false;
+  }
+  
+  /**
+   * Chain the input stream, by grouping them according to the start
+   * transaction id. For each group, create a redundant input stream.
+   * (Each log segment will have one redundant input stream, with
+   * multiple underlying actual stream.) Add the resulting redundant
+   * streams to allStreams
+   * 
+   * @param outStreams - input streams
+   * @param allStreams - result
+   * @param fromTxId - discard any older streams than from TxId
+   * @param inProgressOk - if true, add inProgress segments
+   * @param minRedundancy check if each stream is sufficiently redundant
+   * 
+   * @return true if redundancy is violated
+   */
+  public static boolean chainAndMakeRedundantStreams(
+      Collection<EditLogInputStream> outStreams,
+      PriorityQueue<EditLogInputStream> allStreams, long fromTxId,
+      boolean inProgressOk, int minRedundancy) throws IOException {
+    // We want to group together all the streams that start on the same start
+    // transaction ID.  To do this, we maintain an accumulator (acc) of all
+    // the streams we've seen at a given start transaction ID.  When we see a
+    // higher start transaction ID, we select a stream from the accumulator and
+    // clear it.  Then we begin accumulating streams with the new, higher start
+    // transaction ID.
+    LinkedList<EditLogInputStream> acc = new LinkedList<EditLogInputStream>();
+    EditLogInputStream elis;
+    boolean redundancyViolated = false;
+    
+    while ((elis = allStreams.poll()) != null) {
+      
+      // check if there is any inconsistency here
+      // at startup all segments should be finalized and recovered
+      // so we should fail if we get to this point at startup
+      if (!inProgressOk && elis.isInProgress()) {
+        LOG.fatal("Found in progress stream");
+        throw new IOException("In progress streams not allowed");
       }
       
-      // find the journal with most transactions
-      // resolve ties by preferring local journals
-      if (candidateNumTxns > bestjmNumTxns
-          || (candidateNumTxns > 0 && 
-              candidateNumTxns == bestjmNumTxns && 
-              isLocalJournal(candidate) &&
-              !isLocalJournal(bestjm))) {
-        bestjm = candidate;
-        bestjmNumTxns = candidateNumTxns;
-      }
-    }
-    
-    if (bestjm == null) {
-      if (corruption != null) {
-        throw new IOException("No non-corrupt logs for txid " 
-                                        + fromTxnId, corruption);
+      if (acc.isEmpty()) {
+        acc.add(elis);
       } else {
-        return null;
+        long accFirstTxId = acc.get(0).getFirstTxId();
+        if (accFirstTxId == elis.getFirstTxId()) {
+          if ((elis.getLastTxId() > acc.get(0).getLastTxId())
+              || (elis.getLastTxId() == acc.get(0).getLastTxId() && isLocalJournal(elis
+                  .getJournalManager()))) {
+            // prefer local journals for reading
+            // or journals with more transactions
+            // this can happen only when tailing in progress logs
+            acc.add(0, elis);
+          } else {
+            acc.add(elis);
+          }
+        } else if (accFirstTxId < elis.getFirstTxId()) {
+          // check acc for min Redundancy
+          if (minRedundancy > 0 && acc.size() < minRedundancy) {
+            // we have fewer copies than required
+            // on startup, we want to force to save the namespace
+            redundancyViolated = true;
+          }
+          outStreams.add(new RedundantEditLogInputStream(acc, fromTxId,
+              inProgressOk));
+          acc.clear();
+          acc.add(elis);
+        } else if (accFirstTxId > elis.getFirstTxId()) {
+          throw new RuntimeException("sorted set invariants violated!  " +
+              "Got stream with first txid " + elis.getFirstTxId() +
+              ", but the last firstTxId was " + accFirstTxId);
+        }
       }
     }
-    return bestjm.getInputStream(fromTxnId);
+    if (!acc.isEmpty()) {
+      // check acc for min Redundancy
+      if (minRedundancy > 0 && acc.size() < minRedundancy) {
+        // we have fewer copies than required
+        // on startup, we want to force to save the namespace
+        redundancyViolated = true;
+      }
+      outStreams.add(new RedundantEditLogInputStream(acc, fromTxId,
+          inProgressOk));
+      acc.clear();
+    }
+    return redundancyViolated;
   }
-  
-  @Override
-  public EditLogInputStream getInputStream(long fromTxnId,
-      boolean validateInProgressSegments) throws IOException {
-    throw new IOException("Operation not supported");
-  }
-  
+
   /**
    * Check if the given journal is local.
    */
-  private boolean isLocalJournal(JournalManager jm) {
-    if (!(jm instanceof FileJournalManager)) {
+  private static boolean isLocalJournal(JournalManager jm) {
+    if (jm == null || (!(jm instanceof FileJournalManager))) {
       return false;
     }
     return NNStorage.isPreferred(StorageLocationType.LOCAL,
         ((FileJournalManager) jm).getStorageDirectory());
-  }
-  
-  @Override
-  public long getNumberOfTransactions(long fromTxnId) throws IOException {
-    long num = 0;
-    for (JournalAndStream jas: journals) {
-      if (jas.isActive()) {
-        long newNum = jas.getManager().getNumberOfTransactions(fromTxnId);
-        if (newNum > num) {
-          num = newNum;
-        }
-      }
-    }
-    return num;
   }
 
   /**
@@ -355,8 +486,19 @@ public class JournalSet implements JournalManager {
       // report errors on storage directories as well for FJMs
       if (j.journal instanceof FileJournalManager) {
         FileJournalManager fjm = (FileJournalManager) j.journal;
-        storage.reportErrorsOnDirectory(fjm.getStorageDirectory());
+        // pass image to handle image managers
+        storage.reportErrorsOnDirectory(fjm.getStorageDirectory(), image);
       }
+
+      // report error on shared journal/image managers
+      if (j.journal instanceof ImageManager) {
+        ImageManager im = (ImageManager) j.journal;
+        im.setImageDisabled(true);
+      }
+    }
+    // update image manager metrics
+    if (image != null) {
+      image.updateImageMetrics();
     }
     checkJournals(status);
   }
@@ -445,8 +587,8 @@ public class JournalSet implements JournalManager {
   /**
    * Get the number of available journals.
    */
-  private void updateJournalMetrics() {
-    if (storage == null) {
+  void updateJournalMetrics() {
+    if (metrics == null) {
       return;
     }
     int failedJournals = 0;
@@ -455,7 +597,14 @@ public class JournalSet implements JournalManager {
         failedJournals++;
       }
     }
-    storage.updateJournalMetrics(failedJournals);
+    metrics.journalsFailed.set(failedJournals);
+  }
+  
+  /**
+   * Returns number of all journals (enabled and disabled).
+   */
+  protected int getNumberOfJournals() {
+    return journals.size();
   }
   
   /**
@@ -485,6 +634,7 @@ public class JournalSet implements JournalManager {
           + minimumNumberOfJournals + " current: " + journalsAvailable
           + ", non-local: " 
           + minimumNumberOfNonLocalJournals + " current: " + nonLocalJournalsAvailable;
+      LOG.error(message);
       throw new IOException(message);
     }
     return journalsAvailable;
@@ -502,6 +652,15 @@ public class JournalSet implements JournalManager {
     return false;
   }
   
+  protected void updateNamespaceInfo(StorageInfo si) {
+    for (JournalAndStream jas : journals) {
+      JournalManager jm = jas.getManager();
+      if (jm instanceof QuorumJournalManager) {
+        ((QuorumJournalManager)jm).updateNamespaceInfo(si);
+      }
+    }
+  }
+  
   /**
    * An implementation of EditLogOutputStream that applies a requested method on
    * all the journals that are currently active.
@@ -514,15 +673,36 @@ public class JournalSet implements JournalManager {
 
     @Override
     public void write(final FSEditLogOp op)
+        throws IOException {    
+      // serialize operation first
+      Writer.writeOp(op, tempWriteBuffer);
+      writeRawOp(tempWriteBuffer.getBytes(), 0, tempWriteBuffer.size(), op.txid);
+    }
+    
+    @Override
+    public void writeRawOp(final byte[] data, final int offset,
+        final int length, final long txid) throws IOException {
+      mapJournalsAndReportErrors(new JournalClosure() {
+        @Override
+        public void apply(JournalAndStream jas) throws IOException {
+          if (jas.isActive()) {
+            jas.getCurrentStream().writeRawOp(data, offset, length, txid);
+          }
+        }
+      }, "write raw op");
+    }
+    
+    @Override
+    public void writeRaw(final byte[] data, final int offset, final int length)
         throws IOException {
       mapJournalsAndReportErrors(new JournalClosure() {
         @Override
         public void apply(JournalAndStream jas) throws IOException {
           if (jas.isActive()) {
-            jas.getCurrentStream().write(op);
+            jas.getCurrentStream().writeRaw(data, offset, length);
           }
         }
-      }, "write op");
+      }, "write bytes");
     }
 
     @Override
@@ -570,12 +750,12 @@ public class JournalSet implements JournalManager {
     }
 
     @Override
-    protected void flushAndSync() throws IOException {
+    protected void flushAndSync(final boolean durable) throws IOException {
       mapJournalsAndReportErrorsParallel(new JournalClosure() {
         @Override
         public void apply(JournalAndStream jas) throws IOException {
           if (jas.isActive()) {
-            jas.getCurrentStream().flushAndSync();
+            jas.getCurrentStream().flushAndSync(durable);
           }
         }
       }, "flushAndSync");
@@ -638,6 +818,10 @@ public class JournalSet implements JournalManager {
     return jList;
   }
 
+  FSImage getImage() {
+    return image;
+  }
+
   void add(JournalManager j, boolean required, boolean shared, boolean remote) {
     JournalAndStream jas = new JournalAndStream(j, required, shared, remote);
     journals.add(jas);
@@ -672,6 +856,18 @@ public class JournalSet implements JournalManager {
   }
 
   @Override
+  public void setCommittedTxId(final long txid, final boolean force)
+      throws IOException {
+    mapJournalsAndReportErrors(new JournalClosure() {
+      @Override
+      public void apply(JournalAndStream jas) throws IOException {
+        jas.getManager().setCommittedTxId(txid, force);
+      }
+    }, "txid " + txid + " " + force);
+  }
+
+  
+  @Override
   public void recoverUnfinalizedSegments() throws IOException {
     mapJournalsAndReportErrorsParallel(new JournalClosure() {
       @Override
@@ -693,16 +889,14 @@ public class JournalSet implements JournalManager {
     // Collect RemoteEditLogs available from each FileJournalManager
     List<RemoteEditLog> allLogs = new ArrayList<RemoteEditLog>();
     for (JournalAndStream j : journals) {
-      if (j.getManager() instanceof FileJournalManager) {
-        FileJournalManager fjm = (FileJournalManager)j.getManager();
-        try {
-          allLogs.addAll(fjm.getEditLogManifest(fromTxId).getLogs());
-        } catch (Throwable t) {
-          LOG.warn("Cannot list edit logs in " + fjm, t);
-        }
+      JournalManager jm = j.getManager();
+      try {
+        allLogs.addAll(jm.getEditLogManifest(fromTxId).getLogs());
+      } catch (Throwable t) {
+        LOG.warn("Cannot list edit logs in " + jm, t);
       }
     }
-    
+
     // Group logs by their starting txid
     ImmutableListMultimap<Long, RemoteEditLog> logsByStartTxId =
       Multimaps.index(allLogs, RemoteEditLog.GET_START_TXID);
@@ -736,6 +930,8 @@ public class JournalSet implements JournalManager {
       logs.add(bestLog);
       // And then start looking from after that point
       curStartTxId = bestLog.getEndTxId() + 1;
+      if (curStartTxId == 0)
+        break;
     }
     RemoteEditLogManifest ret = new RemoteEditLogManifest(logs);
     
@@ -759,33 +955,103 @@ public class JournalSet implements JournalManager {
     }
     return buf.toString();
   }
-
-  @Override
-  public boolean isSegmentInProgress(long startTxId) throws IOException {
-    throw new UnsupportedOperationException();
-  }
   
   @Override
-  public void format(StorageInfo nsInfo) throws IOException {
+  public void transitionJournal(StorageInfo nsInfo, Transition transition,
+      StartupOption startOpt) throws IOException {
     // The iteration is done by FSEditLog itself
     throw new UnsupportedOperationException();
   }
   
   /**
-   * Format the non-file journals.
+   * Transition the non-file journals.
    */
-  public void formatNonFileJournals(StorageInfo nsInfo) throws IOException {
+  public void transitionNonFileJournals(StorageInfo nsInfo, boolean checkEmpty,
+      Transition transition, StartupOption startOpt)
+      throws IOException {
     for (JournalManager jm : getJournalManagers()) {
       if (!(jm instanceof FileJournalManager)) {
-        jm.format(nsInfo);
+        if (checkEmpty && jm.hasSomeJournalData()) {
+          LOG.warn("Journal " + jm + " is not empty.");
+          continue;
+        }
+        LOG.info(transition + ": " + jm);
+        jm.transitionJournal(nsInfo, transition, startOpt);
       }
     }
   }
   
   @Override
-  public boolean hasSomeData() throws IOException {
+  public boolean hasSomeJournalData() throws IOException {
     // This is called individually on the underlying journals,
     // not on the JournalSet.
+    throw new UnsupportedOperationException();
+  }
+  
+  @Override
+  public boolean hasSomeImageData() throws IOException {
+    // This is called individually on the underlying journals,
+    // not on the JournalSet.
+    throw new UnsupportedOperationException();
+  }
+  
+  /**
+   * Get input stream from the given journal starting at txid.
+   * Does not perform validation of the streams.
+   * 
+   * This should only be used for tailing inprogress streams!!!
+   */
+  public static EditLogInputStream getInputStream(JournalManager jm, long txid)
+      throws IOException {
+    List<EditLogInputStream> streams = new ArrayList<EditLogInputStream>();
+    jm.selectInputStreams(streams, txid, true, false);
+    if (streams.size() < 1) {
+      throw new IOException("Cannot obtain stream for txid: " + txid);
+    }
+    Collections.sort(streams, JournalSet.EDIT_LOG_INPUT_STREAM_COMPARATOR);
+    
+    // we want the "oldest" available stream
+    if (txid == HdfsConstants.INVALID_TXID) {
+      return streams.get(0);
+    }
+    
+    // we want a specific stream
+    for (EditLogInputStream elis : streams) {
+      if (elis.getFirstTxId() == txid) {
+        return elis;
+      }
+    }
+    // we cannot obtain the stream
+    throw new IOException("Cannot obtain stream for txid: " + txid);
+  }
+  
+  @Override
+  public String toHTMLString() {
+    return this.toString();
+  }
+
+  @Override
+  public boolean hasImageStorage() {
+    // we handle all journals in FSImage, withouth employing JournalSet
+    throw new UnsupportedOperationException();
+  }
+  
+  /**
+   * Return all non-file journal managers.
+   */
+  public List<JournalManager> getNonFileJournalManagers() {
+    List<JournalManager> list = new ArrayList<JournalManager>();
+    for (JournalManager jm : getJournalManagers()) {
+      if (!(jm instanceof FileJournalManager)) {
+        list.add(jm);
+      }
+    }
+    return list;
+  }
+
+  @Override
+  public RemoteStorageState analyzeJournalStorage() {
+    // this is done directly in FSImage
     throw new UnsupportedOperationException();
   }
 }

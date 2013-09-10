@@ -408,7 +408,7 @@ public class Decoder {
               -1, -1, numReadBytes, numReadBytesRemoteRack,
               (fixSource ? srcFile : parityFile), errorOffset,
               LOGTYPES.OFFLINE_RECONSTRUCTION_SIMULATION, 
-              (fixSource ? srcFs : parityFs), null, context);
+              (fixSource ? srcFs : parityFs), null, context, -1);
           
           if (context != null) {
             context.getCounter(RaidCounter.BLOCK_FIX_SIMULATION_FAILED).increment(1L);
@@ -642,7 +642,7 @@ public class Decoder {
                 erasedLocations.size(), numReadBytes, numReadBytesRemoteRack,
                 (fixSource ? srcFile : parityFile), errorOffset,
                 LOGTYPES.OFFLINE_RECONSTRUCTION_TOO_MANY_CORRUPTIONS, 
-                (fixSource ? srcFs : parityFs), e, context);
+                (fixSource ? srcFs : parityFs), e, context, -1);
             throw e;
           } else if (e instanceof StripeMismatchException) {
             LogUtils.logRaidReconstructionMetrics(LOGRESULTS.FAILURE, 0, codec,
@@ -650,7 +650,7 @@ public class Decoder {
                 erasedLocations.size(), -1, numReadBytes, numReadBytesRemoteRack,
                 (fixSource ? srcFile : parityFile), errorOffset,
                 LOGTYPES.OFFLINE_RECONSTRUCTION_STRIPE_VERIFICATION, 
-                (fixSource ? srcFs : parityFs), e, context);
+                (fixSource ? srcFs : parityFs), e, context, -1);
             throw e;
           }
           // Re-create inputs from the new erased locations.
@@ -669,7 +669,7 @@ public class Decoder {
           erasedLocations.size(), numReadBytes, numReadBytesRemoteRack,
           (fixSource ? srcFile : parityFile), errorOffset,
           LOGTYPES.OFFLINE_RECONSTRUCTION_BLOCK, 
-          (fixSource ? srcFs : parityFs), null, context);
+          (fixSource ? srcFs : parityFs), null, context, -1);
       return written; 
     } finally {
       numMissingBlocksInStripe = erasedLocations.size();
@@ -734,7 +734,11 @@ public class Decoder {
     }
 
     public void run() {
-      code.decodeBulk(readBufs, writeBufs, erasedLocations, startIdx, count);
+      try {
+        code.decodeBulk(readBufs, writeBufs, erasedLocations, startIdx, count);
+      } catch (IOException e) {
+        LOG.error("Encountered Exception in DecodeBulk: ", e);
+      }
     }
   }
 
@@ -991,7 +995,7 @@ public class Decoder {
         long delay = System.currentTimeMillis() - startTime;
         LogUtils.logRaidReconstructionMetrics(LOGRESULTS.FAILURE, 0, codec, delay,
             decodingTime, erasedLocations.size(), dfsNumRead, -1, srcFile, errorOffset,
-            LOGTYPES.ONLINE_RECONSTRUCTION, srcFs, e, null);
+            LOGTYPES.ONLINE_RECONSTRUCTION, srcFs, e, null, -1);
         throw e;
       }
     }
@@ -1055,7 +1059,7 @@ public class Decoder {
         LogUtils.logRaidReconstructionMetrics(LOGRESULTS.SUCCESS, constructedBytes,
             codec, System.currentTimeMillis() - startTime, decodingTime,
             erasedLocations.size(), dfsNumRead, -1, srcFile, errorOffset,
-            LOGTYPES.ONLINE_RECONSTRUCTION, srcFs, null, null);
+            LOGTYPES.ONLINE_RECONSTRUCTION, srcFs, null, null, -1);
       }
       if (parallelReader != null) {
         parallelReader.shutdown();

@@ -22,15 +22,19 @@ import java.util.LinkedList;
 import java.util.Iterator;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.text.SimpleDateFormat;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.conf.Configuration;
+
 
 /**
  * Used to manage the corona releases
@@ -63,7 +67,7 @@ public class CoronaReleaseManager extends Thread {
    */
   public static final String RELEASE_TAG_FILE = "RELEASE_COPY_DONE";
   private static final Log LOG = LogFactory.getLog(CoronaReleaseManager.class);
-
+ 
   /** releaseDir is the original string for the release dir.
    *  The directory retrieved from releasePath may not be the same as
    *  the one specified in the classpath, for example .././
@@ -90,8 +94,10 @@ public class CoronaReleaseManager extends Thread {
     long releaseTimestamp;
     LinkedList<JobID> jobids;
     boolean latest;
+    byte[] fingerPrint;
 
-    CoronaRelease(Path copiedPath, long releaseTimestamp, JobID jobid) {
+    CoronaRelease(Path copiedPath, long releaseTimestamp, JobID jobid, 
+                           byte[] fingerPrint) {
       this.copiedPath = copiedPath;
       this.releaseTimestamp = releaseTimestamp;
       this.latest = true;
@@ -99,6 +105,23 @@ public class CoronaReleaseManager extends Thread {
       if (jobid != null) {
         jobids.add(jobid);
       }
+      this.fingerPrint = fingerPrint;
+    }
+    
+    boolean checkIntegrity(byte[] fp) {
+      if (fingerPrint == null ||
+          fp == null ||
+          fingerPrint.length != fp.length) {
+        return false;
+      }
+      
+      for (int i = 0; i < fp.length; ++ i) {
+        if (fingerPrint[i] != fp[i]) {
+          return false;
+        }
+      }
+      
+      return true;
     }
   }
 
@@ -216,6 +239,7 @@ public class CoronaReleaseManager extends Thread {
     }
 
     long currentTimeStamp = getLastTimeStamp();
+    CoronaRelease curCR = null;
     synchronized (releaseList) {
       // check if the most current one loaded
       for (CoronaRelease cr: releaseList) {
@@ -234,6 +258,19 @@ public class CoronaReleaseManager extends Thread {
             LOG.info("Get existing release " + cr.copiedPath +
               " for " + jobid);
           }
+          // check the finger print of copied path in case some body
+          // delete the file in it
+          byte [] fingerPrint = getFingerPrint(cr.copiedPath);
+          if (fingerPrint == null) {
+            LOG.error("Unable to get the finger print " + cr.copiedPath);
+            return null;
+          }
+          if (!cr.checkIntegrity(fingerPrint)) {
+            LOG.error("The finger print of " + cr.copiedPath +
+                " is not correct.");
+            curCR = cr;
+            break;
+          }
           return cr.copiedPath.toString();
         }
       }
@@ -241,9 +278,20 @@ public class CoronaReleaseManager extends Thread {
       Path newWorkingPath = new Path(workingPath, 
         formatter.format(currentTimeStamp));
       LOG.info("Copy the latest release to " + newWorkingPath);
-      if (copyRelease(releasePath, newWorkingPath, true)) {
+      if (copyRelease(releasePath, newWorkingPath, true, true)) {
+        byte [] fingerPrint = getFingerPrint(newWorkingPath);
+        if (fingerPrint == null) {
+          LOG.error("Unable to get the finger print " + newWorkingPath);
+          return null;
+        }
+        
+        if (curCR != null) {
+          curCR.fingerPrint = fingerPrint;
+          return curCR.copiedPath.toString();
+        }
+        
         CoronaRelease cr = new CoronaRelease(newWorkingPath,
-          currentTimeStamp, jobid);
+          currentTimeStamp, jobid, fingerPrint);
         for (CoronaRelease tmpcr: releaseList) {
           tmpcr.latest = false;
         }
@@ -350,7 +398,7 @@ public class CoronaReleaseManager extends Thread {
 
   /** For every jar files from the source, create a link in the dest
    */
-  private boolean copyRelease(Path src, Path dest, boolean isTop) {
+  private boolean copyRelease(Path src, Path dest, boolean isTop, boolean isForced) {
     try {
 
       if (!fs.exists(dest)) {
@@ -359,7 +407,7 @@ public class CoronaReleaseManager extends Thread {
           return false;
         }
       } else {
-        if (isTop) {
+        if (isTop && !isForced) {
           Path donePath = new Path(dest, RELEASE_TAG_FILE);
           if (fs.exists(donePath)) {
             LOG.info(donePath + " exists. There is no need to copy again");
@@ -383,7 +431,7 @@ public class CoronaReleaseManager extends Thread {
           }
         } else {
           Path destPath = new Path(dest, srcPath.getName());
-          if (!copyRelease(srcPath, destPath, false)) {
+          if (!copyRelease(srcPath, destPath, false, isForced)) {
             LOG.error("Unable to create link for " + srcPath.toString() +
               " as " + destPath.toString());
             return false;
@@ -412,5 +460,42 @@ public class CoronaReleaseManager extends Thread {
       return false;
     }
     return true;
+  }
+  
+  private byte [] getFingerPrint(Path path)
+  {
+    MessageDigest messageDigest;
+    try {
+      messageDigest = MessageDigest.getInstance("MD5");
+      
+      long currentTime = System.currentTimeMillis();
+      computeFingerPrint("", path, messageDigest);
+      long endTime = System.currentTimeMillis();
+      LOG.info((endTime-currentTime) + " ms spent to get finger print");
+      
+      return messageDigest.digest();
+    } catch (NoSuchAlgorithmException e) {
+      return null;
+    }
+  }
+  
+  private void computeFingerPrint(String parent, Path path, MessageDigest messageDigest) {
+    try {
+      for (FileStatus fileStat: fs.listStatus(path)) {
+        Path srcPath = fileStat.getPath();
+        if (!fileStat.isDir()) {
+          String fileName = srcPath.getName();
+          if (!fileName.equals(RELEASE_TAG_FILE)) {
+            String finger = parent + fileName + fileStat.getModificationTime();
+            messageDigest.update(finger.getBytes("UTF-8"));
+          }
+        } else {
+          computeFingerPrint(parent + srcPath.getName(), srcPath, messageDigest);
+        }
+      }
+    } catch (IOException ioe) {
+      LOG.error("IOException when compute finger print " +
+          path.toString(), ioe);
+    }
   }
 }

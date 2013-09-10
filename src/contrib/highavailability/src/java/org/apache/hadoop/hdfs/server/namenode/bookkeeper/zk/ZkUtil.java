@@ -18,6 +18,12 @@
 package org.apache.hadoop.hdfs.server.namenode.bookkeeper.zk;
 
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.Path;
+import org.apache.zookeeper.KeeperException;
+
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -27,6 +33,8 @@ import java.util.List;
  * https://github.com/facebook/jcommon/blob/master/zookeeper/src/main/java/com/facebook/zookeeper/ZkUtil.java
  */
 public class ZkUtil {
+
+  private static final Log LOG = LogFactory.getLog(ZkUtil.class);
 
   /**
    * Don't allow construction of this class
@@ -57,4 +65,57 @@ public class ZkUtil {
     }
     return lockChildren;
   }
+
+  public static String joinPath(String parent, String child) {
+    return parent + Path.SEPARATOR + child;
+  }
+
+  /**
+   * Interrupt the thread and then log and re-throw an InterruptedException
+   * as an IOException.
+   * @param msg The message to log and include when re-throwing
+   * @param e The actual exception instances
+   * @throws IOException
+   */
+  public static void interruptedException(String msg, InterruptedException e)
+      throws IOException {
+    Thread.currentThread().interrupt();
+    LOG.error(msg, e);
+    throw new IOException(msg, e);
+  }
+
+  /**
+   * Like {@link #interruptedException(String, InterruptedException)} but
+   * handles KeeperException and will not interrupt the thread.
+   */
+  public static void keeperException(String msg, KeeperException e)
+      throws IOException {
+    LOG.error(msg, e);
+    throw new IOException(msg, e);
+  }
+
+  /**
+   * Recursively deletes a ZNode (i.e., delete all the ZNode's children and
+   * then deletes the ZNode itself). Equivalent to 'rmr' command in
+   * ZooKeeper CLI.
+   *
+   * @param zk ZooKeeper instance
+   * @param path Path to delete
+   * @throws IOException If there is an error recursively deleting a ZNode
+   */
+  public static void deleteRecursively(ZooKeeperIface zk, String path)
+      throws IOException {
+    try {
+      List<String> children = zk.getChildren(path, false);
+      for (String child : children) {
+        deleteRecursively(zk, joinPath(path, child));
+      }
+      zk.delete(path, -1);
+    } catch (KeeperException e) {
+      keeperException("Unrecoverable ZooKeeper error deleting " + path, e);
+    } catch (InterruptedException e) {
+      interruptedException("Interrupted deleting " + path, e);
+    }
+  }
+
 }

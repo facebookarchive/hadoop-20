@@ -45,7 +45,9 @@ import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
 import org.apache.hadoop.hdfs.server.common.Storage;
+import org.apache.hadoop.hdfs.server.common.StorageErrorReporter;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.common.UpgradeManager;
 import org.apache.hadoop.hdfs.server.common.Util;
@@ -61,7 +63,7 @@ import org.apache.hadoop.io.MD5Hash;
  * NNStorage is responsible for management of the StorageDirectories used by
  * the NameNode.
  */
-public class NNStorage extends Storage implements Closeable {
+public class NNStorage extends Storage implements Closeable, StorageErrorReporter {
   public static final Log LOG = LogFactory.getLog(NNStorage.class.getName());
 
   public static final String MESSAGE_DIGEST_PROPERTY = "imageMD5Digest";
@@ -116,7 +118,7 @@ public class NNStorage extends Storage implements Closeable {
    * or of type EDITS which stores edits or of type IMAGE_AND_EDITS which
    * stores both fsimage and edits.
    */
-  static enum NameNodeDirType implements StorageDirType {
+  public static enum NameNodeDirType implements StorageDirType {
     UNDEFINED,
     IMAGE,
     EDITS,
@@ -184,11 +186,6 @@ public class NNStorage extends Storage implements Closeable {
     setStorageDirectories(imageDirs, 
                           new ArrayList<URI>(editsDirs), locationMap);
     this.conf = conf;
-  }
-  
-  public NNStorage(Configuration conf, Collection<URI> imageDirs, 
-      Collection<URI> editsDirs) throws IOException {
-    this(conf, imageDirs, editsDirs, null);
   }
   
   public Collection<StorageDirectory> getStorageDirs() {
@@ -278,9 +275,6 @@ public class NNStorage extends Storage implements Closeable {
               + sd.getRoot().getAbsolutePath(), e);
         }
       }
-      
-      // update metrics for number of available directories
-      updateImageMetrics();
     }
   }
 
@@ -337,9 +331,6 @@ public class NNStorage extends Storage implements Closeable {
             dirType, locationMap == null ? null : locationMap.get(dirName)));
       }
     }
-    
-    // initialize metrics for image directories
-    updateImageMetrics();
     
     // Add edits dirs if they are different from name dirs
     for (URI dirName : fsEditsDirs) {
@@ -522,7 +513,8 @@ public class NNStorage extends Storage implements Closeable {
    * checkpoint. See TestNameEditsConfigs.testNameEditsConfigsFailure()
    * @param txid the txid that has been reached
    */
-  public void writeTransactionIdFileToStorage(long txid) throws IOException {
+  public void writeTransactionIdFileToStorage(long txid, FSImage image)
+      throws IOException {
     // Write txid marker in all storage directories
     List<StorageDirectory> badSDs = new ArrayList<StorageDirectory>();
     for (StorageDirectory sd : storageDirs) {
@@ -535,7 +527,10 @@ public class NNStorage extends Storage implements Closeable {
         badSDs.add(sd);
       }
     }
-    reportErrorsOnDirectories(badSDs);
+    reportErrorsOnDirectories(badSDs, image);
+    if (image != null) {
+      
+    }
   }
 
   /**
@@ -609,7 +604,7 @@ public class NNStorage extends Storage implements Closeable {
   /** Create new dfs name directory.  Caution: this destroys all files
    * in this filesystem. */
   private void format(StorageDirectory sd) throws IOException {
-    sd.clearDirectory(); // create currrent dir
+    sd.clearDirectory(); // create current dir
     sd.write();
     writeTransactionIdFile(sd, -1);
 
@@ -724,7 +719,7 @@ public class NNStorage extends Storage implements Closeable {
                          NameNodeFile.IMAGE_NEW.getName(), txid);
   }
   
-  static File getCheckpointImageFile(StorageDirectory sd, long txid) {
+  public static File getCheckpointImageFile(StorageDirectory sd, long txid) {
     return new File(sd.getCurrentDir(),
         getCheckpointImageFileName(txid));
   }
@@ -734,7 +729,7 @@ public class NNStorage extends Storage implements Closeable {
                          NameNodeFile.IMAGE.getName(), txid);
   }
   
-  static File getImageFile(StorageDirectory sd, long txid) {
+  public static File getImageFile(StorageDirectory sd, long txid) {
     return new File(sd.getCurrentDir(),
         getImageFileName(txid));
   }
@@ -937,11 +932,17 @@ public class NNStorage extends Storage implements Closeable {
    * @param sds A list of storage directories to mark as errored.
    * @throws IOException
    */
-  void reportErrorsOnDirectories(List<StorageDirectory> sds) 
-      throws IOException {
+  synchronized void reportErrorsOnDirectories(List<StorageDirectory> sds,
+      FSImage image) throws IOException {
     for (StorageDirectory sd : sds) {
-      reportErrorsOnDirectory(sd);
+      reportErrorsOnDirectory(sd, image);
     }
+    
+    // check image managers (this will update image metrics)
+    if (image != null) {
+      image.checkImageManagers();
+    }
+    
     // only check if something was wrong
     if(!sds.isEmpty()) {
       if (this.getNumStorageDirs() == 0)  
@@ -961,10 +962,11 @@ public class NNStorage extends Storage implements Closeable {
    * @param sd A storage directory to mark as errored.
    * @throws IOException
    */
-  void reportErrorsOnDirectory(StorageDirectory sd) {
+  synchronized void reportErrorsOnDirectory(StorageDirectory sd, 
+      FSImage image) {
     String lsd = listStorageDirectories();
     LOG.info("reportErrorsOnDirectory: Current list of storage dirs:" + lsd);
-    
+
     LOG.error("reportErrorsOnDirectory: Error reported on storage directory "
         + sd.getRoot());
 
@@ -978,19 +980,19 @@ public class NNStorage extends Storage implements Closeable {
       }
       this.removedStorageDirs.add(sd);
     }
+    if (image != null) {
+      image.reportErrorsOnImageManager(sd);
+    }
     
     lsd = listStorageDirectories();
     LOG.info("reportErrorsOnDirectory: Current list of storage dirs:" + lsd);
-    
-    // update metrics for number of available directories
-    updateImageMetrics();
   }
   
   /**
    * Report that an IOE has occurred on some file which may
    * or may not be within one of the NN image storage directories.
    */
-  void reportErrorOnFile(File f) {
+  public void reportErrorOnFile(File f) {
     // We use getAbsolutePath here instead of getCanonicalPath since we know
     // that there is some IO problem on that drive.
     // getCanonicalPath may need to call stat() or readlink() and it's likely
@@ -1002,7 +1004,7 @@ public class NNStorage extends Storage implements Closeable {
         dirPath += "/";
       }
       if (absPath.startsWith(dirPath)) {
-        reportErrorsOnDirectory(sd);
+        reportErrorsOnDirectory(sd, null);
         return;
       }
     }
@@ -1130,37 +1132,105 @@ public class NNStorage extends Storage implements Closeable {
     }
   }
   
+  public static boolean recoverDirectory(StorageDirectory sd,
+      StartupOption startOpt, StorageState curState, boolean checkImport)
+      throws IOException {
+    boolean isFormatted = false;
+    // sd is locked but not opened
+    switch (curState) {
+    case NON_EXISTENT:
+      // name-node fails if any of the configured storage dirs are missing
+      throw new InconsistentFSStateException(sd.getRoot(),
+          "storage directory does not exist or is not accessible.");
+    case NOT_FORMATTED:
+      break;
+    case NORMAL:
+      break;
+    default: // recovery is possible
+      sd.doRecover(curState);
+    }
+    if (curState != StorageState.NOT_FORMATTED
+        && startOpt != StartupOption.ROLLBACK) {
+      // read and verify consistency with other directories
+      sd.read();
+      isFormatted = true;
+    }
+    if (checkImport && startOpt == StartupOption.IMPORT && isFormatted)
+      // import of a checkpoint is allowed only into empty image directories
+      throw new IOException("Cannot import image from a checkpoint. "
+          + " NameNode already contains an image in " + sd.getRoot());
+    return isFormatted;
+  }
+
+  public static void finalize(StorageDirectory sd, int layoutVersion,
+      long cTime) throws IOException {
+    File prevDir = sd.getPreviousDir();
+    if (!prevDir.exists()) { // already discarded
+      LOG.info("Directory " + prevDir + " does not exist.");
+      LOG.info("Finalize upgrade for " + sd.getRoot() + " is not required.");
+      return;
+    }
+    LOG.info("Finalizing upgrade for storage directory "
+        + sd.getRoot()
+        + "."
+        + (layoutVersion == 0 ? "" : "\n   cur LV = " + layoutVersion
+            + "; cur CTime = " + cTime));
+    assert sd.getCurrentDir().exists() : "Current directory must exist.";
+    final File tmpDir = sd.getFinalizedTmp();
+    // rename previous to tmp and remove
+    NNStorage.rename(prevDir, tmpDir);
+    NNStorage.deleteDir(tmpDir);
+    LOG.info("Finalize upgrade for " + sd.getRoot() + " is complete.");
+  }
+
+  public static boolean canRollBack(StorageDirectory sd, Storage storage)
+      throws IOException {
+    File prevDir = sd.getPreviousDir();
+    if (!prevDir.exists()) { // use current directory then
+      LOG.info("Storage directory " + sd.getRoot()
+          + " does not contain previous fs state.");
+      // read and verify consistency with other directories
+      sd.read();
+      return false;
+    }
+
+    // read and verify consistency of the prev dir
+    sd.read(sd.getPreviousVersionFile());
+
+    if (storage.getLayoutVersion() != FSConstants.LAYOUT_VERSION) {
+      throw new IOException("Cannot rollback to storage version "
+          + storage.getLayoutVersion()
+          + " using this version of the NameNode, which uses storage version "
+          + FSConstants.LAYOUT_VERSION + ". "
+          + "Please use the previous version of HDFS to perform the rollback.");
+    }
+    return true;
+  }
+
+  public static void doRollBack(StorageDirectory sd, Storage storage)
+      throws IOException {
+    File prevDir = sd.getPreviousDir();
+    if (!prevDir.exists())
+      return;
+
+    LOG.info("Rolling back storage directory " + sd.getRoot()
+        + ".\n   new LV = " + storage.getLayoutVersion() + "; new CTime = "
+        + storage.getCTime());
+    File tmpDir = sd.getRemovedTmp();
+    assert !tmpDir.exists() : "removed.tmp directory must not exist.";
+    // rename current to tmp
+    File curDir = sd.getCurrentDir();
+    assert curDir.exists() : "Current directory must exist.";
+    NNStorage.rename(curDir, tmpDir);
+    // rename previous to current
+    NNStorage.rename(prevDir, curDir);
+
+    // delete tmp dir
+    NNStorage.deleteDir(tmpDir);
+    LOG.info("Rollback of " + sd.getRoot() + " is complete.");
+  }
+
   Configuration getConf() {
     return conf;
-  }
-  
-  /**
-   * Count available storage directories, and update namenode
-   * metrics.
-   */
-  void updateImageMetrics() {
-    if (metrics == null) {
-      return;
-    }
-    int failedImageDirs = 0;
-    for (StorageDirectory sd : removedStorageDirs) {
-      // a single directory can be of both types
-      if (sd.getStorageDirType().isOfType(NameNodeDirType.IMAGE)) {
-        failedImageDirs++;
-      }
-    }
-    
-    // update only images, journals are handled in JournalSet
-    metrics.imagesFailed.set(failedImageDirs);
-  }
-  
-  /**
-   * Update journal metrics.
-   */
-  void updateJournalMetrics(int journalsFailed) {
-    if (metrics == null) {
-      return;
-    }
-    metrics.journalsFailed.set(journalsFailed);
   }
 }

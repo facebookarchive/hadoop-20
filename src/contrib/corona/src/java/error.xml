@@ -8,6 +8,10 @@
     <pattern>Killing high-memory.*</pattern>
     <description>TaskTrackerMemoryManager kills the task for exceeding memory limit</description>
   </error>
+  <error name="Killing CGroup_high_memory">
+    <pattern>Killing CGroup_high_memory.*</pattern>
+    <description>CGroupMemoryWatcher kills the task for exceeding memory limit</description>
+  </error>
   <error name="Hive Runtime Error">
     <pattern>.*Hive Runtime Error while processing row.*</pattern>
     <description>Error from processing a row in Hive</description>
@@ -31,6 +35,10 @@
   <error name="Error launching task">
     <pattern>Error launching task.*</pattern>
     <description>TaskTracker cannot localize and launch the task</description>
+  </error>
+  <error name="TaskTracker is dead">
+    <pattern>TaskTracker is dead.*</pattern>
+    <description>TaskTracker is dead</description>
   </error>
   <error name="Java heap space OOM">
     <pattern>Error: java.lang.OutOfMemoryError.*</pattern>

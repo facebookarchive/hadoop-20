@@ -116,6 +116,7 @@ public class FileStatusExtended extends FileStatus implements Writable {
   @Override
   public String toString() {
     return "FileStatusExtended [blocks=" + Arrays.toString(blocks)
-        + ", leaseHolder=" + leaseHolder + "] " + super.toString();
+        + ", leaseHolder=" + leaseHolder + ", hardlinkId =" + hardlinkId + "]"
+        + super.toString();
   }
 }

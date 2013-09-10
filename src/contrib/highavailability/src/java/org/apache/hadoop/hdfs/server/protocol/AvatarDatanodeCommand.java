@@ -37,8 +37,17 @@ public class AvatarDatanodeCommand extends DatanodeCommand {
     public void readFields(DataInput in) {}
     public void write(DataOutput out) {}
   }
+  
+  static class PrepareFailover extends DatanodeCommand {
+    private PrepareFailover() {
+      super(DatanodeProtocols.DNA_PREPAREFAILOVER);
+    }
+    public void readFields(DataInput in) {}
+    public void write(DataOutput out) {}
+  }
 
   public static final DatanodeCommand BACKOFF = new Backoff();
   public static final DatanodeCommand CLEARPRIMARY = new ClearPrimary();
+  public static final DatanodeCommand PREPAREFAILOVER = new PrepareFailover();
 }
 

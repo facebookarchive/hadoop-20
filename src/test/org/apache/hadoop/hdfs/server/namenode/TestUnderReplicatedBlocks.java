@@ -30,7 +30,7 @@ public class TestUnderReplicatedBlocks extends TestCase {
     final short REPLICATION_FACTOR = 2;
     final String FILE_NAME = "/testFile";
     final Path FILE_PATH = new Path(FILE_NAME);
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, REPLICATION_FACTOR+1, true, null);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, REPLICATION_FACTOR + 2, true, null);
     try {
       // create a file with one block with a replication factor of 2
       final FileSystem fs = cluster.getFileSystem();
@@ -43,8 +43,16 @@ public class TestUnderReplicatedBlocks extends TestCase {
       Block b = DFSTestUtil.getFirstBlock(fs, FILE_PATH);
       DatanodeDescriptor dn = namesystem.blocksMap.nodeIterator(b).next();
       namesystem.addToInvalidates(b, dn, true);
-      namesystem.blocksMap.removeNode(b, dn);
       
+      // remove and shutdown datanode so it's not chosen for replication
+      namesystem.removeDatanode(dn);
+      for(DataNode d : cluster.getDataNodes()) {
+        if (d.getPort() == dn.getPort()) {
+          d.shutdown();
+        }
+      }
+      
+      LOG.info("Setting replication for the file");
       // increment this file's replication factor
       FsShell shell = new FsShell(conf);
       assertEquals(0, shell.run(new String[]{

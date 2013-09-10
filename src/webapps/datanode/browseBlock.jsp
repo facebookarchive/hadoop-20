@@ -11,7 +11,7 @@
   import="org.apache.hadoop.hdfs.protocol.*"
   import="org.apache.hadoop.io.*"
   import="org.apache.hadoop.conf.*"
-  import="org.apache.hadoop.net.DNS"
+  import="org.apache.hadoop.net.NetUtils"
   import="org.apache.hadoop.util.*"
   import="java.text.DateFormat"
 %>
@@ -98,8 +98,8 @@
       dfs.namenode.getBlockLocations(filename, 0, Long.MAX_VALUE).getLocatedBlocks();
     //Add the various links for looking at the file contents
     //URL for downloading the full file
-    String downloadUrl = "http://" + req.getServerName() + ":" +
-                         + req.getServerPort() + "/streamFile?" + "filename="
+    String downloadUrl = "http://" + NetUtils.toIpPort(req.getLocalAddr(), req.getServerPort()) + 
+    					 "/streamFile?" + "filename="
                          + URLEncoder.encode(filename, "UTF-8")
                          + JspHelper.getUrlParam(JspHelper.NAMENODE_ADDRESS, nnAddr);
     out.print("<a name=\"viewOptions\"></a>");
@@ -116,10 +116,8 @@
       dfs.close();
       return;
     }
-    String fqdn = 
-           InetAddress.getByName(chosenNode.getHost()).getCanonicalHostName();
-    String tailUrl = "http://" + fqdn + ":" +
-                     chosenNode.getInfoPort() + 
+ 
+    String tailUrl = "http://" + NetUtils.toIpPort(chosenNode.getHost(), chosenNode.getInfoPort()) + 
                  "/tail.jsp?filename=" + URLEncoder.encode(filename, "UTF-8") +
                  "&namenodeInfoPort=" + namenodeInfoPort +
                  "&chunkSizeToView=" + chunkSizeToView +
@@ -168,9 +166,7 @@
         datanodePort = Integer.parseInt(datanodeAddr.substring(
                                         datanodeAddr.indexOf(':') + 1, 
                                     datanodeAddr.length())); 
-        fqdn = InetAddress.getByName(locs[j].getHost()).getCanonicalHostName();
-        String blockUrl = "http://"+ fqdn + ":" +
-                        locs[j].getInfoPort() +
+        String blockUrl = "http://"+ NetUtils.toIpPort(locs[j].getHost(), locs[j].getInfoPort()) + 
                         "/browseBlock.jsp?blockId=" + Long.toString(blockId) +
                         "&blockSize=" + blockSize +
                "&filename=" + URLEncoder.encode(filename, "UTF-8")+ 
@@ -186,10 +182,8 @@
     }
     out.println("</table>");
     out.print("<hr>");
-    String namenodeHost = namenodeAddress.getHostName();
-    out.print("<br><a href=\"http://" + 
-              InetAddress.getByName(namenodeHost).getCanonicalHostName() + ":" +
-              namenodeInfoPort + "/dfshealth.jsp\">Go back to DFS home</a>");
+    out.print("<br><a href=\"http://" + NetUtils.toIpPort(namenodeAddress.getAddress().getHostAddress(), namenodeInfoPort) +
+    		 "/dfshealth.jsp\">Go back to DFS home</a>");
     dfs.close();
   }
 
@@ -265,8 +259,7 @@
     String parent = new File(filename).getParent();
     JspHelper.printGotoForm(out, namenodeInfoPort, parent, nnAddr);
     out.print("<hr>");
-    out.print("<a href=\"http://" + req.getServerName() + ":" + 
-              req.getServerPort() + 
+    out.print("<a href=\"http://" + NetUtils.toIpPort(req.getLocalAddr(), req.getServerPort()) + 
               "/browseDirectory.jsp?dir=" + 
               URLEncoder.encode(parent, "UTF-8") +
               "&namenodeInfoPort=" + namenodeInfoPort +
@@ -290,7 +283,7 @@
     long nextBlockSize = 0;
     String nextBlockIdStr = null;
     String nextGenStamp = null;
-    String nextHost = req.getServerName();
+    String nextHost = req.getLocalAddr();
     int nextPort = req.getServerPort();
     int nextDatanodePort = datanodePort;
     //determine data for the next link
@@ -312,7 +305,7 @@
                                       datanodeAddr.substring(
                                            datanodeAddr.indexOf(':') + 1, 
                                       datanodeAddr.length())); 
-            nextHost = InetAddress.getByName(d.getHost()).getCanonicalHostName();
+            nextHost = InetAddress.getByName(d.getHost()).getHostAddress();
             nextPort = d.getInfoPort(); 
           }
         }
@@ -327,8 +320,7 @@
     }
     String nextUrl = null;
     if (nextBlockIdStr != null) {
-      nextUrl = "http://" + nextHost + ":" + 
-                nextPort + 
+      nextUrl = "http://" + NetUtils.toIpPort(nextHost, nextPort) + 
                 "/browseBlock.jsp?blockId=" + nextBlockIdStr +
                 "&blockSize=" + nextBlockSize + "&startOffset=" + 
                 nextStartOffset + 
@@ -345,7 +337,7 @@
     String prevGenStamp = null;
     long prevStartOffset = 0;
     long prevBlockSize = 0;
-    String prevHost = req.getServerName();
+    String prevHost = req.getLocalAddr();
     int prevPort = req.getServerPort();
     int prevDatanodePort = datanodePort;
     if (startOffset == 0) {
@@ -367,7 +359,7 @@
                                       datanodeAddr.substring(
                                           datanodeAddr.indexOf(':') + 1, 
                                       datanodeAddr.length())); 
-            prevHost = InetAddress.getByName(d.getHost()).getCanonicalHostName();
+            prevHost = InetAddress.getByName(d.getHost()).getHostAddress();
             prevPort = d.getInfoPort();
           }
         }
@@ -384,8 +376,7 @@
 
     String prevUrl = null;
     if (prevBlockIdStr != null) {
-      prevUrl = "http://" + prevHost + ":" + 
-                prevPort + 
+      prevUrl = "http://" + NetUtils.toIpPort(prevHost, prevPort) + 
                 "/browseBlock.jsp?blockId=" + prevBlockIdStr + 
                 "&blockSize=" + prevBlockSize + "&startOffset=" + 
                 prevStartOffset + 
@@ -401,7 +392,7 @@
     out.print("<textarea cols=\"100\" rows=\"25\" wrap=\"virtual\" style=\"width:100%\" READONLY>");
     try {
     jspHelper.streamBlockInAscii(
-            new InetSocketAddress(req.getServerName(), datanodePort), namespaceId, blockId, 
+            new InetSocketAddress(req.getLocalAddr(), datanodePort), namespaceId, blockId, 
             genStamp, blockSize, startOffset, chunkSizeToView, out);
     } catch (Exception e){
         out.print(e);

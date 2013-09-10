@@ -22,6 +22,9 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.util.List;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
@@ -30,28 +33,34 @@ import org.apache.hadoop.io.WritableFactory;
  * Collection of blocks with their locations, the file length, and
  * namenode meta info like data transfer version number and namespace id
  */
-public class LocatedBlocksWithMetaInfo extends VersionedLocatedBlocks {
+// DO NOT remove final without consulting {@link WrapperWritable#create(V object)}
+@ThriftStruct
+public final class LocatedBlocksWithMetaInfo extends VersionedLocatedBlocks {
   private int namespaceid = -1; // the namespace id that the file belongs to\0
   private int methodFingerPrint;
 
   LocatedBlocksWithMetaInfo() {
   }
-  
-  public LocatedBlocksWithMetaInfo(long flength, List<LocatedBlock> blks,
-      boolean isUnderConstruction, int dataProtocolVersion,
-      int namespaceid, int methodFingerPrint) {
-    super(flength, blks, isUnderConstruction, dataProtocolVersion);
-    this.namespaceid = namespaceid;
+
+  @ThriftConstructor
+  public LocatedBlocksWithMetaInfo(@ThriftField(1) long fileLength,
+      @ThriftField(2) List<LocatedBlock> locatedBlocks, @ThriftField(3) boolean isUnderConstuction,
+      @ThriftField(4) int dataProtocolVersion, @ThriftField(5) int namespaceId,
+      @ThriftField(6) int methodFingerPrint) {
+    super(fileLength, locatedBlocks, isUnderConstuction, dataProtocolVersion);
+    this.namespaceid = namespaceId;
     this.methodFingerPrint = methodFingerPrint;
   }
-  
+
   /**
    * Get namespace id
    */
+  @ThriftField(5)
   public int getNamespaceID() {
     return this.namespaceid;
   }
 
+  @ThriftField(6)
   public int getMethodFingerPrint() {
     return methodFingerPrint;
   }

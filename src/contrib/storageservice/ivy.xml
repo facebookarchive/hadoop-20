@@ -1,0 +1,117 @@
+<?xml version="1.0" ?>
+<ivy-module version="1.0">
+  <info organisation="org.apache.hadoop" module="${ant.project.name}">
+    <license name="Apache 2.0"/>
+    <ivyauthor name="Apache Hadoop Team" url="http://hadoop.apache.org"/>
+    <description>
+      Apache Hadoop contrib
+    </description>
+  </info>
+  <configurations defaultconfmapping="default">
+    <!--these match the Maven configurations-->
+    <conf name="default" extends="master,runtime"/>
+    <conf name="master" description="contains the artifact but no dependencies"/>
+    <conf name="runtime" description="runtime but not the artifact" />
+    <conf name="common" visibility="private"
+      description="artifacts needed to compile/test the application"/>
+  </configurations>
+
+  <publications>
+    <!--get the artifact from our module name-->
+    <artifact conf="master"/>
+  </publications>
+  <dependencies>
+    <dependency org="junit"
+      name="junit"
+      rev="${junit.version}"
+      conf="common->default"/>
+    <dependency org="com.google.guava"
+      name="guava"
+      rev="${guava.version}"
+      conf="common->master"/>
+    <dependency org="io.netty"
+      name="netty"
+      rev="${netty.version}"
+      conf="common->default"/>
+    <dependency org="commons-logging"
+      name="commons-logging"
+      rev="${commons-logging.version}"
+      conf="common->default"/>
+
+    <!-- swift -->
+    <dependency org="com.facebook.swift"
+      name="swift-codec"
+      rev="${swift.version}"
+      conf="common->default"/>
+    <dependency org="com.facebook.swift"
+      name="swift-service"
+      rev="${swift.version}"
+      conf="common->default"/>
+    <dependency org="com.facebook.swift"
+      name="swift-annotations"
+      rev="${swift.version}"
+      conf="common->default"/>
+
+    <!-- runtime dependencies for junit -->
+    <dependency org="commons-httpclient"
+      name="commons-httpclient"
+      rev="${commons-httpclient.version}"
+      conf="common->master"/>
+    <dependency org="commons-logging"
+      name="commons-logging"
+      rev="${commons-logging.version}"
+      conf="common->default"/>
+    <dependency org="log4j"
+      name="log4j"
+      rev="${log4j.version}"
+      conf="common->master"/>
+    <dependency org="org.mortbay.jetty"
+      name="servlet-api-2.5"
+      rev="${servlet-api-2.5.version}"
+      conf="common->default"/>
+    <dependency org="commons-logging"
+      name="commons-logging"
+      rev="${commons-logging.version}"
+      conf="common->master"/>
+    <dependency org="commons-logging"
+      name="commons-logging-api"
+      rev="${commons-logging-api.version}"
+      conf="common->default"/>
+    <dependency org="org.slf4j"
+      name="slf4j-api"
+      rev="${slf4j-api.version}"
+      conf="common->default"/>
+    <dependency org="org.slf4j"
+      name="slf4j-log4j12"
+      rev="${slf4j-log4j12.version}"
+      conf="common->master"/>
+    <dependency org="xmlenc"
+      name="xmlenc"
+      rev="${xmlenc.version}"
+      conf="common->default"/>
+    <dependency org="org.mortbay.jetty"
+      name="servlet-api-2.5"
+      rev="${servlet-api-2.5.version}"
+      conf="common->default"/>
+    <dependency org="org.eclipse.jdt"
+      name="core"
+      rev="${core.version}"
+      conf="common->default"/>
+    <dependency org="org.json"
+      name="json"
+      rev="${json.version}"
+      conf="common->default"/>
+    <dependency org="org.mockito"
+      name="mockito-all"
+      rev="${mockito-all.version}"
+      conf="common->master"/>
+    <dependency org="org.codehaus.jackson"
+      name="jackson-mapper-asl"
+      rev="1.7.9"
+      conf="common->default"/>
+    <dependency org="org.apache.bookkeeper"
+      name="bookkeeper-server"
+      rev="${bookkeeper-server.version}"
+      conf="common->default"/>
+  </dependencies>
+</ivy-module>

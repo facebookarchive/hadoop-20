@@ -19,6 +19,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
+import java.io.File;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.List;
 
@@ -38,6 +39,7 @@ import org.apache.hadoop.conf.ReconfigurationException;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.net.Node; 
 
 public class TestNameNodeReconfigure {
@@ -76,7 +78,6 @@ public class TestNameNodeReconfigure {
   private MiniDFSCluster cluster;
   private FileSystem fs;
 
-  @Before
   public void setUp() throws IOException {
     Configuration conf = new Configuration();
     cluster = new MiniDFSCluster(conf, 3, true, null);
@@ -90,6 +91,7 @@ public class TestNameNodeReconfigure {
   @Test
   public void testChangeBlockPlacementPolicy()
     throws IOException, ReconfigurationException {
+    setUp();
     AtomicInteger callCounter = new AtomicInteger(0);
     MockPlacementPolicy.setCallCounter(callCounter);
 
@@ -171,7 +173,9 @@ public class TestNameNodeReconfigure {
    * Test that we can modify configuration properties.
    */
   @Test
-  public void testReconfigure() throws ReconfigurationException {
+  public void testReconfigure() throws IOException,
+         ReconfigurationException {
+    setUp();
     // change properties
     cluster.getNameNode().reconfigureProperty("dfs.heartbeat.interval",
                                               "" + 6);
@@ -241,9 +245,33 @@ public class TestNameNodeReconfigure {
                 cluster.getNameNode().namesystem.getPermissionAuditLog());
   }
 
+  /**
+   * Test that includes/excludes will be ignored
+   * if dfs.ignore.missing.include.files is set 
+   */
+  @Test
+  public void testIncludesExcludesConfigure() throws IOException {
+    String inFile = "/tmp/inFileNotExists";
+    String exFile = "/tmp/exFileNotExists";
+    File include = new File(inFile);
+    File exclude = new File(exFile);
+    include.delete();
+    exclude.delete();
+    assertFalse(include.exists());
+    assertFalse(exclude.exists());
+
+    Configuration conf = new Configuration();
+    conf.set("dfs.hosts.ignoremissing", "true");
+    conf.set(FSConstants.DFS_HOSTS, inFile);
+    conf.set("dfs.hosts.exclude", exFile);
+    cluster = new MiniDFSCluster(conf, 3, true, null);
+  }
+
   @After
   public void shutDown() throws IOException {
-    fs.close();
+    if (fs != null) {
+      fs.close();
+    }
 
     if (cluster != null) {
       cluster.shutdown();

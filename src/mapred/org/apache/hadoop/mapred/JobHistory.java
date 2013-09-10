@@ -119,7 +119,7 @@ public class JobHistory {
   /**
    * A filter for conf files
    */  
-  private static final PathFilter CONF_FILTER = new PathFilter() {
+  protected static final PathFilter CONF_FILTER = new PathFilter() {
     public boolean accept(Path path) {
       return path.getName().endsWith("_conf.xml");
     }
@@ -161,11 +161,11 @@ public class JobHistory {
   }
 
 
-  private static Map<JobID, MovedFileInfo> jobHistoryFileMap =
+  protected static Map<JobID, MovedFileInfo> jobHistoryFileMap =
     Collections.<JobID,MovedFileInfo>synchronizedMap(
         new LinkedHashMap<JobID, MovedFileInfo>());
 
-  private static class MovedFileInfo {
+  protected static class MovedFileInfo {
     private final String historyFile;
     private final long timestamp;
     public MovedFileInfo(String historyFile, long timestamp) {
@@ -193,19 +193,20 @@ public class JobHistory {
    */
   public static class JobHistoryFilesManager {
     // a private (virtual) folder for all the files related to a running job
-    private static class FilesHolder {
+    protected static class FilesHolder {
       ArrayList<PrintWriter> writers = new ArrayList<PrintWriter>();
       Path historyFilename; // path of job history file
       Path confFilename; // path of job's conf
     }
 
-    private ThreadPoolExecutor ioExecutor = null;
-    private ThreadPoolExecutor executor = null;
-    private final Configuration conf;
-    private final JobHistoryObserver jobTracker;
-    private int maxThreads;
-    private FileSystem logFs, doneFs;
-    private Path logDir, doneDir;
+    protected ThreadPoolExecutor ioExecutor = null;
+    protected ThreadPoolExecutor executor = null;
+    protected final Configuration conf;
+    protected final JobHistoryObserver jobTracker;
+    protected int maxThreads;
+    protected FileSystem logFs;
+    protected FileSystem doneFs;
+    protected Path logDir, doneDir;
 
    // cache from job-key to files associated with it.
     private Map<JobID, FilesHolder> fileCache = 
@@ -296,6 +297,11 @@ public class JobHistory {
       fileCache.remove(id);
     }
 
+    /**
+     * Moves job history and configuration files to done location
+     * @param id job, which files are to be moved
+     * @param sync whether move files synchronously or in detached thread
+     */
     void moveToDone(final JobID id, boolean sync) {
       final List<Path> paths = new ArrayList<Path>();
       final Path historyFile = getHistoryFile(id);
@@ -319,8 +325,13 @@ public class JobHistory {
           try {
             List<PrintWriter> writers = getWriters(id);
             synchronized (writers) {
-              while (writers.size() > 0) {
-                writers.wait();
+              if (writers.size() > 0) {
+                // try to wait writers for 10 minutes 
+                writers.wait(600000L);
+              }
+              
+              if (writers.size() > 0) {
+                LOG.warn("Failed to wait for writers to finish in 10 minutes.");
               }
             }
 

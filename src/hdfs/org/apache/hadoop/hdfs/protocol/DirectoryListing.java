@@ -19,7 +19,12 @@ package org.apache.hadoop.hdfs.protocol;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.List;
 
+import com.facebook.swift.codec.ThriftConstructor;
+import com.facebook.swift.codec.ThriftField;
+import com.facebook.swift.codec.ThriftStruct;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
@@ -28,6 +33,7 @@ import org.apache.hadoop.io.WritableFactory;
  * This class defines a partial listing of a directory to support
  * iterative directory listing.
  */
+@ThriftStruct
 public class DirectoryListing implements Writable {
   static {                                      // register a ctor
     WritableFactories.setFactory
@@ -64,6 +70,17 @@ public class DirectoryListing implements Writable {
     this.remainingEntries = remainingEntries;
   }
 
+  /** Shallow copy constructor */
+  public <V extends DirectoryListing> DirectoryListing(V other) {
+    this(other.getPartialListing(), other.getRemainingEntries());
+  }
+
+  @ThriftConstructor
+  public DirectoryListing(@ThriftField(1) List<HdfsFileStatus> fileStatusList,
+      @ThriftField(2) int remainingEntries) {
+    this(fileStatusList.toArray(new HdfsFileStatus[fileStatusList.size()]), remainingEntries);
+  }
+
   /**
    * Get the partial listing of file status
    * @return the partial listing of file status
@@ -71,11 +88,17 @@ public class DirectoryListing implements Writable {
   public HdfsFileStatus[] getPartialListing() {
     return partialListing;
   }
-  
+
+  @ThriftField(1)
+  public List<HdfsFileStatus> getFileStatusList() {
+    return Arrays.asList(partialListing);
+  }
+
   /**
    * Get the number of remaining entries that are left to be listed
    * @return the number of remaining entries that are left to be listed
    */
+  @ThriftField(2)
   public int getRemainingEntries() {
     return remainingEntries;
   }

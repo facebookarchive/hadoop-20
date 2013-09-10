@@ -38,9 +38,12 @@ import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.raid.StripeStore.StripeInfo;
 import org.apache.hadoop.util.Progressable;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
+
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.ThreadFactory;
 import java.util.zip.CRC32;
 
 public class ReedSolomonDecoder extends Decoder {
@@ -100,7 +103,10 @@ public class ReedSolomonDecoder extends Decoder {
 
     // Allows network reads to go on while decode is going on.
     int boundedBufferCapacity = 2;
-    parallelDecoder = Executors.newFixedThreadPool(parallelism);
+    ThreadFactory reedSolomonDecoderFactory = new ThreadFactoryBuilder()
+      .setNameFormat("ReedSolomonDecoder-%d")
+      .build();
+    parallelDecoder = Executors.newFixedThreadPool(parallelism, reedSolomonDecoderFactory);
     ParallelStreamReader parallelReader = new ParallelStreamReader(
       reporter, inputs, bufSize, parallelism, boundedBufferCapacity, blockSize);
     parallelReader.start();
@@ -364,4 +370,5 @@ public class ReedSolomonDecoder extends Decoder {
       }
     }
   }
+  
 }
