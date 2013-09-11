@@ -319,8 +319,13 @@ public class JobHistory {
           try {
             List<PrintWriter> writers = getWriters(id);
             synchronized (writers) {
-              while (writers.size() > 0) {
-                writers.wait();
+              if (writers.size() > 0) {
+                // try to wait writers for 10 minutes 
+                writers.wait(600000L);
+              }
+              
+              if (writers.size() > 0) {
+                LOG.warn("Failed to wait for writers to finish in 10 minutes.");
               }
             }
 

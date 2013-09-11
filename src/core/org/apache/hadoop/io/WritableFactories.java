@@ -39,9 +39,16 @@ public class WritableFactories {
   public static synchronized WritableFactory getFactory(Class c) {
     return CLASS_TO_FACTORY.get(c);
   }
+  
+  /** Create a new instance of a class with a defined factory. */
+  public static Writable newInstance(Class<? extends Writable> c,
+      Configuration conf) {
+    return newInstance(c, conf, true);
+  }
 
   /** Create a new instance of a class with a defined factory. */
-  public static Writable newInstance(Class<? extends Writable> c, Configuration conf) {
+  public static Writable newInstance(Class<? extends Writable> c,
+      Configuration conf, boolean supportJobConf) {
     WritableFactory factory = WritableFactories.getFactory(c);
     if (factory != null) {
       Writable result = factory.newInstance();
@@ -50,7 +57,7 @@ public class WritableFactories {
       }
       return result;
     } else {
-      return ReflectionUtils.newInstance(c, conf);
+      return ReflectionUtils.newInstance(c, conf, supportJobConf);
     }
   }
   

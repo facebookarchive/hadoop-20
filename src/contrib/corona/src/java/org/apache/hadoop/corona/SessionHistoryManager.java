@@ -10,20 +10,14 @@ import org.apache.hadoop.fs.Path;
 
 public class SessionHistoryManager implements Configurable {
 
-  SimpleDateFormat format = new SimpleDateFormat("yyyyMMddhhmm");
-  private volatile long rollSeqNum = 0;
   CoronaConf conf = null;
-  int sessionsInCurrent = 0;
   int maxSessionsPerDir = 0;
-  long historyRollPeriod = 0;
-  long lastRollTime = 0;
-
-  String fullCurrentHistory = "";
   String historyRoot = null;
 
   @Override
   public void setConf(Configuration conf) {
     this.conf = new CoronaConf(conf);
+    initialize();
   }
 
   @Override
@@ -31,29 +25,17 @@ public class SessionHistoryManager implements Configurable {
     return conf;
   }
 
-  public void initialize() throws IOException {
+  private void initialize() {
     historyRoot = conf.getSessionsLogDir();
     maxSessionsPerDir = conf.getMaxSessionsPerDir();
-
-    // Roll history every hour by default
-    historyRollPeriod = conf.getLogDirRotationInterval();
-    rollHistory();
   }
 
-  private void rollHistory() {
-    String currentTStamp = format.format(new Date());
-    fullCurrentHistory = (new Path(historyRoot,
-        currentTStamp + "_" + (++rollSeqNum))).toString();
-    lastRollTime = System.currentTimeMillis();
-    sessionsInCurrent = 0;
-  }
-
-  public synchronized String getCurrentLogPath() {
-    if (++sessionsInCurrent > maxSessionsPerDir
-        || lastRollTime + historyRollPeriod < System.currentTimeMillis()) {
-      rollHistory();
-    }
-
-    return fullCurrentHistory;
+  public synchronized String getLogPath(String sessionId) {
+    int dotIdx = sessionId.indexOf('.');
+    String ts = sessionId.substring(0, dotIdx);
+    String sessionNum = sessionId.substring(dotIdx + 1);
+    String dirName =
+      ts + "." + (Integer.parseInt(sessionNum) / maxSessionsPerDir);
+    return new Path(historyRoot, dirName).toString();
   }
 }

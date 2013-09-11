@@ -103,7 +103,7 @@
   dInfo.countDecommissionDatanodes();
 %>
 <%@page import="java.net.InetSocketAddress"%><html>
-<link rel="stylesheet" type="text/css" href="/static/hadoop.css">
+<link rel="stylesheet" type="text/css" href="static/hadoop.css">
 <title>Hadoop Decommission Status</title>
 <body>
 <h1>Decommissioning Status</h1>

@@ -21,14 +21,20 @@ package org.apache.hadoop.mapred;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryUsage;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.text.NumberFormat;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -56,6 +62,7 @@ import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ResourceCalculatorPlugin;
 import org.apache.hadoop.util.ResourceCalculatorPlugin.*;
 
+
 /** 
  * Base class for tasks.
  * 
@@ -66,7 +73,7 @@ abstract public class Task implements Writable, Configurable {
     LogFactory.getLog(Task.class);
 
   // Counters used by Task subclasses
-  public static enum Counter { 
+  public static enum Counter {
     MAP_INPUT_RECORDS, 
     MAP_OUTPUT_RECORDS,
     MAP_SKIPPED_RECORDS,
@@ -87,6 +94,7 @@ abstract public class Task implements Writable, Configurable {
     REDUCE_SHUFFLE_BYTES,
     REDUCE_INPUT_BYTES,
     REDUCE_COPY_WALLCLOCK,
+    REDUCE_COPY_WAIT_WALLCLOCK,
     REDUCE_COPY_CPU,
     REDUCE_SORT_WALLCLOCK,
     REDUCE_SORT_CPU,
@@ -99,9 +107,25 @@ abstract public class Task implements Writable, Configurable {
     SPILLED_RECORDS,
     CPU_MILLISECONDS,
     PHYSICAL_MEMORY_BYTES,
-    VIRTUAL_MEMORY_BYTES
+    VIRTUAL_MEMORY_BYTES,
+    REDUCERS_PROCESSING_NO_DATA,
+    REDUCERS_PROCESSING_DATA,
+    RSS_MEMORY_BYTES,
+    MAX_MEMORY_BYTES,
+    INST_MEMORY_BYTES
   }
   
+  //Counters for Map Tasks
+  public static enum MapCounter {
+    MAP_CPU_MILLISECONDS
+  }
+  
+  //Counters for Reduce Tasks
+  public static enum ReduceCounter {
+    REDUCE_CPU_MILLISECONDS
+  }
+  
+ 
   /**
    * Counters to measure the usage of the different file systems.
    * Always return the String array with two elements. First one is the name of  
@@ -118,10 +142,12 @@ abstract public class Task implements Writable, Configurable {
               scheme + "_WRITE_EXCEPTIONS"};
   }
   
+ 
   /**
    * Name of the FileSystem counters' group
    */
   protected static final String FILESYSTEM_COUNTER_GROUP = "FileSystemCounters";
+  protected static final String GC_COUNTER_GROUP = "GC Counters";
 
   ///////////////////////////////////////////////////////////
   // Helper methods to construct task-output paths
@@ -185,6 +211,8 @@ abstract public class Task implements Writable, Configurable {
   // by the Hadoop scheduler for Mesos to associate a Mesos task ID with each
   // task and recover these IDs on the TaskTracker.
   protected BytesWritable extraData = new BytesWritable();
+  
+  private CGroupResourceTracker cgResourceTracker = null;
   
   ////////////////////////////////////////////
   // Constructors
@@ -471,6 +499,8 @@ abstract public class Task implements Writable, Configurable {
 
   /* flag to track whether task is done */
   private AtomicBoolean taskDone = new AtomicBoolean(false);
+
+  private AtomicLong lastProgressUpdate = new AtomicLong(0);
   
   public abstract boolean isMapTask();
 
@@ -514,6 +544,44 @@ abstract public class Task implements Writable, Configurable {
       initCpuCumulativeTime =
         resourceCalculator.getProcResourceValues().getCumulativeCpuTime();
     }
+    
+    cgResourceTracker = new CGroupResourceTracker (
+                          job, CGroupResourceTracker.RESOURCE_TRAKCER_TYPE.TASK, 
+                          taskId.toString(), resourceCalculator);
+  }
+
+  protected class TaskReporterMonitor
+      implements Runnable {
+    @Override
+    public void run() {
+      long taskTimeout = conf.getLong("mapred.task.timeout",
+          10 * 60 * 1000);
+      if (taskTimeout == 0) {
+        // There's no timeout so we don't need to monitor
+        return;
+      }
+      lastProgressUpdate.set(System.currentTimeMillis());
+      while (!taskDone.get()) {
+        try {
+          Thread.sleep(PROGRESS_INTERVAL);
+        } catch (InterruptedException iex) {
+          if (taskDone.get()) {
+            LOG.debug(getTaskID() + " Progress/ping thread exiting " +
+                "since it got interrupted");
+            break;
+          } else {
+            LOG.warn ("Unexpected InterruptedException");
+          }
+        }
+        long now = System.currentTimeMillis();
+        long delay = now - lastProgressUpdate.get();
+        if (delay > taskTimeout / 2) {
+          ReflectionUtils.logThreadInfo(LOG, "Task haven't updated progress in " +
+              (delay / 1000) + " seconds",
+              taskTimeout / (10 * 1000));
+        }
+      }
+    }
   }
   
   protected class TaskReporter 
@@ -523,6 +591,7 @@ abstract public class Task implements Writable, Configurable {
     private InputSplit split = null;
     private Progress taskProgress;
     private Thread pingThread = null;
+    private Thread monitorThread = null;
     /**
      * flag that indicates whether progress update needs to be sent to parent.
      * If true, it has been set. If false, it has been reset. 
@@ -598,7 +667,7 @@ abstract public class Task implements Writable, Configurable {
       } else {
         return split;
       }
-    }    
+    }
     /** 
      * The communication thread handles communication with the parent (Task Tracker). 
      * It sends progress updates if progress has been made or if the task needs to 
@@ -627,16 +696,24 @@ abstract public class Task implements Writable, Configurable {
           }
 
           if (sendProgress) {
+            LOG.info("Sending progress update to the TaskTracker");
+            lastProgressUpdate.set(System.currentTimeMillis());
             // we need to send progress update
             updateCounters();
+            LOG.info("Updated counters for the progress update");
             taskStatus.statusUpdate(taskProgress.get(),
                                     taskProgress.toString(), 
                                     counters);
+            long rpcStart = System.currentTimeMillis();
             taskFound = umbilical.statusUpdate(taskId, taskStatus);
+            long rpcDone = System.currentTimeMillis();
+            if (rpcDone - rpcStart > 500) {
+              LOG.info("Sent the update to the TaskTracker spending " + (rpcDone - rpcStart) + " ms");
+            }
             taskStatus.clearStatus();
           }
           else {
-            // send ping 
+            // send ping
             taskFound = umbilical.ping(taskId);
           }
 
@@ -667,11 +744,20 @@ abstract public class Task implements Writable, Configurable {
         pingThread.setDaemon(true);
         pingThread.start();
       }
+      if (monitorThread == null) {
+        monitorThread = new Thread(new TaskReporterMonitor());
+        monitorThread.setDaemon(true);
+        monitorThread.start();
+      }
     }
     public void stopCommunicationThread() throws InterruptedException {
       if (pingThread != null) {
         pingThread.interrupt();
         pingThread.join();
+      }
+      if (monitorThread != null) {
+        monitorThread.interrupt();
+        monitorThread.join();
       }
     }
   }
@@ -694,7 +780,69 @@ abstract public class Task implements Writable, Configurable {
     LOG.debug("sending reportNextRecordRange " + range);
     umbilical.reportNextRecordRange(taskId, range);
   }
-
+  
+  /**
+   * Update counters about Garbage Collection
+   */
+  void updateGCcounters(){
+    long gccount = 0;
+    long gctime = 0;
+        
+    for(GarbageCollectorMXBean gc :
+      ManagementFactory.getGarbageCollectorMXBeans()) {
+    
+      long count = gc.getCollectionCount();
+      if(count >= 0) {
+        gccount += count;
+      }
+      
+      long time = gc.getCollectionTime();
+      if(time >= 0) {
+        gctime += time;
+      }
+    }
+    
+    Iterator beans = ManagementFactory.getMemoryPoolMXBeans().iterator();
+    long aftergc = 0;
+    long maxaftergc = 0;
+    
+    while (beans.hasNext()){
+      MemoryPoolMXBean bean = (MemoryPoolMXBean) beans.next();
+      String beanname = bean.getName();
+      
+      if(!beanname.toUpperCase().contains("OLD GEN")) continue;
+      
+      MemoryUsage mu = bean.getCollectionUsage();
+      
+      if(mu == null) continue;
+      
+      aftergc = mu.getUsed();
+      
+      if(aftergc > maxaftergc) {
+        maxaftergc = aftergc;
+      }
+      
+    }
+    
+    counters.findCounter(GC_COUNTER_GROUP,"Total number of GC")
+      .setValue(gccount);
+    counters.findCounter(GC_COUNTER_GROUP,"Total time of GC in milliseconds")
+      .setValue(gctime);
+    counters.findCounter(GC_COUNTER_GROUP,"Heap size after last GC in bytes")
+      .setValue(maxaftergc);
+    
+    long currentMax =
+      counters.findCounter(GC_COUNTER_GROUP,"Max heap size after GC in bytes")
+        .getValue();
+    
+    if(maxaftergc>currentMax){
+      counters.findCounter(GC_COUNTER_GROUP,"Max heap size after GC in bytes")
+        .setValue(maxaftergc);
+    }
+    
+  }
+  
+      
   /**
    * Update resource information counters
    */
@@ -711,6 +859,18 @@ abstract public class Task implements Writable, Configurable {
     counters.findCounter(Counter.CPU_MILLISECONDS).setValue(cpuTime);
     counters.findCounter(Counter.PHYSICAL_MEMORY_BYTES).setValue(pMem);
     counters.findCounter(Counter.VIRTUAL_MEMORY_BYTES).setValue(vMem);
+    if(isMapTask()) { //Mapper Task
+      counters.findCounter(MapCounter.MAP_CPU_MILLISECONDS).setValue(cpuTime);
+    }
+    else {
+      counters.findCounter(ReduceCounter.REDUCE_CPU_MILLISECONDS).setValue(cpuTime);
+    }
+  }
+  
+  void updateCGResourceCounters() {
+    counters.findCounter(Counter.MAX_MEMORY_BYTES).setValue(cgResourceTracker.getMaxMemoryUsage());
+    counters.findCounter(Counter.INST_MEMORY_BYTES).setValue(cgResourceTracker.getMemoryUsage());
+    counters.findCounter(Counter.RSS_MEMORY_BYTES).setValue(cgResourceTracker.getRSSMemoryUsage());
   }
   
   protected ProcResourceValues getCurrentProcResourceValues() {
@@ -831,6 +991,8 @@ abstract public class Task implements Writable, Configurable {
       updater.updateCounters();      
     }
     updateResourceCounters();
+    updateCGResourceCounters();
+    updateGCcounters();
   }
 
   public void done(TaskUmbilicalProtocol umbilical,
@@ -1031,9 +1193,16 @@ abstract public class Task implements Writable, Configurable {
     }
     this.mapOutputFile.setConf(this.conf);
     this.lDirAlloc = new LocalDirAllocator("mapred.local.dir");
-    // add the static resolutions (this is required for the junit to
-    // work on testcases that simulate multiple nodes on a single physical
-    // node.
+    loadStaticResolutions(conf);
+  }
+
+  /**
+   * Load the static resolutions from configuration. This is required for junit
+   * to work on testcases that simulate multiple nodes on a single physical
+   * node.
+   * @param conf The configuration.
+   */
+  public static void loadStaticResolutions(Configuration conf) {
     String hostToResolved[] = conf.getStrings("hadoop.net.static.resolutions");
     if (hostToResolved != null) {
       for (String str : hostToResolved) {
@@ -1042,6 +1211,31 @@ abstract public class Task implements Writable, Configurable {
         NetUtils.addStaticResolution(name, resolvedName);
       }
     }
+  }
+
+  /**
+   * Save the static resolutions to configuration. This is required for junit
+   * to work on testcases that simulate multiple nodes on a single physical
+   * node.
+   * @param conf The configuration
+   * @return A boolean indicating if the configuration was modified.
+   */
+  public static boolean saveStaticResolutions(Configuration conf) {
+    List<String[]> staticResolutions = NetUtils.getAllStaticResolutions();
+    if (staticResolutions != null && staticResolutions.size() > 0) {
+      StringBuffer str = new StringBuffer();
+
+      for (int i = 0; i < staticResolutions.size(); i++) {
+        String[] hostToResolved = staticResolutions.get(i);
+        str.append(hostToResolved[0]+"="+hostToResolved[1]);
+        if (i != staticResolutions.size() - 1) {
+          str.append(',');
+        }
+      }
+      conf.set("hadoop.net.static.resolutions", str.toString());
+      return true;
+    }
+    return false;
   }
 
   public Configuration getConf() {
@@ -1346,7 +1540,7 @@ abstract public class Task implements Writable, Configurable {
   }
   
   protected static class NewCombinerRunner<K, V> extends CombinerRunner<K,V> {
-    private final Class<? extends org.apache.hadoop.mapreduce.Reducer<K,V,K,V>> 
+    private final Class<? extends org.apache.hadoop.mapreduce.Reducer<K,V,K,V>>
         reducerClass;
     private final org.apache.hadoop.mapreduce.TaskAttemptID taskId;
     private final RawComparator<K> comparator;

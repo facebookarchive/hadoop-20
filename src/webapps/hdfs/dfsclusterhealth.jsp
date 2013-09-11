@@ -51,8 +51,12 @@
     } else if (statName.equals("DFS Used%") ||
         statName.equals("DFS Remaining%")) {
       return StringUtils.limitDecimalTo2((Float)stat) + "%";
+    } else if (stat == null) {
+      return "-";
+    } else if (stat.toString().length() == 0) {
+      return spaces(1);
     } else {
-      return (stat == null) ? "-" : stat.toString();
+      return stat.toString();
     }
   }
 
@@ -65,11 +69,11 @@
                                 Map<Integer, Integer> nnMap,
                                 NameNodeKey specificKey)
                                 throws IOException {
-    String bold = (statNum == -1) ? "" : "<b>";
+    String boldName = (statNum == -1) ? statName : "<b>" + statName + "</b>";
     out.print(rowTxt() + "<td id=\"col1\" class=\"metric\" align=\""
               + ((statNum == -1) ? "left" : "center") + "\">"
               + "<a title=\"" + statName + "\"> "
-              + spaces(4) + bold + statName + bold + spaces(4) + " </a>");
+              + spaces(4) + boldName + spaces(4) + " </a>");
     out.print("<td class=\"overallstatus\"> "
               + ((totalStat != null) ? format(statName, totalStat) : ""));
     for (int i = 0; i < nnAddrs.size(); i++) {
@@ -84,9 +88,9 @@
       if(statNum > -1){
         statStr = format(statName, stats[statNum]);
       } else {
-    	Map<NameNodeKey, String> kvMap 
-    		= nnList.get(index).getNamenodeSpecificKeys(); 
-    	statStr = format(statName, kvMap.get(specificKey));
+        Map<NameNodeKey, String> kvMap =
+          nnList.get(index).getNamenodeSpecificKeys();
+        statStr = format(statName, kvMap.get(specificKey));
       }
       if (!statName.equals("Missing Blocks") || statNum < 0 || (Long)stats[statNum] == 0) {
         out.print(statStr);
@@ -98,8 +102,6 @@
     }
     out.print("\n");
   }
-  
-  
 
   @SuppressWarnings("unchecked")
   public void generateNameNodeReport(JspWriter out,
@@ -135,24 +137,25 @@
       for (int i = 0; i < statNames.length; i++) {
         generateStatsData(out, i, statNames[i], totalStats[i], nnAddrs, nnList, nnMaps, null);
       }
-      out.print("<tr class=\"headRow\"> "
-              + "<th " + NodeHeaderStr(cInfo.getNamenodeSpecificKeysName())
-              + ">" + cInfo.getNamenodeSpecificKeysName());
-      
-      ArrayList<NameNodeKey> nnKeys = new ArrayList<NameNodeKey>();
-      for (int i = 0; i < nnAddrs.size(); i++) {
-    	Map<NameNodeKey, String> map 
-    		= (Map<NameNodeKey, String>) nnList.get(i).getNamenodeSpecificKeys();
-    	for(NameNodeKey key : map.keySet()){
-    	  if(!nnKeys.contains(key))
-    	    nnKeys.add(key);
-    	}
+      if (cInfo.isAvatar()) {
+        out.print("<tr class=\"headRow\"> "
+                + "<th " + NodeHeaderStr(cInfo.getNamenodeSpecificKeysName())
+                + ">" + cInfo.getNamenodeSpecificKeysName());
+        ArrayList<NameNodeKey> nnKeys = new ArrayList<NameNodeKey>();
+        for (int i = 0; i < nnAddrs.size(); i++) {
+          Map<NameNodeKey, String> map = (Map<NameNodeKey, String>)
+            nnList.get(i).getNamenodeSpecificKeys();
+          for(NameNodeKey key : map.keySet()){
+            if(!nnKeys.contains(key))
+              nnKeys.add(key);
+            }
+          }
+          Collections.sort(nnKeys);
+          for(NameNodeKey key : nnKeys){
+            generateStatsData(out, -1, key.getKey(), null, nnAddrs, nnList, nnMaps, key);
+        }
       }
-      Collections.sort(nnKeys);         
-      for(NameNodeKey key : nnKeys){
-    	generateStatsData(out, -1, key.getKey(), null, nnAddrs, nnList, nnMaps, key);
-      }
- 
+
       out.print("</table>\n");
       out.print("<hr>");
       out.print("<h3> DataNode Health: </h3>");
@@ -225,7 +228,7 @@
   ClusterStatus cInfo = clusterhealthjsp.generateClusterHealthReport();
 %>
 <%@page import="java.net.InetSocketAddress"%><html>
-<link rel="stylesheet" type="text/css" href="/static/hadoop.css">
+<link rel="stylesheet" type="text/css" href="static/hadoop.css">
 <title>HDFS Cluster <%= nn.getClusterName() %></title>
 <body>
 <h1>Cluster <%= nn.getClusterName() %> Summary</h1>

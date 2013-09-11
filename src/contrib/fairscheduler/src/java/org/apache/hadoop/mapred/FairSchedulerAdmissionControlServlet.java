@@ -24,7 +24,11 @@ import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashSet;
+import java.util.Set;
+
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -90,8 +94,19 @@ public class FairSchedulerAdmissionControlServlet extends HttpServlet {
   }
 
   public void doActualGet(HttpServletRequest request,
-      HttpServletResponse response)
-    throws ServletException, IOException {
+      HttpServletResponse response) throws ServletException, IOException {
+    // Check for user set or pool set filters
+    Set<String> userFilterSet = null;
+    String userFilter = request.getParameter("users");
+    if (userFilter != null) {
+      userFilterSet = new HashSet<String>(Arrays.asList(userFilter.split(",")));
+    }
+    Set<String> poolFilterSet = null;
+    String poolFilter = request.getParameter("pools");
+    if (poolFilter != null) {
+      poolFilterSet = new HashSet<String>(Arrays.asList(poolFilter.split(",")));
+    }
+
     // Print out the normal response
     response.setContentType("text/html");
 
@@ -158,8 +173,11 @@ public class FairSchedulerAdmissionControlServlet extends HttpServlet {
         "SLA pools that also meet the SLA pool limits will be " +
         "admitted.</b><br>");
     }
+
+    FairSchedulerServlet.printFilterInfo(
+        out, poolFilter, userFilter, "fairscheduleradmissioncontrol");
     FairSchedulerServlet.showCluster(out, false, jobTracker);
-    showJobsNotAdmitted(out);
+    showJobsNotAdmitted(out, userFilterSet, poolFilterSet);
     out.print("</body></html>\n");
     out.close();
 
@@ -171,8 +189,12 @@ public class FairSchedulerAdmissionControlServlet extends HttpServlet {
 
   /**
    * Print a view of not admitted jobs to the given output writer.
+   * @param out Where to dump the oiutput
+   * @param userFilterSet Only show jobs from these users if not null
+   * @param poolFilterSet Only show jobs from these pools if not null
    */
-  private void showJobsNotAdmitted(PrintWriter out) {
+  private void showJobsNotAdmitted(
+      PrintWriter out, Set<String> userFilterSet, Set<String> poolFilterSet) {
     out.print("<h2>Not Admitted Jobs</h2>\n");
     out.print("<b>Filter</b> " +
         "<input type=\"text\" onkeyup=\"filterTables(this.value)\" " +
@@ -205,6 +227,15 @@ public class FairSchedulerAdmissionControlServlet extends HttpServlet {
     Collection<NotAdmittedJobInfo> notAdmittedJobInfos =
         scheduler.getNotAdmittedJobs();
     for (NotAdmittedJobInfo jobInfo : notAdmittedJobInfos) {
+      if ((userFilterSet != null) &&
+          !userFilterSet.contains(jobInfo.getUser())) {
+          continue;
+      }
+      if ((poolFilterSet != null) &&
+          !poolFilterSet.contains(jobInfo.getPool())) {
+        continue;
+      }
+
       out.printf("<tr id=\"%s\">\n", jobInfo.getJobName());
       out.printf("<td>%s</td>\n", DATE_FORMAT.format(jobInfo.getStartDate()));
       out.printf("<td><a href=\"jobdetails.jsp?jobid=%s\">%s</a></td>",

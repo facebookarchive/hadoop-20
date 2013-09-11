@@ -60,8 +60,31 @@ then
     cd $BUILD_NATIVE_DIR/$platform/lib
     $TAR *hadoop* | (cd $DIST_LIB_DIR/$platform/; $UNTAR)
     $TAR *liblzma* | (cd $DIST_LIB_DIR/$platform/; $UNTAR)
+    cp libGetUserGroupInfo.so $DIST_LIB_DIR/$platform/
     mv $DIST_LIB_DIR/$platform/liblzma.so $DIST_LIB_DIR/$platform/liblzma.so.0
   done  
+fi
+
+if [ -d ${CGROUP_LIB_DIR} ]
+then
+    echo "Copying CGroup library in ${CGROUP_LIB_DIR} to $DIST_LIB_DIR/$platform/"
+    cd ${CGROUP_LIB_DIR}
+    cp libCGroupEventListener.so $DIST_LIB_DIR/$platform/
+fi
+
+if [ "${BUNDLE_SNAPPY_LIB}" == "true" ]
+then
+  if [ -d ${SNAPPY_LIB_DIR} ]
+  then
+    echo "Copying Snappy library in ${SNAPPY_LIB_DIR} to $DIST_LIB_DIR/$platform/"
+    cd ${SNAPPY_LIB_DIR}
+    $TAR . | (cd $DIST_LIB_DIR/$platform; $UNTAR)
+  else
+    echo "Snappy lib directory ${SNAPPY_LIB_DIR} does not exist"
+    exit 1
+  fi
+else
+  echo "Skipping Copying Snappy library, BUNDLE_SNAPPY_LIB=${BUNDLE_SNAPPY_LIB}"
 fi
 
 #vim: ts=2: sw=2: et

@@ -52,8 +52,6 @@ import java.util.TreeSet;
 import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.management.ObjectName;
@@ -147,10 +145,6 @@ public class JobTracker extends JobTrackerTraits implements MRConstants,
   private int NUM_HEARTBEATS_IN_SECOND;
   private final int DEFAULT_NUM_HEARTBEATS_IN_SECOND = 100;
   private final int MIN_NUM_HEARTBEATS_IN_SECOND = 1;
-
-  // Constants for cache expiry
-  private long CLEAR_CACHE_INTERVAL = 0; // milliseconds
-  private long EXPIRE_CACHE_THRESHOLD = 0; // milliseconds
 
   // Scaling factor for heartbeats, used for testing only
   static final String JT_HEARTBEATS_SCALING_FACTOR =
@@ -703,53 +697,6 @@ public class JobTracker extends JobTrackerTraits implements MRConstants,
         } catch (Throwable t) {
           LOG.error("Error in retiring job:\n" +
                     StringUtils.stringifyException(t));
-        }
-      }
-    }
-  }
-
-  /////////////////////////////////////////////////////////////////////
-  // Used to expire files in cache that hasn't been accessed for a while
-  /////////////////////////////////////////////////////////////////////
-
-  // This class is called every CLEAR_CACHE_INTERVAL seconds
-  private class ExpireUnusedFilesInCache implements Runnable {
-    JobTracker jt = null;
-
-    final Path sharedPath;
-
-    final Path[] cachePath;
-
-    public ExpireUnusedFilesInCache(JobTracker jt, Path sharedPath) {
-      this.jt = jt;
-      this.sharedPath = sharedPath;
-
-      this.cachePath = new Path[3];
-      this.cachePath[0] = new Path(sharedPath, "files");
-      this.cachePath[1] = new Path(sharedPath, "archives");
-      this.cachePath[2] = new Path(sharedPath, "libjars");
-    }
-
-    public void run() {
-      long currentTime = getClock().getTime();
-
-      for (int i = 0; i < cachePath.length; i++) {
-        try {
-          if (!fs.exists(cachePath[i])) continue;
-
-          FileStatus[] fStatus = fs.listStatus(cachePath[i]);
-
-          for (int j = 0; j < fStatus.length; j++) {
-            if (!fStatus[j].isDir()) {
-              long atime = fStatus[j].getAccessTime();
-
-              if (currentTime - atime > EXPIRE_CACHE_THRESHOLD) {
-                fs.delete(fStatus[j].getPath(), false);
-              }
-            }
-          }
-        } catch (IOException ioe) {
-          LOG.error("IOException when clearing cache");
         }
       }
     }
@@ -1342,7 +1289,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants,
   FileSystem fs = null;
   Path systemDir = null;
   JobConf conf;
-  JobTrackerReconfigurable jobTrackerReconfigurable;
+  private JobTrackerReconfigurable jobTrackerReconfigurable;
   private final UserGroupInformation mrOwner;
   private final String supergroup;
 
@@ -1591,7 +1538,8 @@ public class JobTracker extends JobTrackerTraits implements MRConstants,
         LOG.info("Cleaning up the system directory");
         for (FileStatus status: systemDirData) {
           // spare the CAR directory - shared cache files are immutable and reusable
-          if (status.isDir() && status.getPath().getName().equals(this.CAR)) {
+          if (status.isDir() &&
+            status.getPath().getName().equals(JobSubmissionProtocol.CAR)) {
             LOG.info("Preserving shared cache in system directory");
             continue;
           }
@@ -1637,32 +1585,9 @@ public class JobTracker extends JobTrackerTraits implements MRConstants,
     //initializes the job status store
     completedJobStatusStore = new CompletedJobStatusStore(conf);
 
-    // Initialize the shared cache expiry thread
-    // this thread needs to be started unconditionally because some clients may use
-    // shared caching and some may not. we cannot control it with the cache sharing
-    // option used by the client:
-    // - the client may default to cache sharing = false
-    // - the jobconf serialized by the JT may set cache sharing = true (because client
-    //   does not supply a value and server applies it's own value first)
-    // - tasks are not correctly localized as a result
+    ExpireUnusedFilesInCache eufic = new  ExpireUnusedFilesInCache(
+      conf, getClock(), new Path(getSystemDir()));
 
-    // How long between each cache check (default is one day)
-    CLEAR_CACHE_INTERVAL = conf.getLong("mapred.cache.shared.check_interval",
-                                        24 * 60 * 60 * 1000);
-
-    // How long must a file be untouched to be purged from the cache (default
-    // is one day)
-    EXPIRE_CACHE_THRESHOLD =
-      conf.getLong("mapred.cache.shared.expire_threshold",
-                   24 * 60 * 60 * 1000);
-
-    ExpireUnusedFilesInCache eufic = new ExpireUnusedFilesInCache(this,
-                                                                  new Path(getSystemDir(), this.CAR));
-    Executors.newScheduledThreadPool(1)
-      .scheduleAtFixedRate(eufic,
-                           CLEAR_CACHE_INTERVAL,
-                           CLEAR_CACHE_INTERVAL,
-                           TimeUnit.MILLISECONDS);
 
     taskErrorCollector = new TaskErrorCollector(conf);
   }
@@ -1711,6 +1636,10 @@ public class JobTracker extends JobTrackerTraits implements MRConstants,
     String jobTrackerStr =
       conf.get("mapred.job.tracker", "localhost:8012");
     return NetUtils.createSocketAddr(jobTrackerStr);
+  }
+
+  JobTrackerReconfigurable getJobTrackerReconfigurable() {
+    return jobTrackerReconfigurable;
   }
 
   /**
@@ -1930,7 +1859,8 @@ public class JobTracker extends JobTrackerTraits implements MRConstants,
   }
 
   /**
-   * Call {@link #removeTaskEntry(String)} for each of the
+   * Call {@link #removeTaskEntry(org.apache.hadoop.mapred.TaskAttemptID)}
+   * for each of the
    * job's tasks.
    * When the JobTracker is retiring the long-completed
    * job, either because it has outlived {@link #RETIRE_JOB_INTERVAL}
@@ -2271,7 +2201,7 @@ public class JobTracker extends JobTrackerTraits implements MRConstants,
    *
    * Assumes JobTracker, taskTrackers and trackerExpiryQueue is locked on entry
    *
-   * @param status Task Tracker's status
+   * @param taskTracker Task Tracker
    */
   void addNewTracker(TaskTracker taskTracker) {
     TaskTrackerStatus status = taskTracker.getStatus();
@@ -3200,6 +3130,9 @@ public class JobTracker extends JobTrackerTraits implements MRConstants,
         }
         throw new IOException("Queue \"" + queue + "\" does not exist");
       }
+
+      // The task scheduler should validate the job configuration
+      taskScheduler.checkJob(job);
 
       // check for access
       try {

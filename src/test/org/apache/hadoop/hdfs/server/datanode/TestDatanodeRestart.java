@@ -20,8 +20,11 @@ package org.apache.hadoop.hdfs.server.datanode;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Random;
+import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -38,11 +41,17 @@ import junit.framework.TestCase;
 
 /** Test if a datanode can correctly upgrade itself */
 public class TestDatanodeRestart extends TestCase {
+  private FSDataset getFSDS(MiniDFSCluster cluster) {
+    DataNode dn = cluster.getDataNodes().get(0);
+    return (FSDataset) dn.data;
+  }
+  
   // test finalized replicas persist across DataNode restarts
   public void testFinalizedReplicas() throws Exception {
     // bring up a cluster of 3
     Configuration conf = new Configuration();
     conf.setLong("dfs.block.size", 1024L);
+    conf.setLong("dfs.block.crc.flush.interval", 100);
     conf.setInt("dfs.write.packet.size", 512);
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 3, true, null);
     cluster.waitActive();
@@ -54,8 +63,51 @@ public class TestDatanodeRestart extends TestCase {
       util.createFiles(fs, TopDir, (short) 3);
       util.waitReplication(fs, TopDir, (short) 3);
       util.checkFiles(fs, TopDir);
+      
+      FSDataset data = getFSDS(cluster);
+      // save all the block CRC info;
+      NamespaceMap nm = data.volumeMap.getNamespaceMap(data.volumeMap.getNamespaceList()[0]);
+      Map<Block, Integer> bim = new HashMap<Block, Integer>();
+      for (int i = 0; i < nm.getNumBucket(); i++) {
+        for (Entry<Block, DatanodeBlockInfo> entry : nm.getBucket(i).blockInfoMap
+            .entrySet()) {
+          bim.put(entry.getKey(), entry.getValue().getBlockCrc());
+        }
+      }
+      // Wait another rounnd of block crc flushing happens
+      long lastFlush = Long.MAX_VALUE;
+      for (int i = 0; i < 100; i++) {
+        if (data.blockCrcMapFlusher.lastFlushed > 0) {
+          lastFlush = data.blockCrcMapFlusher.lastFlushed;
+          break;
+        } else if (i == 99) {
+          TestCase.fail("block CRC file is not flushed.");
+        } else {
+          Thread.sleep(100);
+        }
+      }
+      for (int i = 0; i < 100; i++) {
+        if (data.blockCrcMapFlusher.lastFlushed > lastFlush) {
+          break;
+        } else if (i == 99) {
+          TestCase.fail("block CRC file is not flushed.");
+        } else {
+          Thread.sleep(100);
+        }
+      }
       cluster.restartDataNodes();
       cluster.waitActive();
+      // Verify that block CRC is recovered.
+      data = getFSDS(cluster);
+      nm = data.volumeMap.getNamespaceMap(data.volumeMap.getNamespaceList()[0]);
+      for (int i = 0; i < nm.getNumBucket(); i++) {
+        for (Entry<Block, DatanodeBlockInfo> entry : nm.getBucket(i).blockInfoMap
+            .entrySet()) {
+          TestCase.assertEquals(bim.get(entry.getKey()).intValue(), entry
+              .getValue().getBlockCrc());
+        }
+      }
+      
       util.checkFiles(fs, TopDir);
     } finally {
       cluster.shutdown();
@@ -97,8 +149,12 @@ public class TestDatanodeRestart extends TestCase {
       for (FSVolume volume : ((FSDataset) dn.data).volumes.getVolumes()) {
         File rbwDir = volume.getRbwDir(nsInfo.getNamespaceID());
         for (File file : rbwDir.listFiles()) {
-          if (isCorrupt && Block.isBlockFilename(file.getName())) {
-            new RandomAccessFile(file, "rw").setLength(fileLen - 1); // corrupt
+          if (isCorrupt) {
+            if (Block.isSeparateChecksumBlockFilename(file.getName())) {
+              new RandomAccessFile(file, "rw").setLength(fileLen - 1); // corrupt
+            } else if (Block.isInlineChecksumBlockFilename(file.getName())) {
+              new RandomAccessFile(file, "rw").setLength(file.length() - 1); // corrupt
+            }
           }
         }
       }
@@ -107,10 +163,21 @@ public class TestDatanodeRestart extends TestCase {
       dn = cluster.getDataNodes().get(0);
 
       // check volumeMap: one rbw replica
-      Map<Block, DatanodeBlockInfo> volumeMap =
-        ((FSDataset) (dn.data)).volumeMap.getNamespaceMap(nsInfo.getNamespaceID());
+      NamespaceMap volumeMap = ((FSDataset) (dn.data)).volumeMap
+          .getNamespaceMap(nsInfo.getNamespaceID());
       assertEquals(1, volumeMap.size());
-      Block replica = volumeMap.keySet().iterator().next();
+      Block replica = null;
+      for (int i = 0; i < volumeMap.getNumBucket(); i++) {
+        Set<Block> blockSet = volumeMap.getBucket(i).blockInfoMap.keySet();
+        if (blockSet.isEmpty()) {
+          continue;
+        }
+        Block r = blockSet.iterator().next();
+        if (r != null) {
+          replica = r;
+          break;
+        }
+      }
       if (isCorrupt) {
         assertEquals((fileLen - 1), replica.getNumBytes());
       } else {

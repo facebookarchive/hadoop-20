@@ -7,10 +7,10 @@
 #include <transport/TServerSocket.h>
 #include <transport/TBufferTransports.h>
 
-using namespace facebook::thrift;
-using namespace facebook::thrift::protocol;
-using namespace facebook::thrift::transport;
-using namespace facebook::thrift::server;
+using namespace ::apache::thrift;
+using namespace ::apache::thrift::protocol;
+using namespace ::apache::thrift::transport;
+using namespace ::apache::thrift::server;
 
 using boost::shared_ptr;
 
@@ -113,6 +113,66 @@ class ThriftHadoopFileSystemHandler : virtual public ThriftHadoopFileSystemIf {
   void getFileBlockLocations(std::vector<BlockLocation> & _return, const Pathname& path, const int64_t start, const int64_t length) {
     // Your implementation goes here
     printf("getFileBlockLocations\n");
+  }
+
+  bool hardLink(const Pathname& src, const Pathname& dest) {
+    // Your implementation goes here
+    printf("hardLink\n");
+  }
+
+  void concat(const Pathname& target, const std::vector<Pathname> & srcs, const bool restricted) {
+    // Your implementation goes here
+    printf("concat\n");
+  }
+
+  void reportBadBlocks(const std::vector<TLocatedBlock> & blocks) {
+    // Your implementation goes here
+    printf("reportBadBlocks\n");
+  }
+
+  int32_t getDataTransferProtocolVersion() {
+    // Your implementation goes here
+    printf("getDataTransferProtocolVersion\n");
+  }
+
+  void renewLease(const std::string& clientName) {
+    // Your implementation goes here
+    printf("renewLease\n");
+  }
+
+  void recoverLease(const Pathname& path, const std::string& clientName) {
+    // Your implementation goes here
+    printf("recoverLease\n");
+  }
+
+  void closeRecoverLease(const Pathname& path, const std::string& clientName, const bool discardLastBlock) {
+    // Your implementation goes here
+    printf("closeRecoverLease\n");
+  }
+
+  void abandonBlock(const TBlock& block, const Pathname& pathname, const std::string& clientName) {
+    // Your implementation goes here
+    printf("abandonBlock\n");
+  }
+
+  void abandonFile(const Pathname& pathname, const std::string& clientName) {
+    // Your implementation goes here
+    printf("abandonFile\n");
+  }
+
+  void addBlock(TLocatedBlock& _return, const Pathname& pathname, const std::string& clientName, const int64_t startOffset, const TBlock& lastBlock, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes) {
+    // Your implementation goes here
+    printf("addBlock\n");
+  }
+
+  void addFirstBlock(TLocatedBlock& _return, const Pathname& pathname, const std::string& clientName, const std::vector<TDatanodeID> & excludedNodes, const std::vector<TDatanodeID> & favouredNodes) {
+    // Your implementation goes here
+    printf("addFirstBlock\n");
+  }
+
+  bool complete(const Pathname& pathname, const std::string& clientName, const int64_t fileLen, const TBlock& lastBlock) {
+    // Your implementation goes here
+    printf("complete\n");
   }
 
 };

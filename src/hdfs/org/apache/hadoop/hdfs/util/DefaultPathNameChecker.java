@@ -45,6 +45,9 @@ public class DefaultPathNameChecker implements PathNameChecker {
     for(String element : names) {
       if (element.equals("..") ||
           element.equals(".")  ||
+          element.indexOf("\n") >= 0 ||
+          element.indexOf("\r") >= 0 ||
+          element.indexOf("\t") >= 0 ||
           (element.indexOf(":") >= 0)) {
         return false;
       }

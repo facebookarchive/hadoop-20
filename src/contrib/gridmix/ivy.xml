@@ -105,5 +105,9 @@
       name="json"
       rev="${json.version}"
       conf="common->default"/>
+    <dependency org="org.mockito"
+     name="mockito-all"
+     rev="${mockito-all.version}"
+     conf="common->master"/>
   </dependencies>
 </ivy-module>

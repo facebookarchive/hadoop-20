@@ -370,7 +370,7 @@ public abstract class CombineFileInputFormat<K, V>
     }
 
     // Put them into a list for easier removal during iteration
-    List<LocatedFileStatus> newstats = new LinkedList<LocatedFileStatus>();
+    Collection<LocatedFileStatus> newstats = new LinkedList<LocatedFileStatus>();
     Collections.addAll(newstats, stats);
     stats = null;
 
@@ -463,7 +463,7 @@ public abstract class CombineFileInputFormat<K, V>
   /**
    * Return all the splits in the specified set of paths
    */
-  private void getMoreSplits(JobConf job, List<LocatedFileStatus> stats,
+  private void getMoreSplits(JobConf job, Collection<LocatedFileStatus> stats,
                              long maxSize, long minSizeNode,
                              long minSizeRack, long maxNumBlocksPerSplit,
                              List<CombineFileSplit> splits)
@@ -491,12 +491,13 @@ public abstract class CombineFileInputFormat<K, V>
 
     // populate all the blocks for all files
     long totLength = 0;
-    for (int i = 0; i < files.length; i++) {
-      LocatedFileStatus oneStatus = stats.get(i);
-      files[i] = new OneFileInfo(oneStatus, job,
+    int fileIndex = 0;
+    for (LocatedFileStatus oneStatus : stats) {
+      files[fileIndex] = new OneFileInfo(oneStatus, job,
           isSplitable(FileSystem.get(job), oneStatus.getPath()),
           rackToBlocks, blockToNodes, nodeToBlocks, rackToNodes, maxSize);
-      totLength += files[i].getLength();
+      totLength += files[fileIndex].getLength();
+      fileIndex++;
     }
 
     // Sort the blocks on each node from biggest to smallest by size to

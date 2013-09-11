@@ -55,12 +55,15 @@ public class ExampleDriver {
                    "An example defining a secondary sort to the reduce.");
       pgd.addClass("sudoku", Sudoku.class, "A sudoku solver.");
       pgd.addClass("sleep", SleepJob.class, "A job that sleeps at each map and reduce task.");
+      pgd.addClass("busy", BusyJob.class, "A job that loops at each map and reduce task.");
       pgd.addClass("join", Join.class, "A job that effects a join over sorted, equally partitioned datasets");
       pgd.addClass("multifilewc", MultiFileWordCount.class, "A job that counts words from several files.");
       pgd.addClass("dbcount", DBCountPageView.class, "An example job that count the pageview counts from a database.");
       pgd.addClass("teragen", TeraGen.class, "Generate data for the terasort");
       pgd.addClass("terasort", TeraSort.class, "Run the terasort");
       pgd.addClass("teravalidate", TeraValidate.class, "Checking results of terasort");
+      pgd.addClass("sum", SumJob.class,
+                    "For testing the variable reducers code.");
       pgd.driver(argv);
       
       // Success

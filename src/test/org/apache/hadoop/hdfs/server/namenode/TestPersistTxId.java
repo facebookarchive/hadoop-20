@@ -1,6 +1,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
+import java.io.PushbackInputStream;
 import java.util.Random;
 
 import org.apache.commons.logging.Log;
@@ -11,7 +12,8 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.After;
 import static org.junit.Assert.*;
@@ -28,6 +30,7 @@ public class TestPersistTxId {
 
   public void setUp(boolean simulateEditLogCrash) throws IOException {
     conf = new Configuration();
+    MiniDFSCluster.clearBaseDirectory(conf);
     conf.set("dfs.secondary.http.address", "0.0.0.0:0");
     TestPersistTxIdInjectionHandler h = new TestPersistTxIdInjectionHandler();
     h.simulateEditLogCrash = simulateEditLogCrash;
@@ -39,13 +42,15 @@ public class TestPersistTxId {
 
   @After
   public void tearDown() throws Exception {
-    fs.close();
-    cluster.shutdown();
+    if (fs != null)
+      fs.close();
+    if (cluster != null)
+      cluster.shutdown();
     InjectionHandler.clear();
   }
 
-  private long getCurrentTxId() {
-    return cluster.getNameNode().getFSImage().getEditLog().getCurrentTxId();
+  private long getLastWrittenTxId() {
+    return cluster.getNameNode().getFSImage().getEditLog().getLastWrittenTxId();
   }
 
   public void createEdits(int nEdits) throws IOException {
@@ -61,12 +66,12 @@ public class TestPersistTxId {
     setUp(false);
     // Create some edits and verify.
     createEdits(20);
-    assertEquals(20, getCurrentTxId());
-    cluster.getNameNode().getFSImage().getEditLog().setStartTransactionId(50);
+    assertEquals(20, getLastWrittenTxId());
+    cluster.getNameNode().getFSImage().getEditLog().setLastWrittenTxId(50);
 
     // Closing each file would generate 10 edits.
     fs.close();
-    assertEquals(60, getCurrentTxId());
+    assertEquals(60, getLastWrittenTxId());
     // Restart namenode and verify that it fails due to gap in txids.
     try {
       cluster.restartNameNode(0);
@@ -82,19 +87,29 @@ public class TestPersistTxId {
     setUp(false);
     // Create some edits and verify.
     createEdits(20);
-    assertEquals(20, getCurrentTxId());
-    cluster.getNameNode().getFSImage().getEditLog().setStartTransactionId(50);
+    assertEquals(20, getLastWrittenTxId());
+    cluster.getNameNode().getFSImage().getEditLog().setLastWrittenTxId(50);
 
     // Closing each file would generate 10 edits.
     fs.close();
-    assertEquals(60, getCurrentTxId());
+    assertEquals(60, getLastWrittenTxId());
+    
+    // we will answer "Continue" at txid mismatch
+    PushbackInputStream stream = new PushbackInputStream(System.in,
+        100);
+    System.setIn(stream);
+    // PushbackInputStream processes in reverse order.
+    byte input[] = "c".getBytes();
+    stream.unread(input);
+
     // Restart namenode and verify that it does not fail.
     cluster.restartNameNode(0,
         new String[] {StartupOption.IGNORETXIDMISMATCH.getName()});
     fs = cluster.getFileSystem();
-    assertEquals(60, getCurrentTxId());
+    // restarting generates OP_START_LOG_SEGMENT, OP_END_LOG_SEGMENT
+    assertEquals(60 + 2, getLastWrittenTxId());
     createEdits(20);
-    assertEquals(80, getCurrentTxId());
+    assertEquals(80 + 2, getLastWrittenTxId());
   }
 
   @Test
@@ -102,38 +117,43 @@ public class TestPersistTxId {
     setUp(false);
     // Create some edits and verify.
     createEdits(20);
-    assertEquals(20, getCurrentTxId());
+    assertEquals(20, getLastWrittenTxId());
 
     // Closing each file would generate 10 edits.
     fs.close();
-    assertEquals(30, getCurrentTxId());
+    assertEquals(30, getLastWrittenTxId());
     // Restart namenode and verify.
     cluster.restartNameNode(0);
     fs = cluster.getFileSystem();
-    assertEquals(30, getCurrentTxId());
+    
+    // restarting generates OP_START_LOG_SEGMENT, OP_END_LOG_SEGMENT
+    assertEquals(30 + 2, getLastWrittenTxId());
 
     // Add some more edits and verify.
     createEdits(20);
-    assertEquals(50, getCurrentTxId());
+    assertEquals(50 + 2, getLastWrittenTxId());
 
     // Now save namespace and verify edits.
+    // savenamespace generates OP_START_LOG_SEGMENT, OP_END_LOG_SEGMENT
     cluster.getNameNode().saveNamespace(true, false);
-    assertEquals(50, getCurrentTxId());
+    assertEquals(50 + 4, getLastWrittenTxId());
     createEdits(20);
-    assertEquals(70, getCurrentTxId());
+    assertEquals(70 + 4, getLastWrittenTxId());
   }
 
   @Test
   public void testRestartWithCheckpoint() throws IOException {
     setUp(false);
     createEdits(20);
-    assertEquals(20, getCurrentTxId());
+    assertEquals(20, getLastWrittenTxId());
     cluster.getNameNode().saveNamespace(true, false);
+    // SN generates OP_START_LOG_SEGMENT, OP_END_LOG_SEGMENT
     createEdits(20);
-    assertEquals(40, getCurrentTxId());
+    assertEquals(40 + 2, getLastWrittenTxId());
     cluster.restartNameNode(0);
     createEdits(20);
-    assertEquals(60, getCurrentTxId());
+    // restarting generates OP_START_LOG_SEGMENT, OP_END_LOG_SEGMENT
+    assertEquals(60 + 4, getLastWrittenTxId());
   }
 
   @Test
@@ -142,13 +162,14 @@ public class TestPersistTxId {
     SecondaryNameNode sn = new SecondaryNameNode(conf);
     try {
       createEdits(20);
-      assertEquals(20, getCurrentTxId());
+      assertEquals(20, getLastWrittenTxId());
 
       sn.doCheckpoint();
 
-      assertEquals(20, getCurrentTxId());
+      // checkpoint generates OP_START_LOG_SEGMENT, OP_END_LOG_SEGMENT
+      assertEquals(20 + 2, getLastWrittenTxId());
       createEdits(20);
-      assertEquals(40, getCurrentTxId());
+      assertEquals(40 + 2, getLastWrittenTxId());
     } finally {
       sn.shutdown();
     }
@@ -160,19 +181,20 @@ public class TestPersistTxId {
     SecondaryNameNode sn = new SecondaryNameNode(conf);
     try {
       createEdits(20);
-      assertEquals(20, getCurrentTxId());
+      assertEquals(20, getLastWrittenTxId());
 
       sn.doCheckpoint();
-
-      assertEquals(20, getCurrentTxId());
+      // checkpoint generates OP_START_LOG_SEGMENT, OP_END_LOG_SEGMENT
+      assertEquals(20 + 2, getLastWrittenTxId());
       createEdits(20);
-      assertEquals(40, getCurrentTxId());
+      assertEquals(40 + 2, getLastWrittenTxId());
 
+      // restart generates OP_START_LOG_SEGMENT, OP_END_LOG_SEGMENT
       cluster.restartNameNode(0);
 
-      assertEquals(40, getCurrentTxId());
+      assertEquals(40 + 4, getLastWrittenTxId());
       createEdits(20);
-      assertEquals(60, getCurrentTxId());
+      assertEquals(60 + 4, getLastWrittenTxId());
     } finally {
       sn.shutdown();
     }
@@ -191,15 +213,17 @@ public class TestPersistTxId {
       System.out.println("Restarting namenode");
       cluster.restartNameNode(0);
       System.out.println("Restart done");
-      assertEquals(totalEdits, getCurrentTxId());
+      // restart generates OP_START_LOG_SEGMENT, OP_END_LOG_SEGMENT
+      assertEquals(totalEdits + 2*(i+1), getLastWrittenTxId());
     }
     System.out.println("Number of restarts : " + restarts);
-    assertEquals(totalEdits, getCurrentTxId());
+    assertEquals(totalEdits + 2*restarts, getLastWrittenTxId());
   }
 
   @Test
   public void testMultipleRestartsWithCheckPoint() throws IOException {
     setUp(false);
+    int sn = 0;
     int restarts = random.nextInt(10);
     int totalEdits = 0;
     for (int i = 0; i < restarts; i++) {
@@ -207,18 +231,21 @@ public class TestPersistTxId {
       totalEdits += edits;
       createEdits(edits);
       if (random.nextBoolean()) {
+        sn++;
         cluster.getNameNode().saveNamespace(true, false);
       }
       cluster.restartNameNode(0);
-      assertEquals(totalEdits, getCurrentTxId());
+      // restart generates OP_START_LOG_SEGMENT, OP_END_LOG_SEGMENT
+      assertEquals(totalEdits + 2*(i+1) + (2*sn), getLastWrittenTxId());
     }
     System.out.println("Number of restarts : " + restarts);
-    assertEquals(totalEdits, getCurrentTxId());
+    assertEquals(totalEdits + 2*restarts + (2*sn), getLastWrittenTxId());
   }
 
   @Test
   public void testMultipleNameNodeCrashWithCheckpoint() throws Exception {
     setUp(true);
+    int sn = 0;
     int restarts = random.nextInt(10);
     int totalEdits = 0;
     for (int i = 0; i < restarts; i++) {
@@ -226,15 +253,17 @@ public class TestPersistTxId {
       totalEdits += edits;
       createEdits(edits);
       if (random.nextBoolean()) {
+        sn++;
         cluster.getNameNode().saveNamespace(true, false);
       }
       cluster.getNameNode().getFSImage().getEditLog().logSync();
-      cluster.getNameNode().getFSImage().unlockAll();
+      cluster.getNameNode().getFSImage().storage.unlockAll();
       cluster.restartNameNode(0);
-      assertEquals(totalEdits, getCurrentTxId());
+      // restart/sn generates OP_END_LOG_SEGMENT, as the shutdown crashes
+      assertEquals(totalEdits + (i+1) + (sn*2), getLastWrittenTxId());
     }
     System.out.println("Number of restarts : " + restarts);
-    assertEquals(totalEdits, getCurrentTxId());
+    assertEquals(totalEdits + restarts + (sn*2), getLastWrittenTxId());
   }
 
   // Gets a random even int.
@@ -250,7 +279,8 @@ public class TestPersistTxId {
   class TestPersistTxIdInjectionHandler extends InjectionHandler {
     boolean simulateEditLogCrash = false;
 
-    public boolean _trueCondition(InjectionEvent event, Object... args) {
+    @Override
+    public boolean _trueCondition(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.FSNAMESYSTEM_CLOSE_DIRECTORY
           && simulateEditLogCrash) {
         LOG.warn("Simulating edit log crash, not closing edit log cleanly as"

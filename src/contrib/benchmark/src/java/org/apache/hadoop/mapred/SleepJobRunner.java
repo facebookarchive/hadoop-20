@@ -21,7 +21,7 @@ import com.sun.el.parser.ParseException;
 public class SleepJobRunner {
 
   private static final Log LOG = LogFactory.getLog(SleepJobRunner.class);
-  
+
   public static void printHelp(Options options) {
     HelpFormatter formatter = new HelpFormatter();
     formatter.printHelp("SleepJobRunner [options] numberOfJobs " +
@@ -29,11 +29,13 @@ public class SleepJobRunner {
     System.out.println("");
     System.out.println("numberOfJobs\tthe number of jobs to launch");
     System.out.println("percentOfSmallJobs\tpercentage of jobs to be small: "
-        + "100 mappers, 1 reducer (default). The long jobs are the rest " 
+        + "100 mappers, 1 reducer (default). The long jobs are the rest "
         + "with 5000 maps and 397 reducers (default)");
     System.out.println("percentOfShortJobs\tpercentage of jobs to be short: "
         + "1 ms of wait time. The long jobas are the rest with "
         + "60 seconds of wait time in the mapper");
+    System.out.println("poolCount\tnumber of pools to spread the jobs over: "
+        + "default of 15");
   }
 
   /**
@@ -43,14 +45,14 @@ public class SleepJobRunner {
     public double mean;
     public double variance;
     public double stdDev;
-    
+
     public Stats(double mean, double variance, double stdDev) {
       this.mean = mean;
       this.variance = variance;
       this.stdDev = stdDev;
     }
   }
-  
+
   /**
    * Calculates mean, variance, standard deviation for a set of numbers
    * @param nums the list of numbers to compute stats on
@@ -64,7 +66,7 @@ public class SleepJobRunner {
     if (nums.size() > 0) {
       mean = sum / nums.size();
     }
-    
+
     sum = 0.0;
     for (Double d : nums) {
       sum += (d.doubleValue() - mean) * (d.doubleValue() - mean);
@@ -72,17 +74,17 @@ public class SleepJobRunner {
     if (nums.size() > 0) {
       variance = sum / nums.size();
     }
-    
+
     stdDev = Math.sqrt(variance);
     return new Stats(mean, variance, stdDev);
   }
- 
+
   @SuppressWarnings("static-access")
   public static void main(String[] args) throws Exception {
     // Parse the options
-    int largeJobMappers = 5000, largeJobReducers = 397;
+    int largeJobMappers = 5000, largeJobReducers = 397, poolCount = 15;
     int smallJobMappers = 10, smallJobReducers = 1;
-    
+
     Option help = new Option( "help", "print this message" );
     Option largeJobMappersOption = OptionBuilder.withArgName("size").hasArg()
         .withDescription("number of mappers for large jobs" )
@@ -90,32 +92,41 @@ public class SleepJobRunner {
     Option largeJobReducersOption = OptionBuilder.withArgName("size").hasArg()
         .withDescription("number of reducers for large jobs")
         .create("largeJobReducers");
-    
+    Option poolCountOption = OptionBuilder.withArgName("size").hasArg()
+        .withDescription("number of pools to spread the load over")
+        .create("poolCount");
+
     Options options = new Options();
     options.addOption(help);
     options.addOption(largeJobMappersOption);
     options.addOption(largeJobReducersOption);
-    
+    options.addOption(poolCountOption);
+
     CommandLineParser parser = new GnuParser();
     CommandLine line = null;
     line = parser.parse(options, args);
-    
+
     if (line.hasOption( "help" ) ) {
       printHelp(options);
       return;
     }
-    
+
     if (line.hasOption("largeJobMappers")) {
       largeJobMappers = Integer.parseInt(
           line.getOptionValue("largeJobMappers"));
     }
-    
+
     if (line.hasOption("largeJobReducers")) {
       largeJobReducers = Integer.parseInt(
           line.getOptionValue("largeJobReducers"));
     }
-    
-    String[] pools = new String[15];
+
+    if (line.hasOption("poolCount")) {
+      poolCount = Integer.parseInt(
+          line.getOptionValue("poolCount"));
+    }
+
+    String[] pools = new String[poolCount];
     for (int i = 0; i < pools.length; i++) {
       pools[i] = "pool" + i;
     }
@@ -171,37 +182,38 @@ public class SleepJobRunner {
     }
 
     long endTime = System.currentTimeMillis();
-    
+
     // Compute stats
     List<Double> smallJobRuntimes = new ArrayList<Double>();
     List<Double> largeJobRuntimes = new ArrayList<Double>();
-    
+
     for (SleepJobRunnerThread t : threads) {
-      if (t.getNumMappers() == largeJobMappers && 
+      if (t.getNumMappers() == largeJobMappers &&
           t.getNumReducers() == largeJobReducers) {
         largeJobRuntimes.add(Double.valueOf(t.getRuntime()/1000.0));
-      } else if (t.getNumMappers() == largeJobMappers && 
-          t.getNumReducers() == largeJobReducers) {
+      } else if (t.getNumMappers() == smallJobMappers &&
+          t.getNumReducers() == smallJobReducers) {
         smallJobRuntimes.add(Double.valueOf(t.getRuntime()/1000.0));
       } else {
-        throw new RuntimeException("Invalid mapper/reducer counts");
+        throw new RuntimeException("Invalid mapper/reducer counts: " +
+            t.getNumMappers() + ", " + t.getNumReducers());
       }
     }
-    
+
     List<Double> allJobRuntimes = new ArrayList<Double>();
     allJobRuntimes.addAll(smallJobRuntimes);
     allJobRuntimes.addAll(largeJobRuntimes);
-    
+
     Stats allStats = calcStats(allJobRuntimes);
     Stats largeStats = calcStats(largeJobRuntimes);
     Stats smallStats = calcStats(smallJobRuntimes);
-    LOG.info(String.format("All jobs   - mean: %.1f s std dev: %.1f s\n", 
+    LOG.info(String.format("All jobs   - mean: %.1f s std dev: %.1f s\n",
         allStats.mean, allStats.stdDev));
-    LOG.info(String.format("Large jobs - mean: %.1f s std dev: %.1f s\n", 
+    LOG.info(String.format("Large jobs - mean: %.1f s std dev: %.1f s\n",
         largeStats.mean, largeStats.stdDev));
-    LOG.info(String.format("Small jobs - mean: %.1f s std dev: %.1f s\n", 
+    LOG.info(String.format("Small jobs - mean: %.1f s std dev: %.1f s\n",
         smallStats.mean, smallStats.stdDev));
-    LOG.info(String.format("Total time - %.1f\n", 
+    LOG.info(String.format("Total time - %.1f\n",
         (endTime - startTime)/1000.0));
   }
 
@@ -230,14 +242,14 @@ public class SleepJobRunner {
         this.startTime = System.currentTimeMillis();
         jobToRun.run(nMappers, nReducers, sleepTime, 10, sleepTime, 10, false,
                 new ArrayList<String>(), new ArrayList<String>(), 10, 10,
-                new ArrayList<String>(), 1, false);
+                new ArrayList<String>(), 0, false, 0);
       } catch (Exception ex) {
         ex.printStackTrace();
       } finally {
         this.endTime = System.currentTimeMillis();
       }
     }
-    
+
     /**
      * Returns the time it took to run this job in miliseconds
      */
@@ -247,16 +259,16 @@ public class SleepJobRunner {
       }
       return endTime - startTime;
     }
-    
+
     public int getNumMappers() {
       return nMappers;
     }
-    
+
     public int getNumReducers() {
       return nReducers;
     }
   }
-  
+
 
 }
 

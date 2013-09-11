@@ -142,7 +142,7 @@ public class FaultManager {
       NodeUsageReport usageReport) {
     List<FaultStatsForType> faultStats = nodeToFaultStats.get(nodeName);
     if (faultStats == null) {
-      LOG.error("Received node feedback for deleted node " + nodeName);
+      LOG.info("Received node feedback for deleted node " + nodeName);
       return;
     }
     boolean statsModified = false;

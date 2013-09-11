@@ -19,6 +19,7 @@
 package org.apache.hadoop.mapred;
 
 import java.io.File;
+import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
 
 /**
  * TaskTrackerInstrumentation defines a number of instrumentation points
@@ -48,6 +49,8 @@ class TaskTrackerInstrumentation  {
   public void timedoutTask(TaskAttemptID t) { }
   
   public void taskFailedPing(TaskAttemptID t) { }
+  
+  public void diskOutOfSpaceTask(TaskAttemptID t) {}
 
   /**
    * Called just before task attempt t starts.
@@ -76,6 +79,22 @@ class TaskTrackerInstrumentation  {
    * @param memory
    *          The unaccounted memory.
    */
-  public void unaccountedMemory(long memory) {
+  public void unaccountedMemory(long memory) {}
+
+  /**
+   * Add the task launch msecs time to the metrics.
+   *
+   * @param msecs Msecs to launch the task after the command
+   */
+  public void addTaskLaunchMsecs(long msecs) { }
+
+  /**
+   * Get the metrics for the task launch msecs.
+   *
+   * @return Metrics for task launch msecs.  Returns null if no such metric
+   * exists.
+   */
+  public MetricsTimeVaryingRate getTaskLaunchMsecs() {
+    return null;
   }
 }

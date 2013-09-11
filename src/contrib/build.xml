@@ -26,6 +26,15 @@
   <!-- ====================================================== -->
   <!-- Compile contribs.                                      -->
   <!-- ====================================================== -->
+  <target name="jar-source">
+    <subant target="jar-source">
+      <fileset dir="." includes="highavailability/build.xml"/>
+      <fileset dir="." includes="raid/build.xml"/>
+      <fileset dir="." includes="corona/build.xml"/>
+      <fileset dir="." includes="seekablecompression/build.xml"/>
+    </subant>
+  </target>
+
   <target name="compile">
     <subant target="compile">
       <fileset dir="." includes="highavailability/build.xml"/>
@@ -37,6 +46,8 @@
       <fileset dir="." includes="corona/build.xml"/>
       <fileset dir="." includes="seekablecompression/build.xml"/>
       <fileset dir="." includes="fsshellservice/build.xml" />
+      <fileset dir="." includes="namespace-notifier/build.xml" />
+      <fileset dir="." includes="bittorrent/build.xml" />
     </subant>
   </target>
 
@@ -45,7 +56,9 @@
   <!-- ====================================================== -->
   <target name="package">
     <subant target="package">
-      <fileset dir="." includes="*/build.xml" excludes=""/>
+      <fileset dir="." includes="*/build.xml"> 
+        <exclude name="snapshot/build.xml"/>
+      </fileset>
     </subant>
   </target>
 
@@ -53,18 +66,35 @@
   <!-- Test all the contribs.                               -->
   <!-- ====================================================== -->
   <target name="test">
-    <subant target="test">
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="streaming/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="fairscheduler/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="gridmix/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="raid/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="corona/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="seekablecompression/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="highavailability/build.xml"/>
-      <fileset dir="." includes="snapshot/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
+      <fileset dir="." includes="namespace-notifier/build.xml"/>
     </subant>
     <subant target="test" failonerror="false">
       <fileset dir="." includes="fsshellservice/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
+      <fileset dir="." includes="bittorrent/build.xml"/>
     </subant>
   </target>
 
@@ -72,10 +102,11 @@
   <!-- Test the hdfs contribs.                                -->
   <!-- ====================================================== -->
   <target name="test-hdfs">
-    <subant target="test">
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="raid/build.xml"/>
+    </subant>
+    <subant target="test" failonerror="false">
       <fileset dir="." includes="highavailability/build.xml"/>
-      <fileset dir="." includes="snapshot/build.xml"/>
     </subant>
   </target>
 
@@ -91,8 +122,9 @@
       <fileset dir="." includes="raid/build.xml"/>
       <fileset dir="." includes="corona/build.xml"/>
       <fileset dir="." includes="highavailability/build.xml"/>
-      <fileset dir="." includes="snapshot/build.xml"/>
+      <fileset dir="." includes="namespace-notifier/build.xml"/>
       <fileset dir="." includes="seekablecompression/build.xml"/>
+      <fileset dir="." includes="bittorrent/build.xml"/>
     </subant>
   </target>
 

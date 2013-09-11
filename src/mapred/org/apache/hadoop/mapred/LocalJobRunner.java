@@ -36,6 +36,7 @@ import java.util.Vector;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -59,6 +60,8 @@ public class LocalJobRunner implements JobSubmissionProtocol {
   private JobConf conf;
   private volatile int map_tasks = 0;
   private volatile int reduce_tasks = 0;
+  private volatile int mapperNo = 0;
+  private volatile int reducerNo = 0;
 
   private JobTrackerInstrumentation myMetrics = null;
   private String runnerLogDir;
@@ -220,6 +223,7 @@ public class LocalJobRunner implements JobSubmissionProtocol {
               if (status != 0) {
                 Job.this.statusUpdate(task.getTaskID(), failedStatus(task));
               } else {
+                Job.this.statusUpdate(task.getTaskID(), succeededStatus(task));
                 Job.this.numSucceededMaps++;
               }
               break;
@@ -345,6 +349,10 @@ public class LocalJobRunner implements JobSubmissionProtocol {
           numReduceTasks = 1;
           job.setNumReduceTasks(1);
         }
+        mapperNo = rawSplits.length;
+        reducerNo = numReduceTasks;
+        LOG.info("Mapper No: " + mapperNo);
+        LOG.info("Reducer No: " + reducerNo);
         outputCommitter.setupJob(jContext);
         status.setSetupProgress(1.0f);
         
@@ -368,6 +376,7 @@ public class LocalJobRunner implements JobSubmissionProtocol {
             // Special handling for the single mapper case.
             if (this.doSequential || rawSplits.length == 1) {
               map.run(localConf, this);
+	      this.statusUpdate(map.getTaskID(), succeededStatus(map));
               numSucceededMaps++;
               myMetrics.completeMap(mapId);
               map_tasks -= 1;
@@ -511,11 +520,15 @@ public class LocalJobRunner implements JobSubmissionProtocol {
       }
     }
 
-    public boolean statusUpdate(TaskAttemptID taskId, TaskStatus taskStatus) 
+    private final Vector<TaskCompletionEvent> taskCompletionEvents = new Vector<TaskCompletionEvent>();
+    private final AtomicInteger taskCompletionEventTracker = new AtomicInteger(0);
+
+    public boolean statusUpdate(TaskAttemptID taskId, TaskStatus taskStatus)
         throws IOException, InterruptedException {
       LOG.info(taskStatus.getStateString());
       float taskIndex = mapIds.indexOf(taskId);
-      if (taskIndex >= 0) {                       // mapping
+      boolean isMap = taskIndex >= 0;
+      if (isMap) {
         float numTasks = mapIds.size();
         status.setMapProgress(taskIndex/numTasks + taskStatus.getProgress()/numTasks);
       } else {
@@ -526,7 +539,44 @@ public class LocalJobRunner implements JobSubmissionProtocol {
         updateCounters(taskId, taskCounters);
       }
 
-      // ignore phase
+      // Match TaskStatus.State to TaskCompletionEvent.Status
+      //
+      // TaskStatus.State {RUNNING, SUCCEEDED, FAILED, UNASSIGNED, KILLED,
+      //                   COMMIT_PENDING, FAILED_UNCLEAN, KILLED_UNCLEAN}
+      // TaskCompletionEvent.Status {FAILED, KILLED, SUCCEEDED, OBSOLETE,
+      //                             TIPFAILED, SUCCEEDED_NO_OUTPUT}
+      TaskCompletionEvent.Status taskCompletionEventStatus = null;
+      boolean writeCompletionEvent = false;
+      switch (taskStatus.getRunState()) {
+        case SUCCEEDED:
+          taskCompletionEventStatus = TaskCompletionEvent.Status.SUCCEEDED;
+          writeCompletionEvent = true;
+          break;
+        case KILLED:
+          taskCompletionEventStatus = TaskCompletionEvent.Status.KILLED;
+          writeCompletionEvent = true;
+          break;
+        case FAILED:
+          taskCompletionEventStatus = TaskCompletionEvent.Status.FAILED;
+          writeCompletionEvent = true;
+          break;
+      }
+      if(writeCompletionEvent) {
+        int idWithinJob;
+        if (isMap) {
+          idWithinJob = (int) taskIndex;   // index of map task
+        } else {
+          idWithinJob = 0;                // We have only 1 reduce task.
+        }
+        TaskCompletionEvent taskCompletionEvent = new TaskCompletionEvent(
+            taskCompletionEventTracker.getAndIncrement(),
+            taskId,
+            idWithinJob,
+            isMap,
+            taskCompletionEventStatus,
+            null); // We don't need taskTrackerHttp as it's running on localhost.
+        taskCompletionEvents.add(taskCompletionEvent);
+      }
 
       return true;
     }
@@ -596,7 +646,19 @@ public class LocalJobRunner implements JobSubmissionProtocol {
       return new MapTaskCompletionEventsUpdate(TaskCompletionEvent.EMPTY_ARRAY,
                                                false);
     }
-    
+
+    public TaskCompletionEvent[] getTaskCompletionEvents(
+        int fromEventId, int maxEvents) {
+      TaskCompletionEvent[] events = TaskCompletionEvent.EMPTY_ARRAY;
+      synchronized (taskCompletionEvents) {
+        if (taskCompletionEvents.size() > fromEventId) {
+          int actualMax =
+              Math.min(maxEvents, (taskCompletionEvents.size() - fromEventId));
+          events = taskCompletionEvents.subList(fromEventId, actualMax + fromEventId).toArray(events);
+        }
+      }
+      return events;
+    }
   }
 
   public LocalJobRunner(JobConf conf) throws IOException {
@@ -642,10 +704,10 @@ public class LocalJobRunner implements JobSubmissionProtocol {
   }
 
   public TaskReport[] getMapTaskReports(JobID id) {
-    return new TaskReport[0];
+    return (this.mapperNo > 0)? new TaskReport[this.mapperNo] : new TaskReport[0];
   }
   public TaskReport[] getReduceTaskReports(JobID id) {
-    return new TaskReport[0];
+    return (this.reducerNo > 0)? new TaskReport[this.reducerNo] : new TaskReport[0];
   }
   public TaskReport[] getCleanupTaskReports(JobID id) {
     return new TaskReport[0];
@@ -686,9 +748,12 @@ public class LocalJobRunner implements JobSubmissionProtocol {
 
   public JobStatus[] jobsToComplete() {return null;}
 
-  public TaskCompletionEvent[] getTaskCompletionEvents(JobID jobid
-      , int fromEventId, int maxEvents) throws IOException {
-    return TaskCompletionEvent.EMPTY_ARRAY;
+  public TaskCompletionEvent[] getTaskCompletionEvents(
+      JobID jobid, int fromEventId, int maxEvents) throws IOException{
+    Job job = jobs.get(jobid);
+    if (job == null) return TaskCompletionEvent.EMPTY_ARRAY;
+
+    return job.getTaskCompletionEvents(fromEventId, maxEvents);
   }
   
   public JobStatus[] getAllJobs() {return null;}
@@ -699,8 +764,8 @@ public class LocalJobRunner implements JobSubmissionProtocol {
    * To be implemented
    */
   public String[] getTaskDiagnostics(TaskAttemptID taskid)
-  		throws IOException{
-	  return new String [0];
+      throws IOException{
+    return new String [0];
   }
 
   /**
@@ -795,6 +860,12 @@ public class LocalJobRunner implements JobSubmissionProtocol {
         RPC.stopProxy(umbilical);
       }
     }
+  }
+
+  static TaskStatus succeededStatus(Task task) {
+    TaskStatus taskStatus = (TaskStatus) task.taskStatus.clone();
+    taskStatus.setRunState(TaskStatus.State.SUCCEEDED);
+    return taskStatus;
   }
 
   static TaskStatus failedStatus(Task task) {

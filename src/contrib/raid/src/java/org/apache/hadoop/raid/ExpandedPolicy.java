@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
@@ -29,27 +30,53 @@ import org.apache.hadoop.raid.protocol.PolicyInfo;
 class ExpandedPolicy {
   final String srcPrefix;
   final long modTimePeriod;
-  final ErasureCodeType code;
+  final Codec codec;
   final int targetReplication;
   final PolicyInfo parentPolicy;
 
   ExpandedPolicy(String srcPrefix, long modTimePeriod,
-      ErasureCodeType code, int targetReplication, PolicyInfo parentPolicy) {
+      Codec codec, int targetReplication, PolicyInfo parentPolicy) {
     this.srcPrefix = srcPrefix;
     this.modTimePeriod = modTimePeriod;
-    this.code = code;
+    this.codec = codec;
     this.targetReplication = targetReplication;
     this.parentPolicy = parentPolicy;
   }
-  boolean match(FileStatus f, long mtime, long now) {
+  
+  /*
+   * Return state of other policy 
+   */
+  RaidState match(FileStatus f, long mtime, long now, Configuration conf,
+      List<FileStatus> lfs)
+          throws IOException {
     String pathStr = normalizePath(f.getPath());
     if (pathStr.startsWith(srcPrefix)) {
-      if (now - mtime > modTimePeriod) {
-        return true;
-      }
+      return getBasicState(f, mtime, now, false, conf, lfs);
     }
-    return false;
+    return RaidState.NOT_RAIDED_NO_POLICY;
   }
+  
+  RaidState getBasicState(FileStatus f, long mtime, long now, 
+      boolean skipParityCheck, Configuration conf, List<FileStatus> lfs)
+          throws IOException {
+    if (f.isDir() != codec.isDirRaid) {
+      return RaidState.NOT_RAIDED_NO_POLICY;
+    }
+    if (now - mtime < modTimePeriod) {
+      return RaidState.NOT_RAIDED_TOO_NEW;
+    }
+    long repl = f.isDir()?
+        DirectoryStripeReader.getReplication(lfs):
+        f.getReplication();
+    if (repl == targetReplication) {
+      if (skipParityCheck || 
+          ParityFilePair.parityExists(f, codec, conf)) {
+        return RaidState.RAIDED;
+      }
+    } 
+    return RaidState.NOT_RAIDED_BUT_SHOULD;
+  }
+  
   static List<ExpandedPolicy> expandPolicy(PolicyInfo info)
       throws IOException {
     List<ExpandedPolicy> result = new ArrayList<ExpandedPolicy>();
@@ -58,13 +85,14 @@ class ExpandedPolicy {
       long modTimePeriod = Long.parseLong(info.getProperty("modTimePeriod"));
       int targetReplication =
         Integer.parseInt(info.getProperty("targetReplication"));
-      ErasureCodeType code = info.getErasureCode();
+      Codec codec = Codec.getCodec(info.getCodecId());
       ExpandedPolicy ePolicy = new ExpandedPolicy(
-          srcPrefix, modTimePeriod, code, targetReplication, info);
+          srcPrefix, modTimePeriod, codec, targetReplication, info);
       result.add(ePolicy);
     }
     return result;
   }
+  
   static class ExpandedPolicyComparator
   implements Comparator<ExpandedPolicy> {
     @Override
@@ -76,19 +104,18 @@ class ExpandedPolicy {
       if (p1.srcPrefix.length() < p2.srcPrefix.length()) {
         return 1;
       }
-      if (p1.code == ErasureCodeType.RS &&
-          p2.code == ErasureCodeType.XOR) {
-        // Prefers RS code
+      if (p1.codec.priority > p2.codec.priority) {
+        // Prefers higher priority
         return -1;
       }
-      if (p1.code == ErasureCodeType.XOR &&
-          p2.code == ErasureCodeType.RS) {
+      if (p1.codec.priority < p2.codec.priority) {
         return 1;
       }
       // Prefers lower target replication factor
       return p1.targetReplication < p2.targetReplication ? -1 : 1;
     }
   }
+  
   private static String normalizePath(Path p) {
     String result = p.toUri().getPath();
     if (!result.endsWith(Path.SEPARATOR)) {

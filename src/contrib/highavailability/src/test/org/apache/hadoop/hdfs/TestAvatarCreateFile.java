@@ -11,7 +11,8 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.After;
 import static org.junit.Assert.*;
@@ -33,6 +34,7 @@ public class TestAvatarCreateFile {
     conf.setBoolean("fs.ha.retrywrites", true);
     cluster = new MiniAvatarCluster(conf, 3, true, null, null);
     fs = cluster.getFileSystem();
+    pass = true;
   }
 
   @After
@@ -56,9 +58,10 @@ public class TestAvatarCreateFile {
 
   private class TestHandler extends InjectionHandler {
 
-    protected void _processEventIO(InjectionEvent event, Object... args)
+    @Override
+    protected void _processEventIO(InjectionEventI event, Object... args)
         throws IOException {
-      if (event == InjectionEvent.NAMENODE_AFTER_CREATE_FILE) {
+      if (event == InjectionEvent.FAILOVERCLIENTPROTOCOL_AFTER_CREATE_FILE) {
         InjectionHandler.clear();
         throw new EOFException("FAIL create connection!");
       }
@@ -72,11 +75,13 @@ public class TestAvatarCreateFile {
     cluster.clearZooKeeperNode(0);
     ClientProtocol namenode = ((DistributedAvatarFileSystem) fs).getClient()
         .getNameNodeRPC();
-    new FailoverThread().start();
+    Thread t = new FailoverThread();
+    t.start();
     FsPermission perm = new FsPermission((short) 0264);
     namenode.create("/test", perm, ((DistributedAvatarFileSystem) fs)
         .getClient().getClientName(), true, true, (short) 3, (long) 1024);
     LOG.info("Done with create");
+    t.join();
     assertTrue(fs.exists(new Path("/test")));
     assertTrue(pass);
   }
@@ -88,11 +93,13 @@ public class TestAvatarCreateFile {
     cluster.clearZooKeeperNode(0);
     ClientProtocol namenode = ((DistributedAvatarFileSystem) fs).getClient()
         .getNameNodeRPC();
-    new FailoverThread().start();
+    Thread t = new FailoverThread();
+    t.start();
     FsPermission perm = new FsPermission((short) 0264);
     namenode.create("/test1", perm, ((DistributedAvatarFileSystem) fs)
         .getClient().getClientName(), false, true, (short) 3, (long) 1024);
     LOG.info("Done with create");
+    t.join();
     assertTrue(fs.exists(new Path("/test1")));
     assertTrue(pass);
   }

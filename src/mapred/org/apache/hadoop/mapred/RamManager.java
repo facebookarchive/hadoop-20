@@ -24,16 +24,14 @@ import java.io.InputStream;
  */
 interface RamManager {
   /**
-   * Reserve memory for data coming through the given input-stream.
+   * Reserve memory for data
    * 
    * @param requestedSize size of memory requested
-   * @param in input stream
    * @throws InterruptedException
    * @return <code>true</code> if memory was allocated immediately, 
    *         else <code>false</code>
    */
-  boolean reserve(int requestedSize, InputStream in) 
-  throws InterruptedException;
+  void reserve(int requestedSize) throws InterruptedException;
   
   /**
    * Return memory to the pool.

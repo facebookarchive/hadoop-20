@@ -53,7 +53,7 @@
 <hr>
 
 <h2>Local logs</h2>
-<a href="/logs/">Log</a> directory
+<a href="logs/">Log</a> directory
 
 <%
 out.println(ServletUtil.htmlFooter());

@@ -38,6 +38,7 @@ import org.apache.hadoop.io.compress.DefaultCodec;
 import org.apache.hadoop.mapred.IFile.Writer;
 import org.apache.hadoop.mapred.Merger.Segment;
 import org.apache.hadoop.mapred.Task.TaskReporter;
+import org.apache.hadoop.util.LexicographicalComparerHolder;
 import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.ResourceCalculatorPlugin.ProcResourceValues;
 
@@ -469,21 +470,19 @@ public class BlockMapOutputBuffer<K extends BytesWritable, V extends BytesWritab
                   @Override
                   public int compare(byte[] b1, int s1, int l1,
                       byte[] b2, int s2, int l2) {
-                    return LexicographicalComparerHolder.BEST_COMPARER
-                        .compareTo(
+                    return LexicographicalComparerHolder.compareBytes(
                             b1, 
                             s1 + WritableUtils.INT_LENGTH_BYTES, 
                             l1 - WritableUtils.INT_LENGTH_BYTES, 
                             b2, 
                             s2 + WritableUtils.INT_LENGTH_BYTES, 
-                            l2 - WritableUtils.INT_LENGTH_BYTES
-                            );
+                            l2 - WritableUtils.INT_LENGTH_BYTES);
                   }
 
                   @Override
                   public int compare(K o1, K o2) {
-                    return LexicographicalComparerHolder.BEST_COMPARER
-                        .compareTo( o1.getBytes(), 0, o1.getLength(), 
+                    return LexicographicalComparerHolder.compareBytes(
+                    		o1.getBytes(), 0, o1.getLength(), 
                             o2.getBytes(), 0, o2.getLength());
                   }
                 },  reporter, null,

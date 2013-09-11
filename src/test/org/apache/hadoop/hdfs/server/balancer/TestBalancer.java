@@ -78,13 +78,13 @@ public class TestBalancer extends TestCase {
   /* fill up a cluster with <code>numNodes</code> datanodes 
    * whose used space to be <code>size</code>
    */
-  private Block[] generateBlocks(long size, short numNodes) throws IOException {
+  private Block[] generateBlocks(long size, short numNodes,
+      short replicationFactor) throws IOException {
     cluster = new MiniDFSCluster( CONF, numNodes, true, null);
     try {
       cluster.waitActive();
       client = DFSClient.createNamenode(CONF);
 
-      short replicationFactor = (short)(numNodes-1);
       long fileLen = size/replicationFactor;
       createFile(fileLen, replicationFactor);
 
@@ -141,8 +141,8 @@ public class TestBalancer extends TestCase {
    * then redistribute blocks according the required distribution.
    * Afterwards a balancer is running to balance the cluster.
    */
-  private void testUnevenDistribution(
-      long distribution[], long capacities[], String[] racks) throws Exception {
+  private void testUnevenDistribution(long distribution[], long capacities[],
+      String[] racks, short replicationFactor) throws Exception {
     int numDatanodes = distribution.length;
     if (capacities.length != numDatanodes || racks.length != numDatanodes) {
       throw new IllegalArgumentException("Array length is not the same");
@@ -155,11 +155,12 @@ public class TestBalancer extends TestCase {
     }
 
     // fill the cluster
-    Block[] blocks = generateBlocks(totalUsedSpace, (short)numDatanodes);
+    Block[] blocks = generateBlocks(totalUsedSpace, (short) numDatanodes,
+        replicationFactor);
 
     // redistribute blocks
-    Block[][] blocksDN = distributeBlocks(
-        blocks, (short)(numDatanodes-1), distribution);
+    Block[][] blocksDN = distributeBlocks(blocks, replicationFactor,
+        distribution);
 
     // restart the cluster: do NOT format the cluster
     CONF.set("dfs.safemode.threshold.pct", "0.0f"); 
@@ -246,8 +247,9 @@ public class TestBalancer extends TestCase {
       balanced = true;
       double avgUtilization = ((double)totalUsedSpace)/totalCapacity*100;
       for(DatanodeInfo datanode:datanodeReport) {
-        if(Math.abs(avgUtilization-
-            ((double)datanode.getDfsUsed())/datanode.getCapacity()*100)>10) {
+        double util = ((double) datanode.getDfsUsed()) / datanode.getCapacity()
+            * 100;
+        if (Math.abs(avgUtilization - util) > 10 || util > 99) {
           balanced = false;
           try {
             Thread.sleep(100);
@@ -276,7 +278,7 @@ public class TestBalancer extends TestCase {
     testUnevenDistribution(
         new long[] {50*CAPACITY/100, 10*CAPACITY/100},
         new long[]{CAPACITY, CAPACITY},
-        new String[] {RACK0, RACK1});
+        new String[] {RACK0, RACK1}, (short) 1);
   }
 
 
@@ -285,6 +287,13 @@ public class TestBalancer extends TestCase {
     Configuration conf = new Configuration(CONF);
     testBalancerDefaultConstructor(conf, new long[] { CAPACITY, CAPACITY },
         new String[] { RACK0, RACK1 }, CAPACITY, RACK2);
+  }
+
+  public void testBalancer3() throws Exception {
+    testUnevenDistribution(new long[] { 995 * CAPACITY / 1000,
+        90 * CAPACITY / 100, 995 * CAPACITY / 1000, 90 * CAPACITY / 100 },
+        new long[] { CAPACITY, CAPACITY, CAPACITY, CAPACITY }, new String[] {
+            RACK0, RACK0, RACK1, RACK1 }, (short) 1);
   }
 
   private void testBalancerDefaultConstructor(Configuration conf, long[] capacities,

@@ -46,7 +46,7 @@ String NodeHeaderStr(String name) {
 			order = "DSC";
 	}
 	ret += " onClick=\"window.document.location=" +
-	"'/dfsnodelist.jsp?whatNodes="+whatNodes+"&status="+status+
+	"'dfsnodelist.jsp?whatNodes="+whatNodes+"&status="+status+
   "&sorter/field=" + name + "&sorter/order=" +
 	order + "'\" title=\"sort on this column\"";
 
@@ -350,7 +350,7 @@ throws IOException {
 		} else if (whatNodes.equals("DECOMMISSIONING")) {
 			// Decommissioning Nodes
 			ArrayList<DatanodeDescriptor> decommissioning = nn.getNamesystem()
-			    .getDecommissioningNodes();
+			    .getDecommissioningNodesList();
 			out.print("<br> <a name=\"DecommissioningNodes\" id=\"title\"> "
 			    + " Decommissioning Datanodes : " + decommissioning.size()
                             + "</a><br><br>\n");
@@ -389,7 +389,7 @@ String namenodeLabel = nnAddr.getHostName() + ":" + nnAddr.getPort();
 
 <html>
 
-<link rel="stylesheet" type="text/css" href="/static/hadoop.css">
+<link rel="stylesheet" type="text/css" href="static/hadoop.css">
 <title>Hadoop NameNode <%=namenodeLabel%></title>
   
 <body>
@@ -403,9 +403,9 @@ String namenodeLabel = nnAddr.getHostName() + ":" + nnAddr.getPort();
 <tr> <td id="col1"> Upgrades: <td> <%= jspHelper.getUpgradeStatusText()%>
 </table></div><br>				      
 
-<b><a href="/nn_browsedfscontent.jsp">Browse the filesystem</a></b><br>
-<b><a href="/logs/">Namenode Logs</a></b><br>
-<b><a href=/dfshealth.jsp> Go back to DFS home</a></b>
+<b><a href="nn_browsedfscontent.jsp">Browse the filesystem</a></b><br>
+<b><a href="logs/">Namenode Logs</a></b><br>
+<b><a href=dfshealth.jsp> Go back to DFS home</a></b>
 <hr>
 <%
 	generateDFSNodesList(out, nn, request); 

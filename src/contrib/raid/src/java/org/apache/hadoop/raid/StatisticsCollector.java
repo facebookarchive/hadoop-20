@@ -21,10 +21,13 @@ import java.io.*;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -44,21 +47,22 @@ public class StatisticsCollector implements Runnable {
     "raid.statscollector.submit.raid.jobs";
   public static final String STATS_SNAPSHOT_FILE_KEY =
     "fs.raid.statscollector.snapshotFile";
+  public static final String STATS_COLLECTOR_UPDATE_PERIOD =
+    "raid.statscollector.update.period";
 
   final static public Log LOG = LogFactory.getLog(StatisticsCollector.class);
-  final static public long UPDATE_PERIOD = 20 * 60 * 1000L;
+  final static public long DEFAULT_UPDATE_PERIOD = 20 * 60 * 1000L;
   final static public long FILES_SCANNED_LOGGING_PERIOD = 100 * 1000L;
   final static private int MAX_FILES_TO_RAID_QUEUE_SIZE = 10000000;
   final private ConfigManager configManager;
-  final private Path rsParityLocation;
-  final private Path xorParityLocation;
   final private FileSystem fs;
   final private Configuration conf;
   final private int numThreads;
+  final private long updatePeriod;
   final private RaidNode raidNode;
   final private String snapshotFileName;
 
-  private volatile Map<ErasureCodeType, Statistics> lastRaidStatistics;
+  private volatile Map<String, Statistics> lastRaidStatistics;
   private volatile long lastUpdateFinishTime = 0L;
   private volatile long lastUpdateUsedTime = 0L;
   private long lastUpdateStartTime = 0L;
@@ -73,13 +77,12 @@ public class StatisticsCollector implements Runnable {
     this.raidNode = raidNode;
     this.conf = conf;
     this.fs = new Path(Path.SEPARATOR).getFileSystem(conf);
-    this.rsParityLocation = RaidNode.rsDestinationPath(conf);
-    this.xorParityLocation = RaidNode.xorDestinationPath(conf);
     this.lastUpdateFinishTime = 0L;
     this.lastUpdateStartTime = 0L;
     this.lastRaidStatistics = null;
     this.numThreads = conf.getInt(RaidNode.RAID_DIRECTORYTRAVERSAL_THREADS, 4);
     this.submitRaidJobs = conf.getBoolean(STATS_COLLECTOR_SUBMIT_JOBS_CONFIG, true);
+    this.updatePeriod = conf.getLong(STATS_COLLECTOR_UPDATE_PERIOD, DEFAULT_UPDATE_PERIOD);
     this.snapshotFileName = conf.get(STATS_SNAPSHOT_FILE_KEY);
   }
 
@@ -88,8 +91,8 @@ public class StatisticsCollector implements Runnable {
     readStatsSnapshot();
     while (running) {
       try {
-        while (RaidNode.now() - lastUpdateStartTime < UPDATE_PERIOD) {
-          Thread.sleep(UPDATE_PERIOD / 10);
+        while (RaidNode.now() - lastUpdateStartTime < updatePeriod) {
+          Thread.sleep(updatePeriod / 10);
         }
         Collection<PolicyInfo> allPolicies = loadPolicies();
         collect(allPolicies);
@@ -154,7 +157,7 @@ public class StatisticsCollector implements Runnable {
         lastUpdateUsedTime = (Long) input.readObject();
         filesScanned = (Long) input.readObject();
         lastRaidStatistics =
-          (Map<ErasureCodeType, Statistics>) input.readObject();
+          (Map<String, Statistics>) input.readObject();
       } finally {
         input.close();
       }
@@ -169,14 +172,14 @@ public class StatisticsCollector implements Runnable {
     return true;
   }
 
-  public Statistics getRaidStatistics(ErasureCodeType code) {
+  public Statistics getRaidStatistics(String code) {
     if (lastRaidStatistics == null) {
       return null;
     }
     return lastRaidStatistics.get(code);
   }
 
-  protected Map<ErasureCodeType, Statistics> getRaidStatisticsMap() {
+  protected Map<String, Statistics> getRaidStatisticsMap() {
     return lastRaidStatistics;
   }
 
@@ -201,7 +204,8 @@ public class StatisticsCollector implements Runnable {
       return -1;
     }
     long saving = 0;
-    for (ErasureCodeType code : ErasureCodeType.values()) {
+    for (Codec codec : Codec.getCodecs()) {
+      String code = codec.id;
       long s = lastRaidStatistics.get(code).getSaving();
       if (s == -1) {
         return -1;
@@ -220,7 +224,8 @@ public class StatisticsCollector implements Runnable {
       return;
     }
     long saving = 0;
-    for (ErasureCodeType code : ErasureCodeType.values()) {
+    for (Codec codec : Codec.getCodecs()) {
+      String code = codec.id;
       long s = lastRaidStatistics.get(code).getSaving();
       if (s > 0) {
         metrics.savingForCode.get(code).set(s);
@@ -241,7 +246,8 @@ public class StatisticsCollector implements Runnable {
       return -1;
     }
     long saving = 0;
-    for (ErasureCodeType code : ErasureCodeType.values()) {
+    for (Codec codec : Codec.getCodecs()) {
+      String code = codec.id;
       long s = lastRaidStatistics.get(code).getDoneSaving();
       if (s == -1) {
         return -1;
@@ -259,13 +265,14 @@ public class StatisticsCollector implements Runnable {
     double totalPhysical;
     try {
       dfs = new DFSClient(conf);
-      totalPhysical = dfs.getDiskStatus().getDfsUsed();
+      totalPhysical = dfs.getNSDiskStatus().getDfsUsed();
     } catch (IOException e) {
       return -1;
     }
     double notRaidedPhysical = totalPhysical;
     double totalLogical = 0;
-    for (ErasureCodeType code : ErasureCodeType.values()) {
+    for (Codec codec : Codec.getCodecs()) {
+      String code = codec.id;
       Statistics st = lastRaidStatistics.get(code);
       totalLogical += st.getSourceCounters(RaidState.RAIDED).getNumLogical();
       notRaidedPhysical -= st.getSourceCounters(RaidState.RAIDED).getNumBytes();
@@ -291,15 +298,18 @@ public class StatisticsCollector implements Runnable {
   }
 
   void collect(Collection<PolicyInfo> allPolicies) throws IOException {
-    Map<ErasureCodeType, Statistics>
+    Map<String, Statistics>
         codeToRaidStatistics = createEmptyStatistics();
     lastUpdateStartTime = RaidNode.now();
     filesScanned = 0;
-    Statistics rsStats = codeToRaidStatistics.get(ErasureCodeType.RS);
-    Statistics xorStats = codeToRaidStatistics.get(ErasureCodeType.XOR);
+
     collectSourceStatistics(codeToRaidStatistics, allPolicies);
-    collectParityStatistics(rsParityLocation, rsStats);
-    collectParityStatistics(xorParityLocation, xorStats);
+
+    for (Codec codec : Codec.getCodecs()) {
+      Statistics stats = codeToRaidStatistics.get(codec.id);
+      Path parityPath = new Path(codec.parityDirectory);
+      collectParityStatistics(codec, parityPath, stats);
+    }
     lastRaidStatistics = codeToRaidStatistics;
     populateMetrics(codeToRaidStatistics);
     long now = RaidNode.now();
@@ -308,43 +318,152 @@ public class StatisticsCollector implements Runnable {
     LOG.info("Finishing collecting statistics.");
   }
 
-  private Map<ErasureCodeType, Statistics> createEmptyStatistics() {
-    Map<ErasureCodeType, Statistics> m =
-        new HashMap<ErasureCodeType, Statistics>();
-    for (ErasureCodeType code : ErasureCodeType.values()) {
-      m.put(code, new Statistics(code, conf));
+  private Map<String, Statistics> createEmptyStatistics() {
+    Map<String, Statistics> m =
+        new HashMap<String, Statistics>();
+    for (Codec codec : Codec.getCodecs()) {
+      if (codec.isDirRaid) {
+        m.put(codec.id, new DirectoryStatistics(codec, conf));
+      } else {
+        m.put(codec.id, new Statistics(codec, conf));
+      }
     }
-    return new EnumMap<ErasureCodeType, Statistics>(m);
+    return m;
   }
 
   private void collectSourceStatistics(
-      Map<ErasureCodeType, Statistics> codeToRaidStatistics,
+      Map<String, Statistics> codeToRaidStatistics,
       Collection<PolicyInfo> allPolicyInfos)
       throws IOException {
+    
+    List<PolicyInfo> fileRaidInfos = new ArrayList<PolicyInfo>();
+    List<Path> fileRaidRoots = new ArrayList<Path>();
+    for (PolicyInfo info : allPolicyInfos) {
+      String code = info.getCodecId();
+      Codec codec = Codec.getCodec(code);
+      if (!codec.isDirRaid) {
+        fileRaidInfos.add(info);
+        fileRaidRoots.addAll(info.getSrcPathExpanded());
+      }
+    }
+    
+    Path[] roots = fileRaidRoots.toArray(new Path[] {});
+    // collect file level statistics
+    DirectoryTraversal retriever = DirectoryTraversal.fileRetriever(
+        mergeRoots(roots), fs, numThreads, false, true);
+    collectSourceStatistics(retriever, codeToRaidStatistics, fileRaidInfos);
+    
+    List<PolicyInfo> dirRaidInfos = new ArrayList<PolicyInfo>();
+    List<Path> dirRaidRoots = new ArrayList<Path>();
+    for (PolicyInfo info : allPolicyInfos) {
+      String code = info.getCodecId();
+      Codec codec = Codec.getCodec(code);
+      if (codec.isDirRaid) {
+        dirRaidInfos.add(info);
+        dirRaidRoots.addAll(info.getSrcPathExpanded());
+      }
+    }
+    
+    // collect dir level statistics
+    roots = dirRaidRoots.toArray(new Path[] {});
+    retriever = DirectoryTraversal.directoryRetriever(
+        mergeRoots(roots), fs, numThreads, false, true, true);
+    collectSourceStatistics(retriever, codeToRaidStatistics, dirRaidInfos);
+  }
+  
+  /**
+   * Sort the path array by depth
+   * @param paths
+   */
+  private void sortPathByDepth(Path[] paths) {
+    Arrays.sort(paths, new Comparator<Path> (){
+      @Override
+      public int compare(Path o1, Path o2) {
+        return ((Integer)o1.depth()).compareTo(o2.depth());
+      }});
+  }
+  
+  /**
+   * merge the roots, get the top ones.
+   * @param dupRoots
+   * @return
+   */
+  private List<Path> mergeRoots(Path[] dupRoots) {
+    sortPathByDepth(dupRoots);
+    List<Path> roots = new ArrayList<Path>();
+    
+    for (Path candidate : dupRoots) {
+      boolean shouldAdd = true;
+      for (Path root : roots) {
+        if (isAncestorPath(root.toUri().getPath(), 
+            candidate.toUri().getPath())) {
+          shouldAdd = false;
+          break;
+        }
+      }
+      
+      if (shouldAdd) {
+        roots.add(candidate);
+      }
+    }
+    return roots;
+  }
+  
+  private void collectSourceStatistics(DirectoryTraversal retriever,
+      Map<String, Statistics> codeToRaidStatistics,
+      Collection<PolicyInfo> allPolicyInfos) 
+      throws IOException {
+    
     long now = RaidNode.now();
     RaidState.Checker checker =
         new RaidState.Checker(allPolicyInfos, conf);
+    FileStatus file;
+    Map<PolicyInfo, List<FileStatus>> filesToRaidMap = 
+        new HashMap<PolicyInfo, List<FileStatus>>();
+    Map<PolicyInfo, List<Path>> rootsMap = 
+        new HashMap<PolicyInfo, List<Path>>();
+    
+    // init the filesToRaid and rootsMap
     for (PolicyInfo info : allPolicyInfos) {
-      LOG.info("Collecting statistics for policy:" + info.getName() + ".");
-      ErasureCodeType code = info.getErasureCode();
-      Statistics statistics = codeToRaidStatistics.get(code);
-      DirectoryTraversal retriever =
-          DirectoryTraversal.fileRetriever(
-              info.getSrcPathExpanded(), fs, numThreads, false, true);
-      int targetReplication =
-          Integer.parseInt(info.getProperty("targetReplication"));
-      FileStatus file;
-      List<FileStatus> filesToRaid = new ArrayList<FileStatus>();
-      while ((file = retriever.next()) != DirectoryTraversal.FINISH_TOKEN) {
-        boolean shouldBeRaided =
-          statistics.addSourceFile(info, file, checker, now, targetReplication);
+      filesToRaidMap.put(info, new ArrayList<FileStatus>());
+      rootsMap.put(info, info.getSrcPathExpanded());
+    }
+    
+    while ((file = retriever.next()) != DirectoryTraversal.FINISH_TOKEN) {
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Process file: " + file.getPath());
+      }
+      for (PolicyInfo info : allPolicyInfos) {
+        if (!underPolicy(file.getPath(), rootsMap.get(info))) {
+          continue;
+        }
+        
+        String code = info.getCodecId();
+        List<FileStatus> filesToRaid = filesToRaidMap.get(info);
+        Statistics statistics = codeToRaidStatistics.get(code);
+        int targetReplication = 
+            Integer.parseInt(info.getProperty("targetReplication"));
+        
+        boolean shouldBeRaided = 
+            statistics.addSourceFile(fs, info, file, checker, 
+                now, targetReplication);
         if (shouldBeRaided &&
             filesToRaid.size() < MAX_FILES_TO_RAID_QUEUE_SIZE) {
           filesToRaid.add(file);
         }
-        filesToRaid = submitRaidJobsWhenPossible(info, filesToRaid, false);
-        incFileScanned();
+        
+        if (!filesToRaid.isEmpty()) {
+          filesToRaid = submitRaidJobsWhenPossible(info, filesToRaid, false);
+          filesToRaidMap.put(info, filesToRaid);
+        }
       }
+      incFileScanned(file);
+    }
+    
+    for (PolicyInfo info : allPolicyInfos) {
+      List<FileStatus> filesToRaid = filesToRaidMap.get(info);
+      String code = info.getCodecId();
+      Statistics statistics = codeToRaidStatistics.get(code);
       filesToRaid = submitRaidJobsWhenPossible(info, filesToRaid, true);
       if (!filesToRaid.isEmpty()) {
         // Note that there might be some files not raided. But we don't want to
@@ -356,7 +475,28 @@ public class StatisticsCollector implements Runnable {
           "\n" + statistics);
     }
   }
+  
+  private boolean underPolicy(Path filePath, List<Path> roots) 
+      throws IOException {    
+    String rawPath = filePath.toUri().getPath();
+    for (Path root : roots) {
+      String rawRoot = root.toUri().getPath();
+      if (isAncestorPath(rawRoot, rawPath)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
+  private static boolean isAncestorPath(String ancestor, String path) {
+    if (!path.startsWith(ancestor)) {
+      return false;
+    }
+    
+    int len = ancestor.length();
+    return path.length() == len || path.charAt(len) == Path.SEPARATOR_CHAR;
+  }
+  
   /**
    * Raiding a given list of files
    * @param info The Raid policy
@@ -388,16 +528,16 @@ public class StatisticsCollector implements Runnable {
     return filesToRaid;
   }
 
-  private void collectParityStatistics(Path parityLocation,
+  private void collectParityStatistics(Codec codec, Path parityLocation,
       Statistics statistics) throws IOException {
     LOG.info("Collecting parity statistics in " + parityLocation + ".");
     DirectoryTraversal retriever =
-        DirectoryTraversal.fileRetriever(
+            DirectoryTraversal.fileRetriever(
             Arrays.asList(parityLocation), fs, numThreads, false, true);
     FileStatus file;
     while ((file = retriever.next()) != DirectoryTraversal.FINISH_TOKEN) {
       statistics.addParityFile(file);
-      incFileScanned();
+      incFileScanned(file);
     }
     LOG.info("Finish collecting statistics in " +
         parityLocation + "\n" + statistics);
@@ -407,8 +547,16 @@ public class StatisticsCollector implements Runnable {
     return filesScanned;
   }
 
-  private void incFileScanned() {
-    filesScanned += 1;
+  private void incFileScanned(FileStatus file) throws IOException {
+    if (file.isDir()) {
+      FileStatus[] fStats = fs.listStatus(file.getPath());
+      if (fStats != null) {
+        filesScanned += fStats.length;
+      }
+    } else {
+      filesScanned += 1;
+    }
+    
     if (filesScanned % FILES_SCANNED_LOGGING_PERIOD == 0) {
       LOG.info("Scanned " +
           StringUtils.humanReadableInt(filesScanned) + " files.");
@@ -416,9 +564,10 @@ public class StatisticsCollector implements Runnable {
   }
 
   private void populateMetrics(
-      Map<ErasureCodeType, Statistics> codeToRaidStatistics) {
+      Map<String, Statistics> codeToRaidStatistics) {
     RaidNodeMetrics metrics = RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
-    for (ErasureCodeType code : ErasureCodeType.values()) {
+    for (Codec codec : Codec.getCodecs()) {
+      String code = codec.id;
       Counters counters = codeToRaidStatistics.get(code).getParityCounters();
       metrics.parityFiles.get(code).set(counters.getNumFiles());
       metrics.parityBlocks.get(code).set(counters.getNumBlocks());

@@ -101,8 +101,8 @@ public class TestJMXGet extends TestCase {
         jmx.getValue("NumLiveDataNodes")), 2);
     assertEquals(Integer.parseInt(
         jmx.getValue("BlocksCorrupted")), blocks_corrupted);
-    assertEquals(Integer.parseInt(
-        jmx.getValue("NumOpenConnections")), 0);
+    assertEquals(Long.parseLong(
+        jmx.getValue("NumOpenConnectionsAvgTime")), 0);
 
     cluster.shutdown();
   }

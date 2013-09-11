@@ -75,6 +75,7 @@ public class TestDU extends TestCase {
    * @throws IllegalAccessException 
    * @throws IllegalArgumentException 
    */
+  @SuppressWarnings("unchecked")
   public void testDU() throws IOException, InterruptedException, SecurityException, NoSuchFieldException, IllegalArgumentException, IllegalAccessException {
     int writtenSize = 32*1024;   // writing 32K
     File file = DU_DIR;

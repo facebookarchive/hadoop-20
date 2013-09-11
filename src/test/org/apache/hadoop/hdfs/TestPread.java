@@ -19,12 +19,26 @@ package org.apache.hadoop.hdfs;
 
 import junit.framework.TestCase;
 import java.io.*;
+import java.util.ArrayList;
 import java.util.Random;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.metrics.DFSClientMetrics;
+import org.apache.hadoop.hdfs.metrics.DFSQuorumReadMetrics;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 /**
  * This class tests the DFS positional read functionality in a single node
@@ -36,8 +50,9 @@ public class TestPread extends TestCase {
   boolean simulatedStorage = false;
 
   private void writeFile(FileSystem fileSys, Path name) throws IOException {
+    int replication = 3;// We need > 1 blocks to test out the quorum reads.
     // create and write a file that contains three blocks of data
-    DataOutputStream stm = fileSys.create(name, true, 4096, (short)1,
+    DataOutputStream stm = fileSys.create(name, true, 4096, (short)replication,
                                           (long)blockSize);
     // test empty file open and read
     stm.close();
@@ -57,7 +72,7 @@ public class TestPread extends TestCase {
       assertTrue("Cannot delete file", false);
     
     // now create the real file
-    stm = fileSys.create(name, true, 4096, (short)1, (long)blockSize);
+    stm = fileSys.create(name, true, 4096, (short)replication, (long)blockSize);
     Random rand = new Random(seed);
     rand.nextBytes(buffer);
     stm.write(buffer);
@@ -193,12 +208,122 @@ public class TestPread extends TestCase {
    * Tests positional read in DFS.
    */
   public void testPreadDFS() throws IOException {
-    dfsPreadTest(false); //normal pread
-    dfsPreadTest(true); //trigger read code path without transferTo.
+    Configuration conf = new Configuration();
+    dfsPreadTest(conf, false); //normal pread
+    dfsPreadTest(conf, true); //trigger read code path without transferTo.
   }
   
-  private void dfsPreadTest(boolean disableTransferTo) throws IOException {
+  /**
+   * Tests positional read in DFS, with quorum reads enabled.
+   */
+  public void testQuorumPreadDFSBasic() throws IOException {
     Configuration conf = new Configuration();
+    conf.setInt(HdfsConstants.DFS_DFSCLIENT_QUORUM_READ_THREADPOOL_SIZE, 5);
+    conf.setLong(HdfsConstants.DFS_DFSCLIENT_QUORUM_READ_THRESHOLD_MILLIS, 100);
+    dfsPreadTest(conf, false); //normal pread
+    dfsPreadTest(conf, true); //trigger read code path without transferTo.
+  }
+  
+  public void testMaxOutQuorumPool() throws IOException, InterruptedException, ExecutionException {
+    Configuration conf = new Configuration();
+    int numQuorumPoolThreads = 5;
+    conf.setBoolean("dfs.client.metrics.enable", true);
+    conf.setInt(HdfsConstants.DFS_DFSCLIENT_QUORUM_READ_THREADPOOL_SIZE, numQuorumPoolThreads);
+    conf.setLong(HdfsConstants.DFS_DFSCLIENT_QUORUM_READ_THRESHOLD_MILLIS, 100);
+    
+    // Set up the InjectionHandler
+    // make preads sleep for 60ms
+    InjectionHandler.set(new InjectionHandler() {
+      public void _processEvent(InjectionEventI event, Object... args) {
+        if(event == InjectionEvent.DFSCLIENT_START_FETCH_FROM_DATANODE) {
+          try {
+            Thread.sleep(60);
+          } catch (InterruptedException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+          }
+        }
+      }
+    });
+    
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 3, true, null);
+    DistributedFileSystem fileSys = (DistributedFileSystem)cluster.getFileSystem();
+    DFSClient dfsClient = fileSys.getClient();
+    DFSQuorumReadMetrics metrics = dfsClient.quorumReadMetrics;
+    
+    try {
+      Path file1 = new Path("quorumReadMaxOut.dat");
+      writeFile(fileSys, file1);
+      
+      // time the pReadFile test
+      long t0, t1;
+      /* 
+       * Basic test. Reads complete within timeout. 
+       * Assert that there were no quorum reads.
+       * 
+       */
+      t0 = System.currentTimeMillis();
+      pReadFile(fileSys, file1);
+      t1 = System.currentTimeMillis();
+      long pReadTestTime = t1 - t0;
+      // assert that there were no quorum reads. 60ms + delta < 100ms
+      assertTrue(metrics.getParallelReadOps() == 0);
+      assertTrue(metrics.getParallelReadOpsInCurThread() == 0);
+      
+      // set the timeout to 50ms;
+      /*
+       * Reads take longer than timeout. But, only one thread reading.
+       * 
+       * Assert that there were quorum reads. But, none of the
+       * reads had to run in the current thread.
+       */
+      dfsClient.setQuorumReadTimeout(50); // 50ms
+      t0 = System.currentTimeMillis();
+      pReadFile(fileSys, file1);
+      t1 = System.currentTimeMillis();
+      // assert that there were quorum reads
+      long pReadTestTimeNew = t1 - t0;
+      // assert that there were no quorum reads. 60ms + delta < 100ms
+      assertTrue(metrics.getParallelReadOps() > 0);
+      assertTrue(metrics.getParallelReadOpsInCurThread() == 0);
+      
+      /*
+       * Multiple threads reading. Reads take longer than timeout.
+       * 
+       * Assert that there were quorum reads. And that
+       * reads had to run in the current thread.
+       */
+      int factor = 10;
+      int numParallelReads = numQuorumPoolThreads * factor;
+      long initialReadOpsValue = metrics.getParallelReadOps();
+      ExecutorService executor = Executors.newFixedThreadPool(numParallelReads);
+      ArrayList<Future<Void>> futures = new ArrayList<Future<Void>>();
+      for (int i = 0; i < numParallelReads; i++) {
+        futures.add(executor.submit(getPReadFileCallable(fileSys, file1)));
+      }
+      for (int i = 0; i < numParallelReads; i++) {
+        futures.get(i).get();
+      }
+      assertTrue(metrics.getParallelReadOps() > initialReadOpsValue);
+      assertTrue(metrics.getParallelReadOpsInCurThread() > 0);
+      
+      cleanupFile(fileSys, file1);
+    } finally {
+      fileSys.close();
+      cluster.shutdown();
+    }
+  }
+  
+  private Callable<Void> getPReadFileCallable(final FileSystem fileSys, final Path file) {
+    return new Callable<Void>() {
+      public Void call() throws IOException {
+        pReadFile(fileSys, file);
+        return null;
+      }
+    };
+  }
+  
+  private void dfsPreadTest(Configuration conf, boolean disableTransferTo) throws IOException {
     conf.setLong("dfs.block.size", 4096);
     conf.setLong("dfs.read.prefetch.size", 4096);
     if (simulatedStorage) {

@@ -273,6 +273,9 @@ public class Path implements Comparable {
   public Path makeQualified(FileSystem fs) {
     Path path = this;
     if (!isAbsolute()) {
+      FileSystem.LogForCollect
+          .info("make Qualify non absolute path: " + this.toString()
+              + " working directory: " + fs.getWorkingDirectory());
       path = new Path(fs.getWorkingDirectory(), this);
     }
 

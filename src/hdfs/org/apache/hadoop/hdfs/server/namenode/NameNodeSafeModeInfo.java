@@ -7,6 +7,7 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.util.Daemon;
+import org.apache.hadoop.util.FlushableLogger;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -63,6 +64,7 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
   private final NameNode nameNode;
   private Daemon smmthread = null; // SafeModeMonitor thread
   private final static Log LOG = LogFactory.getLog(NameNodeSafeModeInfo.class);
+  private final static Log FLOG = FlushableLogger.getLogger(LOG);
 
   NameNodeSafeModeInfo(FSNamesystem namesystem) {
     this(new Configuration(), namesystem);
@@ -85,8 +87,10 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
     this.namesystem = namesystem;
     this.nameNode = namesystem.getNameNode();
     
+    // start initial block report executor
+    this.namesystem.setupInitialBlockReportExecutor(false);
     // set fields of fsnamesystem to trigger replication queues initialization
-    this.namesystem.initializedReplQueues = false;
+    this.namesystem.setInitializedReplicationQueues(false);
     this.namesystem.blocksSafe = 0;
   }
 
@@ -124,10 +128,8 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
   }
 
   protected void startPostSafeModeProcessing() {
-    // if not done yet, initialize replication queues
-    if (!namesystem.isPopulatingReplQueues()) {
-      initializeReplQueues();
-    }
+    // initialize replication queues
+    initializeReplQueues();
     long timeInSafemode = FSNamesystem.now() - namesystem.systemStart;
     NameNode.stateChangeLog.info("STATE* Leaving safe mode after "
         + timeInSafemode / 1000 + " secs.");
@@ -140,6 +142,7 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
     try {
       nameNode.startServerForClientRequests();
     } catch (IOException ex) {
+      LOG.fatal("Got exception when starting server for client requests: ", ex);
       nameNode.stop();
     }
     NameNode.stateChangeLog.info("STATE* Network topology has "
@@ -162,10 +165,17 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
       namesystem.writeUnlock();
     }
   }
-
+  
   /**
-   * Initialize replication queues.
+   * Initializes replication queues *without* leaving safemode.
+   * This should only be used ONLY through dfsadmin command.
    */
+  @Override
+  public void initializeReplicationQueues() {
+    // this function internally holds FSNamesystem.writeLock
+    initializeReplQueues();
+  }
+  
   protected void initializeReplQueues() {
     LOG.info("initializing replication queues");
     namesystem.processMisReplicatedBlocks();
@@ -176,7 +186,7 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
    * queues.
    */
   private boolean canInitializeReplQueues() {
-    return namesystem.getSafeBlocks() >= getBlockReplQueueThreshold();
+    return namesystem.getSafeBlockRatio() >= this.replQueueThreshold;
   }
 
   /**
@@ -239,11 +249,6 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
       }
     }
 
-  /** Number of blocks needed before populating replication queues */
-  private int getBlockReplQueueThreshold() {
-    return (int) (((double) namesystem.getTotalBlocks()) * replQueueThreshold);
-  }
-
   @Override
     public boolean isManual() {
       return extension == Long.MAX_VALUE;
@@ -283,9 +288,13 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
       if (namesystem.getTotalBlocks() < 0) {
         return leaveMsg + ".";
       }
+      String initReplicationQueues = namesystem.isPopulatingReplQueues() 
+          ? " Replication queues have been initialized. "
+          : "";
       String safeBlockRatioMsg = String.format(
-          "The ratio of reported blocks %.8f has " + (reached == 0 ? "not " : "")
-          + "reached the threshold %.8f. ", namesystem.getSafeBlockRatio(),
+        initReplicationQueues 
+        +"The ratio of reported blocks %.8f has " + (reached == 0 ? "not " : "")
+        + "reached the threshold %.8f. ", namesystem.getSafeBlockRatio(),
           threshold)
         + "Safe blocks = "
         + namesystem.getSafeBlocks()
@@ -308,11 +317,11 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
    * Print status every 20 seconds.
    */
   private void reportStatus(String msg, boolean rightNow) {
-    long curTime = namesystem.now();
+    long curTime = FSNamesystem.now();
     if (!rightNow && (curTime - lastStatusReport < 20 * 1000)) {
       return;
     }
-    NameNode.stateChangeLog.info(msg + " \n" + getTurnOffTip());
+    FLOG.info(msg + " \n" + getTurnOffTip());
     lastStatusReport = curTime;
   }
 
@@ -356,4 +365,10 @@ public class NameNodeSafeModeInfo implements SafeModeInfo {
         smmthread.interrupt();
       }
     }
+
+  @Override
+  public boolean shouldProcessRBWReports() {
+    // Primary namenode always processed RBW reports.
+    return true;
+  }
 }

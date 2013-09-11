@@ -36,19 +36,51 @@ public class UTF8 implements WritableComparable {
   
   /* Used for string conversions*/
   private static final int MAX_STRING_LENGTH = 8000;
-  private static final ThreadLocal<char[]> charArrays = new ThreadLocal<char[]>() {
-    protected char[] initialValue() {
-      return new char[MAX_STRING_LENGTH];
+  private static final int MAX_BYTE_LENGTH = 1000;
+  
+  private static final ThreadLocal<TempArrays> arrays = new ThreadLocal<TempArrays>() {
+    protected TempArrays initialValue() {
+      TempArrays ta = new TempArrays();
+      ta.byteArray = new byte[MAX_BYTE_LENGTH];
+      ta.charArray = new char[MAX_STRING_LENGTH];
+      return ta;
     }
   };
   
   public static final char[] getCharArray(int len) {
     if(len <= MAX_STRING_LENGTH) {
       // return cached array
-      return charArrays.get(); 
+      return arrays.get().charArray; 
     }
     // otherwise allocate temporary char[]
     return new char[len];
+  }
+  
+  public static final byte[] getByteArray(int len) {
+    if(len <= MAX_BYTE_LENGTH) {
+      // return cached array
+      return arrays.get().byteArray; 
+    }
+    // otherwise allocate temporary byte[]
+    return new byte[len];
+  }
+  
+  public static final TempArrays getArrays(int len) {
+    // both stored arrays are sufficient
+    if (len <= MAX_BYTE_LENGTH && len <= MAX_STRING_LENGTH) {
+      return arrays.get();
+    }
+
+    // otherwise allocate temporary object
+    TempArrays temp = new TempArrays();
+    temp.byteArray = new byte[len];
+    temp.charArray = new char[len];
+    return temp;
+  }
+  
+  public static class TempArrays {
+    byte[] byteArray;
+    char[] charArray;
   }
   
   public static final byte MIN_ASCII_CODE = 0;
@@ -61,14 +93,6 @@ public class UTF8 implements WritableComparable {
       return new DataInputBuffer();
     }
   };
-  private static final ThreadLocal<DataOutputBuffer> OBUF_FACTORY =
-    new ThreadLocal<DataOutputBuffer>(){
-    @Override
-    protected DataOutputBuffer initialValue() {
-      return new DataOutputBuffer();
-    }
-  };
-
 
   private static final byte[] EMPTY_BYTES = new byte[0];
 
@@ -106,11 +130,12 @@ public class UTF8 implements WritableComparable {
   /** Set to contain the contents of a string. 
    * @param optimize - optimize for setting ASCII strings. */
   public void set(String string, boolean optimized) {
-    final int len = string.length();
+    int len = string.length();
     if (len > 0xffff/3) {             // maybe too long
       LOG.warn("truncating long string: " + string.length()
                + " chars, starting with " + string.substring(0, 20));
       string = string.substring(0, 0xffff/3);
+      len = string.length();
     }
     
     if (optimized) {
@@ -135,10 +160,7 @@ public class UTF8 implements WritableComparable {
       bytes = new byte[length];
 
     try {                                         // avoid sync'd allocations
-      DataOutputBuffer obuf = OBUF_FACTORY.get();
-      obuf.reset();
-      writeChars(obuf, string, 0, string.length());
-      System.arraycopy(obuf.getData(), 0, bytes, 0, length);
+      writeChars(bytes, string, 0, string.length());
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
@@ -237,10 +259,7 @@ public class UTF8 implements WritableComparable {
   public static byte[] getBytes(String string) {
     byte[] result = new byte[utf8Length(string)];
     try {                                         // avoid sync'd allocations
-      DataOutputBuffer obuf = OBUF_FACTORY.get();
-      obuf.reset();
-      writeChars(obuf, string, 0, string.length());
-      System.arraycopy(obuf.getData(), 0, result, 0, obuf.getLength());
+      writeChars(result, string, 0, string.length());
     } catch (IOException e) {
       throw new RuntimeException(e);
     }
@@ -258,13 +277,11 @@ public class UTF8 implements WritableComparable {
 
   private static String readChars(DataInput in, int nBytes)
     throws IOException {
-    DataOutputBuffer obuf = OBUF_FACTORY.get();  
-    obuf.reset();
-    obuf.write(in, nBytes);
-    byte[] bytes = obuf.getData();
-    char[] charArray = getCharArray(nBytes/3);
+    TempArrays ta = getArrays(nBytes);
+    byte[] bytes = ta.byteArray;
+    char[] charArray = ta.charArray;
     
-    // otherwise full conversion
+    in.readFully(bytes, 0, nBytes);
     int i = 0;
     int strLen = 0;
     while (i < nBytes) {
@@ -281,6 +298,21 @@ public class UTF8 implements WritableComparable {
       }
     }
     return new String(charArray, 0, strLen);
+  }
+  
+  public static int writeStringOpt(DataOutput out, String s) throws IOException {
+    int len = s.length();
+    TempArrays ta = getArrays(len);
+    byte[] bytes = ta.byteArray;
+    char[] charArray = ta.charArray;
+
+    s.getChars(0, len, charArray, 0);
+    if (copyStringToBytes(s, charArray, bytes, len)) {
+      out.writeShort(len);
+      out.write(bytes, 0, len);
+      return len;
+    }
+    return writeString(out, s);
   }
 
   /** Write a UTF-8 encoded string.
@@ -347,6 +379,25 @@ public class UTF8 implements WritableComparable {
         out.writeByte((byte)(0xE0 | ((code >> 12) & 0X0F)));
         out.writeByte((byte)(0x80 | ((code >>  6) & 0x3F)));
         out.writeByte((byte)(0x80 |  (code        & 0x3F)));
+      }
+    }
+  }
+  
+  private static void writeChars(byte[] out, String s, int start, int length)
+      throws IOException {
+    final int end = start + length;
+    int count = 0;
+    for (int i = start; i < end; i++) {
+      int code = s.charAt(i);
+      if (code <= 0x7F) {
+        out[count++] = (byte) code;
+      } else if (code <= 0x07FF) {
+        out[count++] = (byte) (0xC0 | ((code >> 6) & 0x1F));
+        out[count++] = (byte) (0x80 | code & 0x3F);
+      } else {
+        out[count++] = (byte) (0xE0 | ((code >> 12) & 0X0F));
+        out[count++] = (byte) (0x80 | ((code >> 6) & 0x3F));
+        out[count++] = (byte) (0x80 | (code & 0x3F));
       }
     }
   }

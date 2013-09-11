@@ -18,35 +18,44 @@
 
 package org.apache.hadoop.hdfs.server.namenode;
 
+import static org.junit.Assert.*;
+
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.net.URI;
 
 import junit.framework.Assert;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid.CachedFullPathNames;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid.CachedLocatedBlocks;
-import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid.FileType;
-import org.apache.hadoop.raid.RaidNode;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.net.Node;
+import org.apache.hadoop.net.StaticMapping;
+import org.apache.hadoop.raid.Codec;
+import org.apache.hadoop.raid.Utils;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.junit.Test;
 
 public class TestBlockPlacementPolicyRaid {
+  TestBlockPlacementPolicyRaidInjectionHandler h;
   private Configuration conf = null;
   private MiniDFSCluster cluster = null;
   private FSNamesystem namesystem = null;
@@ -71,8 +80,7 @@ public class TestBlockPlacementPolicyRaid {
     conf.setLong("dfs.block.size", 1L);
     conf.set("dfs.block.replicator.classname",
              "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
-    conf.set(RaidNode.STRIPE_LENGTH_KEY, "2");
-    conf.set(RaidNode.RS_PARITY_LENGTH_KEY, "3");
+    Utils.loadTestCodecs(conf, 2, 1, 3, "/raid", "/raidrs");
     conf.setInt("io.bytes.per.checksum", 1);
     // start the cluster with one datanode
     cluster = new MiniDFSCluster(conf, 1, true, rack1, host1);
@@ -82,10 +90,57 @@ public class TestBlockPlacementPolicyRaid {
         namesystem.replicator instanceof BlockPlacementPolicyRaid);
     policy = (BlockPlacementPolicyRaid) namesystem.replicator;
     fs = cluster.getFileSystem();
-    xorPrefix = RaidNode.xorDestinationPath(conf).toUri().getPath();
-    raidTempPrefix = RaidNode.xorTempPrefix(conf);
-    raidrsTempPrefix = RaidNode.rsTempPrefix(conf);
-    raidrsHarTempPrefix = RaidNode.rsHarTempPrefix(conf);
+    xorPrefix = Codec.getCodec("xor").parityDirectory;
+    raidTempPrefix = Codec.getCodec("xor").tmpParityDirectory;
+    raidrsTempPrefix = Codec.getCodec("rs").parityDirectory;
+    raidrsHarTempPrefix = Codec.getCodec("rs").tmpParityDirectory;
+  }
+  
+  @Test
+  public void test3rdReplicaPlacement() throws Exception {
+    conf = new Configuration();
+    conf.set("dfs.block.replicator.classname",
+    "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
+    // start the cluster with 3 datanodes and 3 racks
+    String[] racks = new String[]{
+        "/rack0", "/rack0", "/rack1", "/rack1", "/rack2", "/rack2"};
+    String[] hosts = new String[]{
+        "host0", "host1", "host2", "host3", "host4", "host5"};
+    
+    try {
+    cluster = new MiniDFSCluster(conf, 6, true, racks, hosts);
+    cluster.waitActive();
+    
+    namesystem = cluster.getNameNode().getNamesystem();
+    Assert.assertTrue("BlockPlacementPolicy type is not correct.",
+        namesystem.replicator instanceof BlockPlacementPolicyRaid);
+    policy = (BlockPlacementPolicyRaid) namesystem.replicator;
+    fs = cluster.getFileSystem();
+    
+    final String filename = "/dir/file1";
+    
+    // an out-of-cluster client
+    DatanodeDescriptor targets[] = policy.chooseTarget(filename, 3, null,
+        new ArrayList<DatanodeDescriptor>(), new ArrayList<Node>(), 100L);
+    verifyNetworkLocations(targets, 2);
+    
+    
+    // an in-cluster client
+    targets = policy.chooseTarget(filename, 3, targets[0],
+        new ArrayList<DatanodeDescriptor>(), new ArrayList<Node>(), 100L);
+    verifyNetworkLocations(targets, 3);
+    } finally {
+      if (cluster != null) cluster.shutdown();
+    }
+  }
+  
+  private void verifyNetworkLocations(
+      DatanodeDescriptor[] locations, int expectedNumOfRacks) {
+    HashSet<String> racks = new HashSet<String>();
+    for (DatanodeDescriptor loc : locations) {
+      racks.add(loc.getNetworkLocation());
+    }
+    assertEquals(expectedNumOfRacks, racks.size());
   }
   
   @Test
@@ -109,7 +164,6 @@ public class TestBlockPlacementPolicyRaid {
       clients[i].start();
     }
     Thread.sleep(3000);
-    boolean typeMatched = false;
     try {
       namesystem.reconfigurePropertyImpl("dfs.block.replicator.classname",
           "org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyRaid");
@@ -161,8 +215,7 @@ public class TestBlockPlacementPolicyRaid {
       }
     }
   }
-
-
+  
   /**
    * Test BlockPlacementPolicyRaid.CachedLocatedBlocks and
    * BlockPlacementPolicyRaid.CachedFullPathNames
@@ -172,26 +225,15 @@ public class TestBlockPlacementPolicyRaid {
   @Test
   public void testCachedResults() throws IOException {
     setupCluster();
-    try {
+    try {     
+      refreshPolicy();
       // test blocks cache
-      CachedLocatedBlocks cachedBlocks = new CachedLocatedBlocks(conf, namesystem);
+      CachedLocatedBlocks cachedBlocks = new CachedLocatedBlocks(conf);
       String file1 = "/dir/file1";
       String file2 = "/dir/file2";
       DFSTestUtil.createFile(fs, new Path(file1), 3, (short)1, 0L);
       DFSTestUtil.createFile(fs, new Path(file2), 4, (short)1, 0L);
-      verifyCachedBlocksResult(cachedBlocks, namesystem, file1);
-      verifyCachedBlocksResult(cachedBlocks, namesystem, file1);
-      verifyCachedBlocksResult(cachedBlocks, namesystem, file2);
-      verifyCachedBlocksResult(cachedBlocks, namesystem, file2);
-      try {
-        Thread.sleep(1200L);
-      } catch (InterruptedException e) {
-      }
-      verifyCachedBlocksResult(cachedBlocks, namesystem, file2);
-      verifyCachedBlocksResult(cachedBlocks, namesystem, file1);
 
-      // test full path cache
-      CachedFullPathNames cachedFullPathNames = new CachedFullPathNames(conf, namesystem);
       FSInodeInfo inode1 = null;
       FSInodeInfo inode2 = null;
       namesystem.dir.readLock();
@@ -201,20 +243,37 @@ public class TestBlockPlacementPolicyRaid {
       } finally {
         namesystem.dir.readUnlock();
       }
-      verifyCachedFullPathNameResult(cachedFullPathNames, inode1);
-      verifyCachedFullPathNameResult(cachedFullPathNames, inode1);
-      verifyCachedFullPathNameResult(cachedFullPathNames, inode2);
-      verifyCachedFullPathNameResult(cachedFullPathNames, inode2);
+      h = new TestBlockPlacementPolicyRaidInjectionHandler();
+      InjectionHandler.set(h);
+      
+      verifyCachedBlocksResult(cachedBlocks, namesystem, file1, (INode)inode1, 0);
+      verifyCachedBlocksResult(cachedBlocks, namesystem, file1, (INode)inode1, 1);
+      verifyCachedBlocksResult(cachedBlocks, namesystem, file2, (INode)inode2, 1);
+      verifyCachedBlocksResult(cachedBlocks, namesystem, file2, (INode)inode2, 2);
       try {
         Thread.sleep(1200L);
       } catch (InterruptedException e) {
       }
-      verifyCachedFullPathNameResult(cachedFullPathNames, inode2);
-      verifyCachedFullPathNameResult(cachedFullPathNames, inode1);
+      verifyCachedBlocksResult(cachedBlocks, namesystem, file2, (INode)inode2, 3);
+      verifyCachedBlocksResult(cachedBlocks, namesystem, file1, (INode)inode1, 4);
+
+      // test full path cache
+      CachedFullPathNames cachedFullPathNames = new CachedFullPathNames(conf);
+      verifyCachedFullPathNameResult(cachedFullPathNames, inode1, 0);
+      verifyCachedFullPathNameResult(cachedFullPathNames, inode1, 1);
+      verifyCachedFullPathNameResult(cachedFullPathNames, inode2, 1);
+      verifyCachedFullPathNameResult(cachedFullPathNames, inode2, 2);
+      try {
+        Thread.sleep(1200L);
+      } catch (InterruptedException e) {
+      }
+      verifyCachedFullPathNameResult(cachedFullPathNames, inode2, 3);
+      verifyCachedFullPathNameResult(cachedFullPathNames, inode1, 4);
     } finally {
       if (cluster != null) {
         cluster.shutdown();
       }
+      InjectionHandler.clear();
     }
   }
 
@@ -252,7 +311,7 @@ public class TestBlockPlacementPolicyRaid {
           namesystem, policy, getBlocks(namesystem, file2).get(3).getBlock());
       Assert.assertEquals(1, companionBlocks.size());
 
-      int rsParityLength = RaidNode.rsParityLength(conf);
+      int rsParityLength = Codec.getCodec("rs").parityLength;
       companionBlocks = getCompanionBlocks(
           namesystem, policy, getBlocks(namesystem, file3).get(0).getBlock());
       Assert.assertEquals(rsParityLength, companionBlocks.size());
@@ -320,10 +379,8 @@ public class TestBlockPlacementPolicyRaid {
       DFSTestUtil.waitReplication(fs, sourcePath, (short)2);
 
       refreshPolicy();
-      Assert.assertEquals(parity,
-                          policy.getParityFile(source));
       Assert.assertEquals(source,
-                          policy.getSourceFile(parity, xorPrefix));
+                          policy.getSourceFile(parity, xorPrefix).name);
 
       List<LocatedBlock> sourceBlocks = getBlocks(namesystem, source);
       List<LocatedBlock> parityBlocks = getBlocks(namesystem, parity);
@@ -358,7 +415,7 @@ public class TestBlockPlacementPolicyRaid {
                             new int[]{4}, new int[]{2});
 
       companionBlocks = getCompanionBlocks(
-          namesystem, policy, parityBlocks.get(0).getBlock());
+          namesystem, policy, parityBlocks.get(0).getBlock());      
       verifyCompanionBlocks(companionBlocks, sourceBlocks, parityBlocks,
                             new int[]{0, 1}, new int[]{0});
 
@@ -387,7 +444,7 @@ public class TestBlockPlacementPolicyRaid {
             namesystem, policy, parityBlocks.get(i).getBlock());
 
         counters = BlockPlacementPolicyRaid.countCompanionBlocks(
-            companionBlocks, false);
+            companionBlocks)[0];
         Assert.assertTrue(counters.get(datanode1.getName()) >= 1 &&
                           counters.get(datanode1.getName()) <= 2);
         Assert.assertTrue(counters.get(datanode1.getName()) +
@@ -395,7 +452,7 @@ public class TestBlockPlacementPolicyRaid {
                           companionBlocks.size());
 
         counters = BlockPlacementPolicyRaid.countCompanionBlocks(
-            companionBlocks, true);
+            companionBlocks)[1];
         Assert.assertTrue(counters.get(datanode1.getParent().getName()) >= 1 &&
                           counters.get(datanode1.getParent().getName()) <= 2);
         Assert.assertTrue(counters.get(datanode1.getParent().getName()) +
@@ -407,6 +464,27 @@ public class TestBlockPlacementPolicyRaid {
         cluster.shutdown();
       }
     }
+  }
+  
+  @Test
+  public void testParentPath() {
+    String path = null;
+
+    path = "/foo/bar";
+    Assert.assertEquals(new Path(path).getParent().toString(),
+        BlockPlacementPolicyRaid.getParentPath(path));
+
+    path = "/foo/bar/";
+    Assert.assertEquals(new Path(path).getParent().toString(),
+        BlockPlacementPolicyRaid.getParentPath(path));
+
+    path = "/foo";
+    Assert.assertEquals(new Path(path).getParent().toString(),
+        BlockPlacementPolicyRaid.getParentPath(path));
+
+    path = "/foo/";
+    Assert.assertEquals(new Path(path).getParent().toString(),
+        BlockPlacementPolicyRaid.getParentPath(path));
   }
 
   // create a new BlockPlacementPolicyRaid to clear the cache
@@ -431,31 +509,36 @@ public class TestBlockPlacementPolicyRaid {
       Assert.assertTrue(blockSet.contains(parityBlocks.get(index).getBlock()));
     }
   }
-
+  
   private void verifyCachedFullPathNameResult(
-      CachedFullPathNames cachedFullPathNames, FSInodeInfo inode)
+      CachedFullPathNames cachedFullPathNames, FSInodeInfo inode, int cachedReads)
       throws IOException {
-    Assert.assertEquals(cachedFullPathNames.get(inode),
-                        inode.getFullPathName());
+    Assert.assertEquals(inode.getFullPathName(),
+                        policy.getFullPathName(inode));
+    Assert.assertEquals(cachedReads,
+        h.events.get(InjectionEvent.BLOCKPLACEMENTPOLICYRAID_CACHED_PATH).intValue());
   }
 
   private void verifyCachedBlocksResult(CachedLocatedBlocks cachedBlocks,
-      FSNamesystem namesystem, String file) throws IOException{
+      FSNamesystem namesystem, String file, INode f, int cachedReads) throws IOException{
     long len = namesystem.getFileInfo(file).getLen();
     List<LocatedBlock> res1 =
         namesystem.getBlockLocations(file, 0L, len).getLocatedBlocks();
-    List<LocatedBlock> res2 = cachedBlocks.get(file);
+    List<LocatedBlock> res2 = policy.getLocatedBlocks(file, f);
     for (int i = 0; i < res1.size(); i++) {
       Assert.assertEquals(res1.get(i).getBlock(), res2.get(i).getBlock());
     }
+    Assert.assertEquals(cachedReads,
+        h.events.get(InjectionEvent.BLOCKPLACEMENTPOLICYRAID_CACHED_BLOCKS).intValue());
   }
+
 
   private Collection<LocatedBlock> getCompanionBlocks(
       FSNamesystem namesystem, BlockPlacementPolicyRaid policy,
       Block block) throws IOException {
     INodeFile inode = namesystem.blocksMap.getINode(block);
-    FileType type = policy.getFileType(inode.getFullPathName());
-    return policy.getCompanionBlocks(inode.getFullPathName(), type, block);
+    BlockPlacementPolicyRaid.FileInfo info = policy.getFileInfo(inode.getFullPathName());
+    return policy.getCompanionBlocks(inode.getFullPathName(), info, block, inode);
   }
 
   private List<LocatedBlock> getBlocks(FSNamesystem namesystem, String file) 
@@ -463,5 +546,21 @@ public class TestBlockPlacementPolicyRaid {
     FileStatus stat = namesystem.getFileInfo(file);
     return namesystem.getBlockLocations(
                file, 0, stat.getLen()).getLocatedBlocks();
+  }
+  
+  class TestBlockPlacementPolicyRaidInjectionHandler extends InjectionHandler {
+    Map<InjectionEventI, Integer> events = new HashMap<InjectionEventI, Integer>();
+    
+    public TestBlockPlacementPolicyRaidInjectionHandler() {
+      events.put(InjectionEvent.BLOCKPLACEMENTPOLICYRAID_CACHED_BLOCKS, 0);
+      events.put(InjectionEvent.BLOCKPLACEMENTPOLICYRAID_CACHED_PATH, 0);
+    }
+    @Override
+    public void _processEvent(InjectionEventI event, Object... args) {
+      if (event == InjectionEvent.BLOCKPLACEMENTPOLICYRAID_CACHED_BLOCKS ||
+          event == InjectionEvent.BLOCKPLACEMENTPOLICYRAID_CACHED_PATH) {
+        events.put(event, events.get(event) + 1);
+      }
+    }
   }
 }

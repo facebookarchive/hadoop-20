@@ -24,9 +24,9 @@ public class FsShellService {
 
   public interface Iface {
 
-    public void copyFromLocal(String src, String dest) throws FsShellException, org.apache.thrift.TException;
+    public void copyFromLocal(String src, String dest, boolean validate) throws FsShellException, org.apache.thrift.TException;
 
-    public void copyToLocal(String src, String dest) throws FsShellException, org.apache.thrift.TException;
+    public void copyToLocal(String src, String dest, boolean validate) throws FsShellException, org.apache.thrift.TException;
 
     /**
      * remove() returns true only if the existing file or directory
@@ -65,13 +65,29 @@ public class FsShellService {
 
     public boolean exists(String path) throws FsShellException, org.apache.thrift.TException;
 
+    /**
+     * CRC32 of a file's data is returned. It works for either HDFS file
+     * or a local file (in the form of file:///foo/foo). Since it's CRC32
+     * of pure data. The return value for a local file and a remote file
+     * with the same data will be the same.
+     * 
+     * Either the path is a directory, or the file doesn't exist,
+     * FsShellException is thrown.
+     * 
+     * TODO: improve exception thrown here. Currently it's not easy for
+     *       DFSClient to identify different failure cases.
+     * 
+     * @param path
+     */
+    public int getFileCrc(String path) throws FsShellException, org.apache.thrift.TException;
+
   }
 
   public interface AsyncIface {
 
-    public void copyFromLocal(String src, String dest, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.copyFromLocal_call> resultHandler) throws org.apache.thrift.TException;
+    public void copyFromLocal(String src, String dest, boolean validate, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.copyFromLocal_call> resultHandler) throws org.apache.thrift.TException;
 
-    public void copyToLocal(String src, String dest, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.copyToLocal_call> resultHandler) throws org.apache.thrift.TException;
+    public void copyToLocal(String src, String dest, boolean validate, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.copyToLocal_call> resultHandler) throws org.apache.thrift.TException;
 
     public void remove(String path, boolean recursive, boolean skipTrash, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.remove_call> resultHandler) throws org.apache.thrift.TException;
 
@@ -84,6 +100,8 @@ public class FsShellService {
     public void getFileStatus(String path, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.getFileStatus_call> resultHandler) throws org.apache.thrift.TException;
 
     public void exists(String path, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.exists_call> resultHandler) throws org.apache.thrift.TException;
+
+    public void getFileCrc(String path, org.apache.thrift.async.AsyncMethodCallback<AsyncClient.getFileCrc_call> resultHandler) throws org.apache.thrift.TException;
 
   }
 
@@ -107,17 +125,18 @@ public class FsShellService {
       super(iprot, oprot);
     }
 
-    public void copyFromLocal(String src, String dest) throws FsShellException, org.apache.thrift.TException
+    public void copyFromLocal(String src, String dest, boolean validate) throws FsShellException, org.apache.thrift.TException
     {
-      send_copyFromLocal(src, dest);
+      send_copyFromLocal(src, dest, validate);
       recv_copyFromLocal();
     }
 
-    public void send_copyFromLocal(String src, String dest) throws org.apache.thrift.TException
+    public void send_copyFromLocal(String src, String dest, boolean validate) throws org.apache.thrift.TException
     {
       copyFromLocal_args args = new copyFromLocal_args();
       args.setSrc(src);
       args.setDest(dest);
+      args.setValidate(validate);
       sendBase("copyFromLocal", args);
     }
 
@@ -131,17 +150,18 @@ public class FsShellService {
       return;
     }
 
-    public void copyToLocal(String src, String dest) throws FsShellException, org.apache.thrift.TException
+    public void copyToLocal(String src, String dest, boolean validate) throws FsShellException, org.apache.thrift.TException
     {
-      send_copyToLocal(src, dest);
+      send_copyToLocal(src, dest, validate);
       recv_copyToLocal();
     }
 
-    public void send_copyToLocal(String src, String dest) throws org.apache.thrift.TException
+    public void send_copyToLocal(String src, String dest, boolean validate) throws org.apache.thrift.TException
     {
       copyToLocal_args args = new copyToLocal_args();
       args.setSrc(src);
       args.setDest(dest);
+      args.setValidate(validate);
       sendBase("copyToLocal", args);
     }
 
@@ -320,6 +340,32 @@ public class FsShellService {
       throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "exists failed: unknown result");
     }
 
+    public int getFileCrc(String path) throws FsShellException, org.apache.thrift.TException
+    {
+      send_getFileCrc(path);
+      return recv_getFileCrc();
+    }
+
+    public void send_getFileCrc(String path) throws org.apache.thrift.TException
+    {
+      getFileCrc_args args = new getFileCrc_args();
+      args.setPath(path);
+      sendBase("getFileCrc", args);
+    }
+
+    public int recv_getFileCrc() throws FsShellException, org.apache.thrift.TException
+    {
+      getFileCrc_result result = new getFileCrc_result();
+      receiveBase(result, "getFileCrc");
+      if (result.isSetSuccess()) {
+        return result.success;
+      }
+      if (result.e != null) {
+        throw result.e;
+      }
+      throw new org.apache.thrift.TApplicationException(org.apache.thrift.TApplicationException.MISSING_RESULT, "getFileCrc failed: unknown result");
+    }
+
   }
   public static class AsyncClient extends org.apache.thrift.async.TAsyncClient implements AsyncIface {
     public static class Factory implements org.apache.thrift.async.TAsyncClientFactory<AsyncClient> {
@@ -338,9 +384,9 @@ public class FsShellService {
       super(protocolFactory, clientManager, transport);
     }
 
-    public void copyFromLocal(String src, String dest, org.apache.thrift.async.AsyncMethodCallback<copyFromLocal_call> resultHandler) throws org.apache.thrift.TException {
+    public void copyFromLocal(String src, String dest, boolean validate, org.apache.thrift.async.AsyncMethodCallback<copyFromLocal_call> resultHandler) throws org.apache.thrift.TException {
       checkReady();
-      copyFromLocal_call method_call = new copyFromLocal_call(src, dest, resultHandler, this, ___protocolFactory, ___transport);
+      copyFromLocal_call method_call = new copyFromLocal_call(src, dest, validate, resultHandler, this, ___protocolFactory, ___transport);
       this.___currentMethod = method_call;
       ___manager.call(method_call);
     }
@@ -348,10 +394,12 @@ public class FsShellService {
     public static class copyFromLocal_call extends org.apache.thrift.async.TAsyncMethodCall {
       private String src;
       private String dest;
-      public copyFromLocal_call(String src, String dest, org.apache.thrift.async.AsyncMethodCallback<copyFromLocal_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+      private boolean validate;
+      public copyFromLocal_call(String src, String dest, boolean validate, org.apache.thrift.async.AsyncMethodCallback<copyFromLocal_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
         super(client, protocolFactory, transport, resultHandler, false);
         this.src = src;
         this.dest = dest;
+        this.validate = validate;
       }
 
       public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
@@ -359,6 +407,7 @@ public class FsShellService {
         copyFromLocal_args args = new copyFromLocal_args();
         args.setSrc(src);
         args.setDest(dest);
+        args.setValidate(validate);
         args.write(prot);
         prot.writeMessageEnd();
       }
@@ -373,9 +422,9 @@ public class FsShellService {
       }
     }
 
-    public void copyToLocal(String src, String dest, org.apache.thrift.async.AsyncMethodCallback<copyToLocal_call> resultHandler) throws org.apache.thrift.TException {
+    public void copyToLocal(String src, String dest, boolean validate, org.apache.thrift.async.AsyncMethodCallback<copyToLocal_call> resultHandler) throws org.apache.thrift.TException {
       checkReady();
-      copyToLocal_call method_call = new copyToLocal_call(src, dest, resultHandler, this, ___protocolFactory, ___transport);
+      copyToLocal_call method_call = new copyToLocal_call(src, dest, validate, resultHandler, this, ___protocolFactory, ___transport);
       this.___currentMethod = method_call;
       ___manager.call(method_call);
     }
@@ -383,10 +432,12 @@ public class FsShellService {
     public static class copyToLocal_call extends org.apache.thrift.async.TAsyncMethodCall {
       private String src;
       private String dest;
-      public copyToLocal_call(String src, String dest, org.apache.thrift.async.AsyncMethodCallback<copyToLocal_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+      private boolean validate;
+      public copyToLocal_call(String src, String dest, boolean validate, org.apache.thrift.async.AsyncMethodCallback<copyToLocal_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
         super(client, protocolFactory, transport, resultHandler, false);
         this.src = src;
         this.dest = dest;
+        this.validate = validate;
       }
 
       public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
@@ -394,6 +445,7 @@ public class FsShellService {
         copyToLocal_args args = new copyToLocal_args();
         args.setSrc(src);
         args.setDest(dest);
+        args.setValidate(validate);
         args.write(prot);
         prot.writeMessageEnd();
       }
@@ -609,6 +661,38 @@ public class FsShellService {
       }
     }
 
+    public void getFileCrc(String path, org.apache.thrift.async.AsyncMethodCallback<getFileCrc_call> resultHandler) throws org.apache.thrift.TException {
+      checkReady();
+      getFileCrc_call method_call = new getFileCrc_call(path, resultHandler, this, ___protocolFactory, ___transport);
+      this.___currentMethod = method_call;
+      ___manager.call(method_call);
+    }
+
+    public static class getFileCrc_call extends org.apache.thrift.async.TAsyncMethodCall {
+      private String path;
+      public getFileCrc_call(String path, org.apache.thrift.async.AsyncMethodCallback<getFileCrc_call> resultHandler, org.apache.thrift.async.TAsyncClient client, org.apache.thrift.protocol.TProtocolFactory protocolFactory, org.apache.thrift.transport.TNonblockingTransport transport) throws org.apache.thrift.TException {
+        super(client, protocolFactory, transport, resultHandler, false);
+        this.path = path;
+      }
+
+      public void write_args(org.apache.thrift.protocol.TProtocol prot) throws org.apache.thrift.TException {
+        prot.writeMessageBegin(new org.apache.thrift.protocol.TMessage("getFileCrc", org.apache.thrift.protocol.TMessageType.CALL, 0));
+        getFileCrc_args args = new getFileCrc_args();
+        args.setPath(path);
+        args.write(prot);
+        prot.writeMessageEnd();
+      }
+
+      public int getResult() throws FsShellException, org.apache.thrift.TException {
+        if (getState() != org.apache.thrift.async.TAsyncMethodCall.State.RESPONSE_READ) {
+          throw new IllegalStateException("Method call not finished!");
+        }
+        org.apache.thrift.transport.TMemoryInputTransport memoryTransport = new org.apache.thrift.transport.TMemoryInputTransport(getFrameBuffer().array());
+        org.apache.thrift.protocol.TProtocol prot = client.getProtocolFactory().getProtocol(memoryTransport);
+        return (new Client(prot)).recv_getFileCrc();
+      }
+    }
+
   }
 
   public static class Processor<I extends Iface> extends org.apache.thrift.TBaseProcessor implements org.apache.thrift.TProcessor {
@@ -630,6 +714,7 @@ public class FsShellService {
       processMap.put("listStatus", new listStatus());
       processMap.put("getFileStatus", new getFileStatus());
       processMap.put("exists", new exists());
+      processMap.put("getFileCrc", new getFileCrc());
       return processMap;
     }
 
@@ -645,7 +730,7 @@ public class FsShellService {
       protected copyFromLocal_result getResult(I iface, copyFromLocal_args args) throws org.apache.thrift.TException {
         copyFromLocal_result result = new copyFromLocal_result();
         try {
-          iface.copyFromLocal(args.src, args.dest);
+          iface.copyFromLocal(args.src, args.dest, args.validate);
         } catch (FsShellException e) {
           result.e = e;
         }
@@ -665,7 +750,7 @@ public class FsShellService {
       protected copyToLocal_result getResult(I iface, copyToLocal_args args) throws org.apache.thrift.TException {
         copyToLocal_result result = new copyToLocal_result();
         try {
-          iface.copyToLocal(args.src, args.dest);
+          iface.copyToLocal(args.src, args.dest, args.validate);
         } catch (FsShellException e) {
           result.e = e;
         }
@@ -801,6 +886,27 @@ public class FsShellService {
       }
     }
 
+    private static class getFileCrc<I extends Iface> extends org.apache.thrift.ProcessFunction<I, getFileCrc_args> {
+      public getFileCrc() {
+        super("getFileCrc");
+      }
+
+      protected getFileCrc_args getEmptyArgsInstance() {
+        return new getFileCrc_args();
+      }
+
+      protected getFileCrc_result getResult(I iface, getFileCrc_args args) throws org.apache.thrift.TException {
+        getFileCrc_result result = new getFileCrc_result();
+        try {
+          result.success = iface.getFileCrc(args.path);
+          result.setSuccessIsSet(true);
+        } catch (FsShellException e) {
+          result.e = e;
+        }
+        return result;
+      }
+    }
+
   }
 
   public static class copyFromLocal_args implements org.apache.thrift.TBase<copyFromLocal_args, copyFromLocal_args._Fields>, java.io.Serializable, Cloneable   {
@@ -808,14 +914,17 @@ public class FsShellService {
 
     private static final org.apache.thrift.protocol.TField SRC_FIELD_DESC = new org.apache.thrift.protocol.TField("src", org.apache.thrift.protocol.TType.STRING, (short)1);
     private static final org.apache.thrift.protocol.TField DEST_FIELD_DESC = new org.apache.thrift.protocol.TField("dest", org.apache.thrift.protocol.TType.STRING, (short)2);
+    private static final org.apache.thrift.protocol.TField VALIDATE_FIELD_DESC = new org.apache.thrift.protocol.TField("validate", org.apache.thrift.protocol.TType.BOOL, (short)3);
 
     public String src; // required
     public String dest; // required
+    public boolean validate; // required
 
     /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
     public enum _Fields implements org.apache.thrift.TFieldIdEnum {
       SRC((short)1, "src"),
-      DEST((short)2, "dest");
+      DEST((short)2, "dest"),
+      VALIDATE((short)3, "validate");
 
       private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
 
@@ -834,6 +943,8 @@ public class FsShellService {
             return SRC;
           case 2: // DEST
             return DEST;
+          case 3: // VALIDATE
+            return VALIDATE;
           default:
             return null;
         }
@@ -874,6 +985,8 @@ public class FsShellService {
     }
 
     // isset id assignments
+    private static final int __VALIDATE_ISSET_ID = 0;
+    private BitSet __isset_bit_vector = new BitSet(1);
 
     public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
     static {
@@ -882,6 +995,8 @@ public class FsShellService {
           new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
       tmpMap.put(_Fields.DEST, new org.apache.thrift.meta_data.FieldMetaData("dest", org.apache.thrift.TFieldRequirementType.DEFAULT, 
           new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      tmpMap.put(_Fields.VALIDATE, new org.apache.thrift.meta_data.FieldMetaData("validate", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.BOOL)));
       metaDataMap = Collections.unmodifiableMap(tmpMap);
       org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(copyFromLocal_args.class, metaDataMap);
     }
@@ -891,23 +1006,29 @@ public class FsShellService {
 
     public copyFromLocal_args(
       String src,
-      String dest)
+      String dest,
+      boolean validate)
     {
       this();
       this.src = src;
       this.dest = dest;
+      this.validate = validate;
+      setValidateIsSet(true);
     }
 
     /**
      * Performs a deep copy on <i>other</i>.
      */
     public copyFromLocal_args(copyFromLocal_args other) {
+      __isset_bit_vector.clear();
+      __isset_bit_vector.or(other.__isset_bit_vector);
       if (other.isSetSrc()) {
         this.src = other.src;
       }
       if (other.isSetDest()) {
         this.dest = other.dest;
       }
+      this.validate = other.validate;
     }
 
     public copyFromLocal_args deepCopy() {
@@ -918,6 +1039,8 @@ public class FsShellService {
     public void clear() {
       this.src = null;
       this.dest = null;
+      setValidateIsSet(false);
+      this.validate = false;
     }
 
     public String getSrc() {
@@ -968,6 +1091,29 @@ public class FsShellService {
       }
     }
 
+    public boolean isValidate() {
+      return this.validate;
+    }
+
+    public copyFromLocal_args setValidate(boolean validate) {
+      this.validate = validate;
+      setValidateIsSet(true);
+      return this;
+    }
+
+    public void unsetValidate() {
+      __isset_bit_vector.clear(__VALIDATE_ISSET_ID);
+    }
+
+    /** Returns true if field validate is set (has been assigned a value) and false otherwise */
+    public boolean isSetValidate() {
+      return __isset_bit_vector.get(__VALIDATE_ISSET_ID);
+    }
+
+    public void setValidateIsSet(boolean value) {
+      __isset_bit_vector.set(__VALIDATE_ISSET_ID, value);
+    }
+
     public void setFieldValue(_Fields field, Object value) {
       switch (field) {
       case SRC:
@@ -986,6 +1132,14 @@ public class FsShellService {
         }
         break;
 
+      case VALIDATE:
+        if (value == null) {
+          unsetValidate();
+        } else {
+          setValidate((Boolean)value);
+        }
+        break;
+
       }
     }
 
@@ -996,6 +1150,9 @@ public class FsShellService {
 
       case DEST:
         return getDest();
+
+      case VALIDATE:
+        return Boolean.valueOf(isValidate());
 
       }
       throw new IllegalStateException();
@@ -1012,6 +1169,8 @@ public class FsShellService {
         return isSetSrc();
       case DEST:
         return isSetDest();
+      case VALIDATE:
+        return isSetValidate();
       }
       throw new IllegalStateException();
     }
@@ -1044,6 +1203,15 @@ public class FsShellService {
         if (!(this_present_dest && that_present_dest))
           return false;
         if (!this.dest.equals(that.dest))
+          return false;
+      }
+
+      boolean this_present_validate = true;
+      boolean that_present_validate = true;
+      if (this_present_validate || that_present_validate) {
+        if (!(this_present_validate && that_present_validate))
+          return false;
+        if (this.validate != that.validate)
           return false;
       }
 
@@ -1083,6 +1251,16 @@ public class FsShellService {
           return lastComparison;
         }
       }
+      lastComparison = Boolean.valueOf(isSetValidate()).compareTo(typedOther.isSetValidate());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetValidate()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.validate, typedOther.validate);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
       return 0;
     }
 
@@ -1114,6 +1292,14 @@ public class FsShellService {
               org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
             }
             break;
+          case 3: // VALIDATE
+            if (field.type == org.apache.thrift.protocol.TType.BOOL) {
+              this.validate = iprot.readBool();
+              setValidateIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
           default:
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
         }
@@ -1139,6 +1325,9 @@ public class FsShellService {
         oprot.writeString(this.dest);
         oprot.writeFieldEnd();
       }
+      oprot.writeFieldBegin(VALIDATE_FIELD_DESC);
+      oprot.writeBool(this.validate);
+      oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
@@ -1163,6 +1352,10 @@ public class FsShellService {
         sb.append(this.dest);
       }
       first = false;
+      if (!first) sb.append(", ");
+      sb.append("validate:");
+      sb.append(this.validate);
+      first = false;
       sb.append(")");
       return sb.toString();
     }
@@ -1181,6 +1374,8 @@ public class FsShellService {
 
     private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
       try {
+        // it doesn't seem like you should have to do this, but java serialization is wacky, and doesn't call the default constructor.
+        __isset_bit_vector = new BitSet(1);
         read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
       } catch (org.apache.thrift.TException te) {
         throw new java.io.IOException(te);
@@ -1491,14 +1686,17 @@ public class FsShellService {
 
     private static final org.apache.thrift.protocol.TField SRC_FIELD_DESC = new org.apache.thrift.protocol.TField("src", org.apache.thrift.protocol.TType.STRING, (short)1);
     private static final org.apache.thrift.protocol.TField DEST_FIELD_DESC = new org.apache.thrift.protocol.TField("dest", org.apache.thrift.protocol.TType.STRING, (short)2);
+    private static final org.apache.thrift.protocol.TField VALIDATE_FIELD_DESC = new org.apache.thrift.protocol.TField("validate", org.apache.thrift.protocol.TType.BOOL, (short)3);
 
     public String src; // required
     public String dest; // required
+    public boolean validate; // required
 
     /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
     public enum _Fields implements org.apache.thrift.TFieldIdEnum {
       SRC((short)1, "src"),
-      DEST((short)2, "dest");
+      DEST((short)2, "dest"),
+      VALIDATE((short)3, "validate");
 
       private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
 
@@ -1517,6 +1715,8 @@ public class FsShellService {
             return SRC;
           case 2: // DEST
             return DEST;
+          case 3: // VALIDATE
+            return VALIDATE;
           default:
             return null;
         }
@@ -1557,6 +1757,8 @@ public class FsShellService {
     }
 
     // isset id assignments
+    private static final int __VALIDATE_ISSET_ID = 0;
+    private BitSet __isset_bit_vector = new BitSet(1);
 
     public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
     static {
@@ -1565,6 +1767,8 @@ public class FsShellService {
           new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
       tmpMap.put(_Fields.DEST, new org.apache.thrift.meta_data.FieldMetaData("dest", org.apache.thrift.TFieldRequirementType.DEFAULT, 
           new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      tmpMap.put(_Fields.VALIDATE, new org.apache.thrift.meta_data.FieldMetaData("validate", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.BOOL)));
       metaDataMap = Collections.unmodifiableMap(tmpMap);
       org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(copyToLocal_args.class, metaDataMap);
     }
@@ -1574,23 +1778,29 @@ public class FsShellService {
 
     public copyToLocal_args(
       String src,
-      String dest)
+      String dest,
+      boolean validate)
     {
       this();
       this.src = src;
       this.dest = dest;
+      this.validate = validate;
+      setValidateIsSet(true);
     }
 
     /**
      * Performs a deep copy on <i>other</i>.
      */
     public copyToLocal_args(copyToLocal_args other) {
+      __isset_bit_vector.clear();
+      __isset_bit_vector.or(other.__isset_bit_vector);
       if (other.isSetSrc()) {
         this.src = other.src;
       }
       if (other.isSetDest()) {
         this.dest = other.dest;
       }
+      this.validate = other.validate;
     }
 
     public copyToLocal_args deepCopy() {
@@ -1601,6 +1811,8 @@ public class FsShellService {
     public void clear() {
       this.src = null;
       this.dest = null;
+      setValidateIsSet(false);
+      this.validate = false;
     }
 
     public String getSrc() {
@@ -1651,6 +1863,29 @@ public class FsShellService {
       }
     }
 
+    public boolean isValidate() {
+      return this.validate;
+    }
+
+    public copyToLocal_args setValidate(boolean validate) {
+      this.validate = validate;
+      setValidateIsSet(true);
+      return this;
+    }
+
+    public void unsetValidate() {
+      __isset_bit_vector.clear(__VALIDATE_ISSET_ID);
+    }
+
+    /** Returns true if field validate is set (has been assigned a value) and false otherwise */
+    public boolean isSetValidate() {
+      return __isset_bit_vector.get(__VALIDATE_ISSET_ID);
+    }
+
+    public void setValidateIsSet(boolean value) {
+      __isset_bit_vector.set(__VALIDATE_ISSET_ID, value);
+    }
+
     public void setFieldValue(_Fields field, Object value) {
       switch (field) {
       case SRC:
@@ -1669,6 +1904,14 @@ public class FsShellService {
         }
         break;
 
+      case VALIDATE:
+        if (value == null) {
+          unsetValidate();
+        } else {
+          setValidate((Boolean)value);
+        }
+        break;
+
       }
     }
 
@@ -1679,6 +1922,9 @@ public class FsShellService {
 
       case DEST:
         return getDest();
+
+      case VALIDATE:
+        return Boolean.valueOf(isValidate());
 
       }
       throw new IllegalStateException();
@@ -1695,6 +1941,8 @@ public class FsShellService {
         return isSetSrc();
       case DEST:
         return isSetDest();
+      case VALIDATE:
+        return isSetValidate();
       }
       throw new IllegalStateException();
     }
@@ -1727,6 +1975,15 @@ public class FsShellService {
         if (!(this_present_dest && that_present_dest))
           return false;
         if (!this.dest.equals(that.dest))
+          return false;
+      }
+
+      boolean this_present_validate = true;
+      boolean that_present_validate = true;
+      if (this_present_validate || that_present_validate) {
+        if (!(this_present_validate && that_present_validate))
+          return false;
+        if (this.validate != that.validate)
           return false;
       }
 
@@ -1766,6 +2023,16 @@ public class FsShellService {
           return lastComparison;
         }
       }
+      lastComparison = Boolean.valueOf(isSetValidate()).compareTo(typedOther.isSetValidate());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetValidate()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.validate, typedOther.validate);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
       return 0;
     }
 
@@ -1797,6 +2064,14 @@ public class FsShellService {
               org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
             }
             break;
+          case 3: // VALIDATE
+            if (field.type == org.apache.thrift.protocol.TType.BOOL) {
+              this.validate = iprot.readBool();
+              setValidateIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
           default:
             org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
         }
@@ -1822,6 +2097,9 @@ public class FsShellService {
         oprot.writeString(this.dest);
         oprot.writeFieldEnd();
       }
+      oprot.writeFieldBegin(VALIDATE_FIELD_DESC);
+      oprot.writeBool(this.validate);
+      oprot.writeFieldEnd();
       oprot.writeFieldStop();
       oprot.writeStructEnd();
     }
@@ -1846,6 +2124,10 @@ public class FsShellService {
         sb.append(this.dest);
       }
       first = false;
+      if (!first) sb.append(", ");
+      sb.append("validate:");
+      sb.append(this.validate);
+      first = false;
       sb.append(")");
       return sb.toString();
     }
@@ -1864,6 +2146,8 @@ public class FsShellService {
 
     private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
       try {
+        // it doesn't seem like you should have to do this, but java serialization is wacky, and doesn't call the default constructor.
+        __isset_bit_vector = new BitSet(1);
         read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
       } catch (org.apache.thrift.TException te) {
         throw new java.io.IOException(te);
@@ -6699,6 +6983,688 @@ public class FsShellService {
     @Override
     public String toString() {
       StringBuilder sb = new StringBuilder("exists_result(");
+      boolean first = true;
+
+      sb.append("success:");
+      sb.append(this.success);
+      first = false;
+      if (!first) sb.append(", ");
+      sb.append("e:");
+      if (this.e == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.e);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class getFileCrc_args implements org.apache.thrift.TBase<getFileCrc_args, getFileCrc_args._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("getFileCrc_args");
+
+    private static final org.apache.thrift.protocol.TField PATH_FIELD_DESC = new org.apache.thrift.protocol.TField("path", org.apache.thrift.protocol.TType.STRING, (short)1);
+
+    public String path; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      PATH((short)1, "path");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 1: // PATH
+            return PATH;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.PATH, new org.apache.thrift.meta_data.FieldMetaData("path", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRING)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(getFileCrc_args.class, metaDataMap);
+    }
+
+    public getFileCrc_args() {
+    }
+
+    public getFileCrc_args(
+      String path)
+    {
+      this();
+      this.path = path;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public getFileCrc_args(getFileCrc_args other) {
+      if (other.isSetPath()) {
+        this.path = other.path;
+      }
+    }
+
+    public getFileCrc_args deepCopy() {
+      return new getFileCrc_args(this);
+    }
+
+    @Override
+    public void clear() {
+      this.path = null;
+    }
+
+    public String getPath() {
+      return this.path;
+    }
+
+    public getFileCrc_args setPath(String path) {
+      this.path = path;
+      return this;
+    }
+
+    public void unsetPath() {
+      this.path = null;
+    }
+
+    /** Returns true if field path is set (has been assigned a value) and false otherwise */
+    public boolean isSetPath() {
+      return this.path != null;
+    }
+
+    public void setPathIsSet(boolean value) {
+      if (!value) {
+        this.path = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case PATH:
+        if (value == null) {
+          unsetPath();
+        } else {
+          setPath((String)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case PATH:
+        return getPath();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case PATH:
+        return isSetPath();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof getFileCrc_args)
+        return this.equals((getFileCrc_args)that);
+      return false;
+    }
+
+    public boolean equals(getFileCrc_args that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_path = true && this.isSetPath();
+      boolean that_present_path = true && that.isSetPath();
+      if (this_present_path || that_present_path) {
+        if (!(this_present_path && that_present_path))
+          return false;
+        if (!this.path.equals(that.path))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(getFileCrc_args other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      getFileCrc_args typedOther = (getFileCrc_args)other;
+
+      lastComparison = Boolean.valueOf(isSetPath()).compareTo(typedOther.isSetPath());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetPath()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.path, typedOther.path);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 1: // PATH
+            if (field.type == org.apache.thrift.protocol.TType.STRING) {
+              this.path = iprot.readString();
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      validate();
+
+      oprot.writeStructBegin(STRUCT_DESC);
+      if (this.path != null) {
+        oprot.writeFieldBegin(PATH_FIELD_DESC);
+        oprot.writeString(this.path);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("getFileCrc_args(");
+      boolean first = true;
+
+      sb.append("path:");
+      if (this.path == null) {
+        sb.append("null");
+      } else {
+        sb.append(this.path);
+      }
+      first = false;
+      sb.append(")");
+      return sb.toString();
+    }
+
+    public void validate() throws org.apache.thrift.TException {
+      // check for required fields
+    }
+
+    private void writeObject(java.io.ObjectOutputStream out) throws java.io.IOException {
+      try {
+        write(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(out)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+    private void readObject(java.io.ObjectInputStream in) throws java.io.IOException, ClassNotFoundException {
+      try {
+        read(new org.apache.thrift.protocol.TCompactProtocol(new org.apache.thrift.transport.TIOStreamTransport(in)));
+      } catch (org.apache.thrift.TException te) {
+        throw new java.io.IOException(te);
+      }
+    }
+
+  }
+
+  public static class getFileCrc_result implements org.apache.thrift.TBase<getFileCrc_result, getFileCrc_result._Fields>, java.io.Serializable, Cloneable   {
+    private static final org.apache.thrift.protocol.TStruct STRUCT_DESC = new org.apache.thrift.protocol.TStruct("getFileCrc_result");
+
+    private static final org.apache.thrift.protocol.TField SUCCESS_FIELD_DESC = new org.apache.thrift.protocol.TField("success", org.apache.thrift.protocol.TType.I32, (short)0);
+    private static final org.apache.thrift.protocol.TField E_FIELD_DESC = new org.apache.thrift.protocol.TField("e", org.apache.thrift.protocol.TType.STRUCT, (short)1);
+
+    public int success; // required
+    public FsShellException e; // required
+
+    /** The set of fields this struct contains, along with convenience methods for finding and manipulating them. */
+    public enum _Fields implements org.apache.thrift.TFieldIdEnum {
+      SUCCESS((short)0, "success"),
+      E((short)1, "e");
+
+      private static final Map<String, _Fields> byName = new HashMap<String, _Fields>();
+
+      static {
+        for (_Fields field : EnumSet.allOf(_Fields.class)) {
+          byName.put(field.getFieldName(), field);
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, or null if its not found.
+       */
+      public static _Fields findByThriftId(int fieldId) {
+        switch(fieldId) {
+          case 0: // SUCCESS
+            return SUCCESS;
+          case 1: // E
+            return E;
+          default:
+            return null;
+        }
+      }
+
+      /**
+       * Find the _Fields constant that matches fieldId, throwing an exception
+       * if it is not found.
+       */
+      public static _Fields findByThriftIdOrThrow(int fieldId) {
+        _Fields fields = findByThriftId(fieldId);
+        if (fields == null) throw new IllegalArgumentException("Field " + fieldId + " doesn't exist!");
+        return fields;
+      }
+
+      /**
+       * Find the _Fields constant that matches name, or null if its not found.
+       */
+      public static _Fields findByName(String name) {
+        return byName.get(name);
+      }
+
+      private final short _thriftId;
+      private final String _fieldName;
+
+      _Fields(short thriftId, String fieldName) {
+        _thriftId = thriftId;
+        _fieldName = fieldName;
+      }
+
+      public short getThriftFieldId() {
+        return _thriftId;
+      }
+
+      public String getFieldName() {
+        return _fieldName;
+      }
+    }
+
+    // isset id assignments
+    private static final int __SUCCESS_ISSET_ID = 0;
+    private BitSet __isset_bit_vector = new BitSet(1);
+
+    public static final Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> metaDataMap;
+    static {
+      Map<_Fields, org.apache.thrift.meta_data.FieldMetaData> tmpMap = new EnumMap<_Fields, org.apache.thrift.meta_data.FieldMetaData>(_Fields.class);
+      tmpMap.put(_Fields.SUCCESS, new org.apache.thrift.meta_data.FieldMetaData("success", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.I32)));
+      tmpMap.put(_Fields.E, new org.apache.thrift.meta_data.FieldMetaData("e", org.apache.thrift.TFieldRequirementType.DEFAULT, 
+          new org.apache.thrift.meta_data.FieldValueMetaData(org.apache.thrift.protocol.TType.STRUCT)));
+      metaDataMap = Collections.unmodifiableMap(tmpMap);
+      org.apache.thrift.meta_data.FieldMetaData.addStructMetaDataMap(getFileCrc_result.class, metaDataMap);
+    }
+
+    public getFileCrc_result() {
+    }
+
+    public getFileCrc_result(
+      int success,
+      FsShellException e)
+    {
+      this();
+      this.success = success;
+      setSuccessIsSet(true);
+      this.e = e;
+    }
+
+    /**
+     * Performs a deep copy on <i>other</i>.
+     */
+    public getFileCrc_result(getFileCrc_result other) {
+      __isset_bit_vector.clear();
+      __isset_bit_vector.or(other.__isset_bit_vector);
+      this.success = other.success;
+      if (other.isSetE()) {
+        this.e = new FsShellException(other.e);
+      }
+    }
+
+    public getFileCrc_result deepCopy() {
+      return new getFileCrc_result(this);
+    }
+
+    @Override
+    public void clear() {
+      setSuccessIsSet(false);
+      this.success = 0;
+      this.e = null;
+    }
+
+    public int getSuccess() {
+      return this.success;
+    }
+
+    public getFileCrc_result setSuccess(int success) {
+      this.success = success;
+      setSuccessIsSet(true);
+      return this;
+    }
+
+    public void unsetSuccess() {
+      __isset_bit_vector.clear(__SUCCESS_ISSET_ID);
+    }
+
+    /** Returns true if field success is set (has been assigned a value) and false otherwise */
+    public boolean isSetSuccess() {
+      return __isset_bit_vector.get(__SUCCESS_ISSET_ID);
+    }
+
+    public void setSuccessIsSet(boolean value) {
+      __isset_bit_vector.set(__SUCCESS_ISSET_ID, value);
+    }
+
+    public FsShellException getE() {
+      return this.e;
+    }
+
+    public getFileCrc_result setE(FsShellException e) {
+      this.e = e;
+      return this;
+    }
+
+    public void unsetE() {
+      this.e = null;
+    }
+
+    /** Returns true if field e is set (has been assigned a value) and false otherwise */
+    public boolean isSetE() {
+      return this.e != null;
+    }
+
+    public void setEIsSet(boolean value) {
+      if (!value) {
+        this.e = null;
+      }
+    }
+
+    public void setFieldValue(_Fields field, Object value) {
+      switch (field) {
+      case SUCCESS:
+        if (value == null) {
+          unsetSuccess();
+        } else {
+          setSuccess((Integer)value);
+        }
+        break;
+
+      case E:
+        if (value == null) {
+          unsetE();
+        } else {
+          setE((FsShellException)value);
+        }
+        break;
+
+      }
+    }
+
+    public Object getFieldValue(_Fields field) {
+      switch (field) {
+      case SUCCESS:
+        return Integer.valueOf(getSuccess());
+
+      case E:
+        return getE();
+
+      }
+      throw new IllegalStateException();
+    }
+
+    /** Returns true if field corresponding to fieldID is set (has been assigned a value) and false otherwise */
+    public boolean isSet(_Fields field) {
+      if (field == null) {
+        throw new IllegalArgumentException();
+      }
+
+      switch (field) {
+      case SUCCESS:
+        return isSetSuccess();
+      case E:
+        return isSetE();
+      }
+      throw new IllegalStateException();
+    }
+
+    @Override
+    public boolean equals(Object that) {
+      if (that == null)
+        return false;
+      if (that instanceof getFileCrc_result)
+        return this.equals((getFileCrc_result)that);
+      return false;
+    }
+
+    public boolean equals(getFileCrc_result that) {
+      if (that == null)
+        return false;
+
+      boolean this_present_success = true;
+      boolean that_present_success = true;
+      if (this_present_success || that_present_success) {
+        if (!(this_present_success && that_present_success))
+          return false;
+        if (this.success != that.success)
+          return false;
+      }
+
+      boolean this_present_e = true && this.isSetE();
+      boolean that_present_e = true && that.isSetE();
+      if (this_present_e || that_present_e) {
+        if (!(this_present_e && that_present_e))
+          return false;
+        if (!this.e.equals(that.e))
+          return false;
+      }
+
+      return true;
+    }
+
+    @Override
+    public int hashCode() {
+      return 0;
+    }
+
+    public int compareTo(getFileCrc_result other) {
+      if (!getClass().equals(other.getClass())) {
+        return getClass().getName().compareTo(other.getClass().getName());
+      }
+
+      int lastComparison = 0;
+      getFileCrc_result typedOther = (getFileCrc_result)other;
+
+      lastComparison = Boolean.valueOf(isSetSuccess()).compareTo(typedOther.isSetSuccess());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetSuccess()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.success, typedOther.success);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      lastComparison = Boolean.valueOf(isSetE()).compareTo(typedOther.isSetE());
+      if (lastComparison != 0) {
+        return lastComparison;
+      }
+      if (isSetE()) {
+        lastComparison = org.apache.thrift.TBaseHelper.compareTo(this.e, typedOther.e);
+        if (lastComparison != 0) {
+          return lastComparison;
+        }
+      }
+      return 0;
+    }
+
+    public _Fields fieldForId(int fieldId) {
+      return _Fields.findByThriftId(fieldId);
+    }
+
+    public void read(org.apache.thrift.protocol.TProtocol iprot) throws org.apache.thrift.TException {
+      org.apache.thrift.protocol.TField field;
+      iprot.readStructBegin();
+      while (true)
+      {
+        field = iprot.readFieldBegin();
+        if (field.type == org.apache.thrift.protocol.TType.STOP) { 
+          break;
+        }
+        switch (field.id) {
+          case 0: // SUCCESS
+            if (field.type == org.apache.thrift.protocol.TType.I32) {
+              this.success = iprot.readI32();
+              setSuccessIsSet(true);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          case 1: // E
+            if (field.type == org.apache.thrift.protocol.TType.STRUCT) {
+              this.e = new FsShellException();
+              this.e.read(iprot);
+            } else { 
+              org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+            }
+            break;
+          default:
+            org.apache.thrift.protocol.TProtocolUtil.skip(iprot, field.type);
+        }
+        iprot.readFieldEnd();
+      }
+      iprot.readStructEnd();
+
+      // check for required fields of primitive type, which can't be checked in the validate method
+      validate();
+    }
+
+    public void write(org.apache.thrift.protocol.TProtocol oprot) throws org.apache.thrift.TException {
+      oprot.writeStructBegin(STRUCT_DESC);
+
+      if (this.isSetSuccess()) {
+        oprot.writeFieldBegin(SUCCESS_FIELD_DESC);
+        oprot.writeI32(this.success);
+        oprot.writeFieldEnd();
+      } else if (this.isSetE()) {
+        oprot.writeFieldBegin(E_FIELD_DESC);
+        this.e.write(oprot);
+        oprot.writeFieldEnd();
+      }
+      oprot.writeFieldStop();
+      oprot.writeStructEnd();
+    }
+
+    @Override
+    public String toString() {
+      StringBuilder sb = new StringBuilder("getFileCrc_result(");
       boolean first = true;
 
       sb.append("success:");

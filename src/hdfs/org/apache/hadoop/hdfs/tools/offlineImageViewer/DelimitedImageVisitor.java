@@ -23,8 +23,11 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
+import java.util.List;
+import java.util.Set;
 
 /**
  * A DelimitedImageVisitor generates a text representation of the fsimage,
@@ -45,20 +48,26 @@ class DelimitedImageVisitor extends TextWriterImageVisitor {
   
   final private LinkedList<ImageElement> elemQ = new LinkedList<ImageElement>();
   private long fileSize = 0l;
+  //Elements of fsimage possible to track
+  private final static Collection<ImageElement> allowedElements;
+   
   // Elements of fsimage we're interested in tracking
   private final Collection<ImageElement> elementsToTrack;
+  
   // Values for each of the elements in elementsToTrack
   private final AbstractMap<ImageElement, String> elements = 
                                             new HashMap<ImageElement, String>();
   private final String delimiter;
 
-  {
-    elementsToTrack = new ArrayList<ImageElement>();
+  static {
+    allowedElements = new ArrayList<ImageElement>();
     
     // This collection determines what elements are tracked and the order
     // in which they are output
-    Collections.addAll(elementsToTrack,  ImageElement.INODE_PATH,
+    Collections.addAll(allowedElements,  ImageElement.INODE_PATH,
                                          ImageElement.REPLICATION,
+                                         ImageElement.INODE_TYPE,
+                                         ImageElement.INODE_HARDLINK_ID,
                                          ImageElement.MODIFICATION_TIME,
                                          ImageElement.ACCESS_TIME,
                                          ImageElement.BLOCK_SIZE,
@@ -71,18 +80,61 @@ class DelimitedImageVisitor extends TextWriterImageVisitor {
                                          ImageElement.GROUP_NAME);
   }
   
-  public DelimitedImageVisitor(String filename) throws IOException {
-    this(filename, false);
-  }
-
-  public DelimitedImageVisitor(String outputFile, boolean printToScreen) 
-                                                           throws IOException {
-    this(outputFile, printToScreen, defaultDelimiter);
+  public static List<ImageElement> validateElements(String elementString) {
+    List<ImageElement> elementsToTrack = new ArrayList<ImageElement>();
+    
+    elementString = elementString.replaceAll(",", "");
+    String[] elements = elementString.split("\\s+");
+    Set<String> distinctColumns = new HashSet<String>();
+    
+    for (String e : elements) {
+      e = e.toUpperCase();
+      
+      // make sure we process distinct columns
+      if (distinctColumns.contains(e)) {
+        System.out.println("Duplicate column: " + e);
+        return null;
+      }
+      distinctColumns.add(e);
+      
+      for (ImageElement ie : allowedElements) {
+        if (ie.toString().equalsIgnoreCase(e)) {
+          elementsToTrack.add(ie);
+          System.out.println("adding: " + ie);
+          break;
+        }
+        System.err.println("Element not allowed: " + e);
+        return null;
+      }
+    }
+    return elementsToTrack;
   }
   
-  public DelimitedImageVisitor(String outputFile, boolean printToScreen, 
-                               String delimiter) throws IOException {
-    super(outputFile, printToScreen);
+  public DelimitedImageVisitor(String outputFile, boolean printToScreen,
+      int numberOfParts, List<ImageElement> elems, boolean printHardlinkId)
+      throws IOException {
+    this(outputFile, printToScreen, 1, defaultDelimiter, elems, printHardlinkId);
+  }
+
+  public DelimitedImageVisitor(String outputFile, boolean printToScreen,
+      int numberOfParts, String delimiter, List<ImageElement> elems,
+      boolean printHardlinkId) throws IOException {
+    super(outputFile, printToScreen, numberOfParts);
+    elementsToTrack = new ArrayList<ImageElement>();
+    if (elems == null) {
+      // we track all default
+      for (ImageElement ie : allowedElements) {
+        elementsToTrack.add(ie);        
+      }
+    } else {
+      // otherwise only these requested
+      for(ImageElement ie : elems) {
+        elementsToTrack.add(ie);
+      }
+    }
+    if (!printHardlinkId) {
+      elementsToTrack.remove(ImageElement.INODE_HARDLINK_ID);
+    }
     this.delimiter = delimiter;
     reset();
   }
@@ -108,6 +160,7 @@ class DelimitedImageVisitor extends TextWriterImageVisitor {
        elem == ImageElement.INODE_UNDER_CONSTRUCTION) {
       writeLine();
       write("\n");
+      super.rollIfNeeded();
       reset();
     }
   }

@@ -18,8 +18,9 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
-import java.io.Serializable;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -28,32 +29,36 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-
-import javax.management.JMX;
-import javax.management.MBeanServerConnection;
 import javax.management.MalformedObjectNameException;
-import javax.management.ObjectName;
-import javax.management.remote.JMXConnector;
-import javax.management.remote.JMXConnectorFactory;
-import javax.management.remote.JMXServiceURL;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSUtil;
-import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo.AdminStates;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
-import org.apache.hadoop.util.StringUtils;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.codehaus.jackson.type.TypeReference;
 import org.apache.hadoop.hdfs.server.namenode.NameNodeMXBean;
 
 /**
  * This class generates the data that is needed to be displayed on cluster web 
- * console by connecting to each namenode through JMX.
+ * console by connecting to each namenode through http.
  */
 class ClusterJspHelper {
+  public final static String TOTAL_FILES_AND_DIRECTORIES = "TotalFilesAndDirectories";
+  public final static String TOTAL = "Total";
+  public final static String FREE = "Free";
+  public final static String NAMESPACE_USED = "NamespaceUsed";
+  public final static String NON_DFS_USEDSPACE = "NonDfsUsedSpace";
+  public final static String TOTAL_BLOCKS = "TotalBlocks";
+  public final static String NUMBER_MISSING_BLOCKS = "NumberOfMissingBlocks";
+  public final static String SAFE_MODE_TEXT = "SafeModeText";
+  public final static String LIVE_NODES = "LiveNodes";
+  public final static String DEAD_NODES = "DeadNodes";
+  public final static String DECOM_NODES = "DecomNodes";
+  public final static String NNSPECIFIC_KEYS = "NNSpecificKeys";
+  public final static String IS_PRIMARY = "IsPrimary";
   
   public static class NameNodeKey 
     implements Comparable<NameNodeKey> {
@@ -61,11 +66,18 @@ class ClusterJspHelper {
     public static final int ACTIVE = 0;
     public static final int BOTH = 1;
     public static final int STANDBY = 2;
+    public static final String DELIMITER = "\n";
     
     String key;
     int type;
     
     public NameNodeKey(){ }
+    
+    public NameNodeKey(String input) {
+      String[] splits = input.split(DELIMITER);
+      key = splits[0];
+      type = Integer.parseInt(splits[1]);
+    }
     
     public NameNodeKey(String s, int t){
       key = s;
@@ -106,6 +118,10 @@ class ClusterJspHelper {
     public int hashCode() {
       return key.hashCode();
     }
+
+    public String toString() {
+      return this.key + DELIMITER + this.type;
+    }
   }
   
   final static public String WEB_UGI_PROPERTY_NAME = "dfs.web.ugi";
@@ -113,6 +129,9 @@ class ClusterJspHelper {
   public static final String OVERALL_STATUS = "overall-status";
   public static final String DEAD = "Dead";
   public static Configuration conf = new Configuration();
+  private static final boolean isAvatar =
+      conf.get("fs.default.name0", "").length() > 0;
+
   public NameNode localnn;
   public static final UnixUserGroupInformation webUGI
   = UnixUserGroupInformation.createImmutable(
@@ -123,7 +142,8 @@ class ClusterJspHelper {
   }
   
   private NamenodeMXBeanHelper getNNHelper(InetSocketAddress isa) 
-      throws IOException, MalformedObjectNameException {
+      throws IOException, MalformedObjectNameException, 
+      URISyntaxException {
     if (localnn != null) {
       Configuration runningConf = localnn.getConf();
       InetSocketAddress nameNodeAddr = NameNode.getAddress(runningConf); 
@@ -133,6 +153,59 @@ class ClusterJspHelper {
     }
     return new NamenodeMXBeanHelper(isa, conf);
   }
+  
+  public class NameNodeStatusFetcher extends Thread {
+    InetSocketAddress isa;
+    Exception e = null;
+    NamenodeStatus nn = null;
+    public NameNodeStatusFetcher(InetSocketAddress isa) {
+      this.isa = isa;
+    }
+    
+    public void run() {
+      NamenodeMXBeanHelper nnHelper = null;
+      LOG.info("connect to " + isa.toString());
+      long starttime = System.currentTimeMillis();
+      try {
+        nnHelper = getNNHelper(isa);
+        nn = nnHelper.getNamenodeStatus();
+      } catch ( Exception exception ) {
+        // track exceptions encountered when connecting to namenodes
+        this.e = exception;
+        LOG.error(isa.toString() + " has the exception:", e);
+        nn = new NamenodeStatus();
+      } finally {
+        LOG.info("Take time " + isa.toString() + " : " + 
+            (System.currentTimeMillis() - starttime));
+      }
+    }
+  }
+  
+  public class DecommissionStatusFetcher extends Thread {
+    InetSocketAddress isa;
+    Exception e = null;
+    Map<String, Map<String, String>> statusMap = null;
+    
+    public DecommissionStatusFetcher(InetSocketAddress isa,
+        Map<String, Map<String, String>> statusMap) {
+      this.isa = isa;
+      this.statusMap = statusMap;
+    }
+    
+    public void run() {
+      NamenodeMXBeanHelper nnHelper = null;
+      try {
+        nnHelper = getNNHelper(isa);
+        synchronized(statusMap) {
+          nnHelper.getDecomNodeInfoForReport(statusMap);
+        }
+      } catch (Exception exception) {
+        this.e = exception;
+        LOG.error(isa.toString() + " has the exception:", e);
+      }
+    }
+  }
+  
   /**
    * JSP helper function that generates cluster health report.  When 
    * encountering exception while getting Namenode status, the exception will 
@@ -141,11 +214,11 @@ class ClusterJspHelper {
   ClusterStatus generateClusterHealthReport() {
     ClusterStatus cs = new ClusterStatus();
     List<InetSocketAddress> isas = null;
-    
-    //TODO how to do it in a more generic way
-    ArrayList<String> suffixes = new ArrayList<String>();
-    suffixes.add("0"); suffixes.add("1");
-    
+    ArrayList<String> suffixes = null;
+    if (isAvatar) {
+      suffixes = new ArrayList<String>();
+      suffixes.add("0"); suffixes.add("1");
+    }
     try {
       cs.nnAddrs = isas = DFSUtil.getClientRpcAddresses(conf, suffixes);
     } catch (Exception e) {
@@ -157,25 +230,21 @@ class ClusterJspHelper {
     
     sort(isas);
     
-    // Process each namenode and add it to ClusterStatus
-    for (InetSocketAddress isa : isas) {
-      NamenodeMXBeanHelper nnHelper = null;
-      NamenodeStatus nn = null;
-      LOG.info("connect to " + isa.toString());
+    // Process each namenode and add it to ClusterStatus in parallel
+    NameNodeStatusFetcher[] threads = new NameNodeStatusFetcher[isas.size()];
+    for (int i = 0; i < isas.size(); i++) {
+      threads[i] = new NameNodeStatusFetcher(isas.get(i));
+      threads[i].start();
+    }
+    for (NameNodeStatusFetcher thread : threads) {
       try {
-        nnHelper = getNNHelper(isa);
-        nn = nnHelper.getNamenodeStatus();
-      } catch ( Exception e ) {
-        // track exceptions encountered when connecting to namenodes
-        cs.addException(isa.toString(), e);
-        LOG.error(isa.toString() + " has the exception:", e);
-        nn = new NamenodeStatus();
-        continue;
-      } finally {
-        cs.addNamenodeStatus(nn);
-        if (nnHelper != null) {
-          nnHelper.cleanup();
+        thread.join();
+        if (thread.e != null) {
+          cs.addException(thread.isa.toString(), thread.e);
         }
+        cs.addNamenodeStatus(thread.nn);
+      } catch (InterruptedException ex) {
+        LOG.warn(ex);
       }
     }
     return cs;
@@ -197,12 +266,12 @@ class ClusterJspHelper {
    */
   DecommissionStatus generateDecommissioningReport() {
     List<InetSocketAddress> isas = null;
-    try {
-      
-      //TODO how to do it in a more generic way
-      ArrayList<String> suffixes = new ArrayList<String>();
+    ArrayList<String> suffixes = null;
+    if (isAvatar) {
+      suffixes = new ArrayList<String>();
       suffixes.add("0"); suffixes.add("1");
-      
+    }
+    try {
       isas = DFSUtil.getClientRpcAddresses(conf, suffixes);
       sort(isas);
     } catch (Exception e) {
@@ -223,21 +292,21 @@ class ClusterJspHelper {
       new HashMap<String, Exception>();
     
     List<String> unreportedNamenode = new ArrayList<String>();
-    for (InetSocketAddress isa : isas) {
-      NamenodeMXBeanHelper nnHelper = null;
+    DecommissionStatusFetcher[] threads = new DecommissionStatusFetcher[isas.size()];
+    for (int i = 0; i < isas.size(); i++) {
+      threads[i] = new DecommissionStatusFetcher(isas.get(i), statusMap);
+      threads[i].start();
+    }
+    for (DecommissionStatusFetcher thread : threads) {
       try {
-        nnHelper = getNNHelper(isa);
-        nnHelper.getDecomNodeInfoForReport(statusMap);
-      } catch (Exception e) {
-        // catch exceptions encountered while connecting to namenodes
-        decommissionExceptions.put(isa.toString(), e);
-        unreportedNamenode.add(isa.toString());
-        LOG.error(isa.toString() + " has the exception:", e);
-        continue;
-      } finally {
-        if (nnHelper != null) {
-          nnHelper.cleanup();
+        thread.join();
+        if (thread.e != null) {
+          // catch exceptions encountered while connecting to namenodes
+          decommissionExceptions.put(thread.isa.toString(), thread.e);
+          unreportedNamenode.add(thread.isa.toString());
         }
+      } catch (InterruptedException ex) {
+        LOG.warn(ex);
       }
     }
     updateUnknownStatus(statusMap, unreportedNamenode);
@@ -357,71 +426,157 @@ class ClusterJspHelper {
     }
     return Integer.parseInt(address.split(":")[1]);
   }
+  
+  static class NameNodeMXBeanObject implements NameNodeMXBean {
+    private static final ObjectMapper mapper = new ObjectMapper();
+    Map<String, Object> values = null;
+    String httpAddress = null;
+    
+    NameNodeMXBeanObject(InetSocketAddress namenode, Configuration conf)
+      throws IOException, URISyntaxException {
+      httpAddress = DFSUtil.getInfoServer(namenode, conf, isAvatar);
+      InetSocketAddress infoSocAddr = NetUtils.createSocketAddr(httpAddress);
+      String nameNodeMXBeanContent = DFSUtil.getHTMLContent(
+          new URI("http", null, infoSocAddr.getHostName(), 
+              infoSocAddr.getPort(), "/namenodeMXBean", null, null));
+      TypeReference<Map<String, Object>> type = 
+          new TypeReference<Map<String, Object>>() { };
+      values = mapper.readValue(nameNodeMXBeanContent, type);
+    }
+
+    public String getVersion() {
+      return null;
+    }
+    
+    public long getUsed() {
+      return -1L; 
+    }
+    
+    public long getFree() {
+      return Long.parseLong((String)values.get(FREE));
+    }
+    
+    public long getTotal() {
+      return Long.parseLong((String)values.get(TOTAL));
+    }
+    
+    public String getSafemode() {
+      return null;
+    }
+    
+    public boolean isUpgradeFinalized() {
+      return true; 
+    }
+    
+    public long getNonDfsUsedSpace() {
+      return Long.parseLong((String)values.get(NON_DFS_USEDSPACE));
+    }
+    
+    public float getPercentUsed(){
+      return -1.0f;
+    }
+    
+    public float getPercentRemaining() {
+      return -1.0f;
+    }
+    
+    public long getNamespaceUsed() {
+      return Long.parseLong((String)values.get(NAMESPACE_USED));
+    }
+    
+    public float getPercentNamespaceUsed() {
+      return -1.0f;
+    }
+      
+    public long getTotalBlocks() {
+      return Long.parseLong((String)values.get(TOTAL_BLOCKS));
+    }
+    
+    public long getTotalFilesAndDirectories() {
+      return Long.parseLong((String) values.get(TOTAL_FILES_AND_DIRECTORIES));
+    }
+    
+    public long getNumberOfMissingBlocks() {
+      return Long.parseLong((String)values.get(NUMBER_MISSING_BLOCKS));
+    }
+    
+    public int getThreads() {
+      return -1;
+    }
+
+    public String getLiveNodes() {
+      return (String)values.get(LIVE_NODES);
+    }
+    
+    public String getDeadNodes() {
+      return (String)values.get(DEAD_NODES);
+    }
+    
+    public String getDecomNodes() {
+      return (String)values.get(DECOM_NODES);
+    }
+    
+    public int getNamespaceId() {
+      return -1;
+    }
+    
+    public String getNameserviceId() {
+      return null;
+    }
+
+    public String getSafeModeText() {
+      return (String)values.get(SAFE_MODE_TEXT);
+    }
+    
+    public Map<NameNodeKey, String> getNNSpecificKeys() {
+      TypeReference<Map<String, String>> type = 
+          new TypeReference<Map<String, String>>() { };
+      Map<NameNodeKey, String> result = new HashMap<NameNodeKey, String>();
+      try {
+        Map<String, String> tmp = NamenodeMXBeanHelper.mapper.readValue(
+            (String)values.get(NNSPECIFIC_KEYS), type);
+        for (String key: tmp.keySet()) {
+          result.put(new NameNodeKey(key), tmp.get(key));
+        }
+        return result;
+      } catch (Exception e) {
+        LOG.error(e);
+        return null;
+      } 
+    }
+    
+    public boolean getIsPrimary() {
+      return Boolean.parseBoolean((String)values.get(IS_PRIMARY));
+    }
+  }
 
   /**
-   * Class for connecting to Namenode over JMX and get attributes
-   * exposed by the MXBean.
+   * Class for connecting to Namenode over http or local fsnamesystem 
    */
   static class NamenodeMXBeanHelper {
-    private static final ObjectMapper mapper = new ObjectMapper();
+    public static final ObjectMapper mapper = new ObjectMapper();
     private final InetSocketAddress rpcAddress;
     private final String address;
     private final Configuration conf;
-    private final JMXConnector connector;
     private final NameNodeMXBean mxbeanProxy;
     
-    public static int getJMXPort(
-        InetSocketAddress namenode, Configuration conf) {
-      int jmxPort = 
-          conf.getInt("dfs.namenode.jmxport", 8998); 
-      if(namenode != null) {
-        // if non-default namenode, try reverse look up 
-        // the nameServiceID if it is available
-        String nameServiceId = DFSUtil.getNameServiceIdFromAddress(
-            conf, namenode,
-            FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
-
-        if (nameServiceId != null) {
-          jmxPort = conf.getInt(DFSUtil.getNameServiceIdKey(
-              "dfs.namenode.jmxport", nameServiceId), jmxPort);
-        }
-      }
-      return jmxPort;
-    }
-    
     NamenodeMXBeanHelper(InetSocketAddress addr, Configuration conf) 
-        throws IOException, MalformedObjectNameException {
+        throws IOException, MalformedObjectNameException,
+        URISyntaxException{
       this(addr, conf, null);
     }
     
     NamenodeMXBeanHelper(InetSocketAddress addr, Configuration conf, 
-        NameNode localnn)
-        throws IOException, MalformedObjectNameException {
+        NameNode localnn) throws IOException, URISyntaxException {
       this.rpcAddress = addr;
       this.address = addr.toString();
       this.conf = conf;
-      int port = getJMXPort(addr, conf);
       if (localnn == null) {
-        JMXServiceURL jmxURL = new JMXServiceURL("service:jmx:rmi:///jndi/rmi://"
-            + addr.getHostName() + ":" + port + "/jmxrmi");
-        LOG.info("Create RMI connector and connect to the RMI connector server" + jmxURL);
-        connector = JMXConnectorFactory.connect(jmxURL);
-        mxbeanProxy = getNamenodeMxBean();
+        mxbeanProxy = new NameNodeMXBeanObject(addr, conf);
       } else {
         LOG.info("Call local namenode " + this.address + " directly");
-        connector = null;
         mxbeanProxy = localnn.getNamesystem();
       }
-    }
-    
-    private NameNodeMXBean getNamenodeMxBean()
-        throws IOException, MalformedObjectNameException {
-      // Get an MBeanServerConnection on the remote VM.
-      MBeanServerConnection remote = connector.getMBeanServerConnection();
-      ObjectName mxbeanName = new ObjectName(
-          "hadoop:service=NameNode,name=NameNodeInfo");
-
-      return JMX.newMXBeanProxy(remote, mxbeanName, NameNodeMXBean.class);
     }
     
     /** Get the map corresponding to the JSON string */
@@ -433,10 +588,10 @@ class ClusterJspHelper {
     }
     
     /**
-     * Process JSON string returned from JMX connection to get the number of
+     * Process JSON string returned from connection to get the number of
      * live datanodes.
      * 
-     * @param json JSON output from JMX call that contains live node status.
+     * @param json JSON output that contains live node status.
      * @param nn namenode status to return information in
      */
     private static void getLiveNodeCount(String json, NamenodeStatus nn)
@@ -465,11 +620,10 @@ class ClusterJspHelper {
     }
   
     /**
-     * Count the number of dead datanode based on the JSON string returned from
-     * JMX call.
+     * Count the number of dead datanode based on the JSON string returned 
      * 
      * @param nn namenode
-     * @param json JSON string returned from JMX call
+     * @param json JSON string returned from http or local fsnamesystem
      */
     private static void getDeadNodeCount(String json, NamenodeStatus nn)
         throws IOException {
@@ -498,18 +652,21 @@ class ClusterJspHelper {
         throws IOException, MalformedObjectNameException {
       NamenodeStatus nn = new NamenodeStatus();
       nn.address = this.address;
-      nn.filesAndDirectories = mxbeanProxy.getTotalFiles();
+      nn.filesAndDirectories = mxbeanProxy.getTotalFilesAndDirectories();
       nn.capacity = mxbeanProxy.getTotal();
       nn.free = mxbeanProxy.getFree();
       nn.nsUsed = mxbeanProxy.getNamespaceUsed();
       nn.nonDfsUsed = mxbeanProxy.getNonDfsUsedSpace();
       nn.blocksCount = mxbeanProxy.getTotalBlocks();
       nn.missingBlocksCount = mxbeanProxy.getNumberOfMissingBlocks();
-      nn.httpAddress = DFSUtil.getInfoServer(rpcAddress, conf);
+      nn.httpAddress = DFSUtil.getInfoServer(rpcAddress, conf, isAvatar);
       nn.safeModeText = mxbeanProxy.getSafeModeText();
       getLiveNodeCount(mxbeanProxy.getLiveNodes(), nn);
       getDeadNodeCount(mxbeanProxy.getDeadNodes(), nn);
       nn.namenodeSpecificInfo = mxbeanProxy.getNNSpecificKeys();
+      if (nn.namenodeSpecificInfo == null) {
+        throw new IOException("Namenode SpecificInfo is null");
+      }
       nn.isPrimary = mxbeanProxy.getIsPrimary();
       return nn;
     }
@@ -517,7 +674,6 @@ class ClusterJspHelper {
     /**
      * Connect to namenode to get decommission node information.
      * @param statusMap data node status map
-     * @param connector JMXConnector
      */
     private void getDecomNodeInfoForReport(
         Map<String, Map<String, String>> statusMap) throws IOException,
@@ -528,8 +684,8 @@ class ClusterJspHelper {
     }
   
     /**
-     * Process the JSON string returned from JMX call to get live datanode
-     * status. Store the information into datanode status map and
+     * Process the JSON string returned from http or local fsnamesystem to get
+     * live datanode status. Store the information into datanode status map and
      * Decommissionnode.
      * 
      * @param statusMap Map of datanode status. Key is datanode, value
@@ -568,9 +724,9 @@ class ClusterJspHelper {
     }
   
     /**
-     * Process the JSON string returned from JMX connection to get the dead
-     * datanode information. Store the information into datanode status map and
-     * Decommissionnode.
+     * Process the JSON string returned from http or local fsnamesystem to get
+     * the dead datanode information. Store the information into datanode status
+     * map and Decommissionnode.
      * 
      * @param statusMap map with key being datanode, value being an
      *          inner map (key:namenode, value:decommisionning state).
@@ -611,13 +767,13 @@ class ClusterJspHelper {
     }
   
     /**
-     * We process the JSON string returned from JMX connection to get the
-     * decommisioning datanode information.
+     * We process the JSON string returned from http or local fsnamesystem
+     * to get the decommisioning datanode information.
      * 
      * @param dataNodeStatusMap map with key being datanode, value being an
      *          inner map (key:namenode, value:decommisionning state).
      * @param address 
-     * @param json JSON string returned from JMX connection
+     * @param json JSON string returned 
      */
     private static void getDecommissionNodeStatus(
         Map<String, Map<String, String>> dataNodeStatusMap, String address,
@@ -640,18 +796,9 @@ class ClusterJspHelper {
         dataNodeStatusMap.put(dn, nnStatus);
       }
     }
-  
-    
-    public void cleanup() {
-      if (connector != null) {
-        try {
-          connector.close();
-        } catch (Exception e) {
-          // log failure of close jmx connection
-          LOG.warn("Unable to close JMX connection. "
-              + StringUtils.stringifyException(e));
-        }
-      }
+
+    public boolean isAvatar() {
+      return isAvatar;
     }
   }
 
@@ -744,6 +891,10 @@ class ClusterJspHelper {
 
     public void addException(String address, Exception e) {
       nnExceptions.put(address, e);
+    }
+    
+    public boolean isAvatar() {
+      return isAvatar;
     }
   }
   

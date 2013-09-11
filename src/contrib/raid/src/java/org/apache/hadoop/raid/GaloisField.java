@@ -220,6 +220,34 @@ public class GaloisField {
       }
     }
   }
+  
+  /**
+   * A "bulk" version of the solveVandermondeSystem
+   */
+  public void solveVandermondeSystem(int[] x, byte[][] y, 
+                                     int len, int dataStart, int dataLen) {
+    assert(x.length <= len && y.length <= len);
+    int dataEnd = dataStart + dataLen;
+    for (int i = 0; i < len - 1; i++) {
+      for (int j = len - 1; j > i; j--) {
+        for (int k = dataStart; k < dataEnd; k++) {
+          y[j][k] = (byte)(y[j][k] ^ mulTable[x[i]][y[j - 1][k] & 0x000000FF]);
+        }
+      }
+    }
+    for (int i = len - 1; i >= 0; i--) {
+      for (int j = i + 1; j < len; j++) {
+        for (int k = dataStart; k < dataEnd; k++) {
+          y[j][k] = (byte)(divTable[y[j][k] & 0x000000FF][x[j] ^ x[j - i - 1]]);
+        }
+      }
+      for (int j = i; j < len - 1; j++) {
+        for (int k = dataStart; k < dataEnd; k++) {
+          y[j][k] = (byte)(y[j][k] ^ y[j + 1][k]);
+        }
+      }
+    }
+  }
 
   /**
    * Compute the multiplication of two polynomials. The index in the
@@ -257,6 +285,22 @@ public class GaloisField {
       for (int j = 0; j < divisor.length; j++) {
         int k = j + i;
         dividend[k] = dividend[k] ^ mulTable[ratio][divisor[j]];
+      }
+    }
+  }
+  
+  /**
+   * The "bulk" version of the remainder.
+   * Warning: This function will modify the "dividend" inputs.
+   */
+  public void remainder(byte[][] dividend, int[] divisor) {
+    for (int i = dividend.length - divisor.length; i >= 0; i--) {
+      for (int j = 0; j < divisor.length; j++) {
+        for (int k = 0; k < dividend[i].length; k++) {
+          int ratio = 
+              divTable[dividend[i + divisor.length - 1][k] & 0x00FF][divisor[divisor.length - 1]];
+          dividend[j + i][k] = (byte)((dividend[j + i][k] & 0x00FF) ^ mulTable[ratio][divisor[j]]);
+        }
       }
     }
   }
@@ -298,6 +342,31 @@ public class GaloisField {
       y = mulTable[x][y];
     }
     return result;
+  }
+  
+  public void substitute(byte[][] p, byte[] q, int x, 
+      int dataStart, int dataLen) {
+    int y = 1;
+    for (int i = 0; i < p.length; i++) {
+      byte[] pi = p[i];
+      for (int j = dataStart; j < dataStart + dataLen; j++) {
+        int pij = pi[j] & 0x000000FF;
+        q[j] = (byte)(q[j] ^ mulTable[pij][y]);
+      }
+      y = mulTable[x][y];
+    }
+  }
+  
+  /**
+   * A "bulk" version of the substitute.
+   * Tends to be 2X faster than the "int" substitute in a loop.
+   * 
+   * @param p input polynomial
+   * @param q store the return result
+   * @param x input field
+   */
+  public void substitute(byte[][] p, byte[] q, int x) {
+    substitute(p, q, x, 0, p[0].length);
   }
 
   /**

@@ -73,6 +73,7 @@ public class TestUlimit extends TestCase {
    * is expected to be a failure.  
    */
   public void testCommandLine() {
+    /*
     if (StreamUtil.isCygwin()) {
       return;
     }
@@ -95,6 +96,7 @@ public class TestUlimit extends TestCase {
       mr.shutdown();
       dfs.shutdown();
     }
+    */
   }
 
   private void writeInputFile(FileSystem fs, Path dir) throws IOException {

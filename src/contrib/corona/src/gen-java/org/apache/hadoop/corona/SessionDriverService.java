@@ -655,14 +655,14 @@ public class SessionDriverService {
           case 2: // GRANTED
             if (field.type == org.apache.thrift.protocol.TType.LIST) {
               {
-                org.apache.thrift.protocol.TList _list17 = iprot.readListBegin();
-                this.granted = new ArrayList<ResourceGrant>(_list17.size);
-                for (int _i18 = 0; _i18 < _list17.size; ++_i18)
+                org.apache.thrift.protocol.TList _list35 = iprot.readListBegin();
+                this.granted = new ArrayList<ResourceGrant>(_list35.size);
+                for (int _i36 = 0; _i36 < _list35.size; ++_i36)
                 {
-                  ResourceGrant _elem19; // required
-                  _elem19 = new ResourceGrant();
-                  _elem19.read(iprot);
-                  this.granted.add(_elem19);
+                  ResourceGrant _elem37; // required
+                  _elem37 = new ResourceGrant();
+                  _elem37.read(iprot);
+                  this.granted.add(_elem37);
                 }
                 iprot.readListEnd();
               }
@@ -694,9 +694,9 @@ public class SessionDriverService {
         oprot.writeFieldBegin(GRANTED_FIELD_DESC);
         {
           oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.granted.size()));
-          for (ResourceGrant _iter20 : this.granted)
+          for (ResourceGrant _iter38 : this.granted)
           {
-            _iter20.write(oprot);
+            _iter38.write(oprot);
           }
           oprot.writeListEnd();
         }
@@ -1352,14 +1352,14 @@ public class SessionDriverService {
           case 2: // REVOKED
             if (field.type == org.apache.thrift.protocol.TType.LIST) {
               {
-                org.apache.thrift.protocol.TList _list21 = iprot.readListBegin();
-                this.revoked = new ArrayList<ResourceGrant>(_list21.size);
-                for (int _i22 = 0; _i22 < _list21.size; ++_i22)
+                org.apache.thrift.protocol.TList _list39 = iprot.readListBegin();
+                this.revoked = new ArrayList<ResourceGrant>(_list39.size);
+                for (int _i40 = 0; _i40 < _list39.size; ++_i40)
                 {
-                  ResourceGrant _elem23; // required
-                  _elem23 = new ResourceGrant();
-                  _elem23.read(iprot);
-                  this.revoked.add(_elem23);
+                  ResourceGrant _elem41; // required
+                  _elem41 = new ResourceGrant();
+                  _elem41.read(iprot);
+                  this.revoked.add(_elem41);
                 }
                 iprot.readListEnd();
               }
@@ -1399,9 +1399,9 @@ public class SessionDriverService {
         oprot.writeFieldBegin(REVOKED_FIELD_DESC);
         {
           oprot.writeListBegin(new org.apache.thrift.protocol.TList(org.apache.thrift.protocol.TType.STRUCT, this.revoked.size()));
-          for (ResourceGrant _iter24 : this.revoked)
+          for (ResourceGrant _iter42 : this.revoked)
           {
-            _iter24.write(oprot);
+            _iter42.write(oprot);
           }
           oprot.writeListEnd();
         }

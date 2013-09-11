@@ -218,6 +218,20 @@ public class TestPermission extends TestCase {
       final Path RENAME_PATH = new Path("/foo/bar");
       userfs.mkdirs(RENAME_PATH);
       assertTrue(canRename(userfs, RENAME_PATH, CHILD_DIR1));
+      
+      nnfs.mkdirs(new Path("/data1"));
+      
+      cluster.shutdownNameNode();
+      // restart namenode enable permission checking for the root path
+      Configuration newconf = cluster.getNameNodeConf();
+      newconf.set("dfs.permissions.checking.paths", "/data1");
+      cluster.restartNameNode();
+      
+      FileSystem newfs = FileSystem.get(newconf);
+
+      assertTrue(canMkdirs(newfs, CHILD_DIR2));
+      assertTrue(canCreate(newfs, CHILD_FILE2));
+      assertTrue(canOpen(newfs, CHILD_FILE1));
     } finally {
       if(cluster != null) cluster.shutdown();
     }

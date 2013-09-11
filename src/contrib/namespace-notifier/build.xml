@@ -1,0 +1,172 @@
+<?xml version="1.0"?>
+
+<!--
+   Licensed to the Apache Software Foundation (ASF) under one or more
+   contributor license agreements.  See the NOTICE file distributed with
+   this work for additional information regarding copyright ownership.
+   The ASF licenses this file to You under the Apache License, Version 2.0
+   (the "License"); you may not use this file except in compliance with
+   the License.  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+-->
+
+<!--
+Before you can run these subtargets directly, you need
+to call at top-level: ant deploy-contrib compile-core-test
+-->
+<project name="namespace-notifier" default="jar" xmlns:ivy="antlib:org.apache.ivy.ant">
+
+  <import file="../build-contrib.xml"/>
+
+  <target name="buildha">
+    <subant target="jar-test">
+      <fileset dir="../" includes="highavailability/build.xml" excludes=""/>
+    </subant>
+  </target>
+
+  <target name="copy.libs">
+    <mkdir dir="${build.dir}/lib"/>
+    <copy todir="${build.dir}/lib">
+      <!-- Copies the libthrift jar -->
+      <fileset dir="${src.dir}/../../lib"/>
+    </copy>
+  </target>
+
+  <target name="compile" depends="init, ivy-retrieve-common, copy.libs, buildha" unless="skip.contrib">
+    <echo message="contrib: ${name}" />
+    <javac
+     includeantruntime="true"
+     encoding="${build.encoding}"
+     srcdir="${src.dir}:${root}/gen-java"
+     includes="**/*.java"
+     destdir="${build.classes}"
+     debug="${javac.debug}"
+     deprecation="${javac.deprecation}">
+      <classpath refid="contrib-classpath"/>
+      <classpath path="${hadoop.root}/build/contrib/highavailability/hadoop-${version}-highavailability.jar"/>
+      <classpath path="${hadoop.root}/build/contrib/highavailability/highavailability-test.jar"/>
+    </javac>
+    <copy todir="${build.classes}">
+       <fileset dir="${root}/conf">
+         <include name="namespace-notifier-server-default.xml" />
+       </fileset>
+    </copy>
+  </target>
+
+  <!-- ================================================================== -->
+  <!-- Compile test code                                                  -->
+  <!-- ================================================================== -->
+  <target name="compile-test" depends="compile-examples" if="test.available">
+    <echo message="contrib: ${name}"/>
+    <javac
+     includeantruntime="true"
+     encoding="${build.encoding}"
+     srcdir="${src.test}"
+     includes="**/*.java"
+     destdir="${build.test}"
+     debug="${javac.debug}">
+      <classpath refid="test.classpath"/>
+      <classpath path="${hadoop.root}/build/contrib/highavailability/hadoop-${version}-highavailability.jar"/>
+      <classpath path="${hadoop.root}/build/contrib/highavailability/highavailability-test.jar"/>
+    </javac>
+  </target>
+  
+  <!-- ================================================================== -->
+  <!-- Run unit tests                                                     -->
+  <!-- ================================================================== -->
+  <target name="test" depends="compile-test, compile" if="test.available">
+    <echo message="contrib: ${name}"/>
+    <delete dir="${hadoop.log.dir}"/>
+    <mkdir dir="${hadoop.log.dir}"/>
+
+    <emma enabled="${emma.enabled}">
+      <instr instrpath="${build.classes}"
+             destdir="${emma.instr.dir}"
+             metadatafile="${emma.coverage.dir}/metadata.emma"
+             merge="true"/>
+    </emma>
+
+    <junit
+      printsummary="yes" showoutput="${test.output}"
+      haltonfailure="no" fork="yes" 
+      errorProperty="tests.failed" failureProperty="tests.failed"
+      timeout="${test.timeout}"
+      maxmemory="${test.junit.maxmemory}">
+
+      <sysproperty key="test.build.data" value="${build.test}/data"/>
+      <sysproperty key="build.test" value="${build.test}"/>
+      <sysproperty key="contrib.name" value="${name}"/>
+
+      <jvmarg value="-Demma.coverage.out.file=${emma.coverage.dir}/coverage.emma"/>
+
+      <!-- requires fork=yes for:
+        relative File paths to use the specified user.dir
+        classpath to use build/contrib/*.jar
+      -->
+      <sysproperty key="user.dir" value="${build.test}/data"/>
+
+      <sysproperty key="fs.default.name" value="${fs.default.name}"/>
+      <sysproperty key="hadoop.test.localoutputfile" value="${hadoop.test.localoutputfile}"/>
+      <sysproperty key="hadoop.log.dir" value="${hadoop.log.dir}"/>
+      <sysproperty key="taskcontroller-path" value="${taskcontroller-path}"/>
+      <sysproperty key="taskcontroller-user" value="${taskcontroller-user}"/>
+      <classpath>
+        <pathelement location="${emma.instr.dir}" />
+        <path refid="test.classpath" />
+        <path refid="emma.lib" />
+      </classpath>
+      <classpath path="${hadoop.root}/build/contrib/highavailability/hadoop-${version}-highavailability.jar"/>
+      <classpath path="${hadoop.root}/build/contrib/highavailability/highavailability-test.jar"/>
+      <formatter type="${test.junit.output.format}" />
+      <batchtest todir="${build.test}" unless="testcase">
+        <fileset dir="${src.test}"
+          includes="**/${test.include}.java" excludes="**/${test.exclude}.java" />
+      </batchtest>
+      <batchtest todir="${build.test}" if="testcase">
+        <fileset dir="${src.test}" includes="**/${testcase}.java"/>
+      </batchtest>
+    </junit>
+
+    <emma enabled="${emma.enabled}">
+      <report sourcepath="${src.dir}" >
+        <fileset dir="${emma.coverage.dir}">
+          <include name="*.emma" />
+        </fileset>
+        <txt outfile="${emma.coverage.dir}/coverage.txt"/>
+        <html outfile="${emma.coverage.dir}/coverage.html"/>
+      </report>
+    </emma>
+
+    <fail if="tests.failed">Tests failed!</fail>
+  </target>
+
+
+  <target name="package" depends="jar, jar-examples" unless="skip.contrib">
+   <mkdir dir="${dist.dir}/contrib/${name}"/>
+   <mkdir dir="${dist.dir}/contrib/${name}/conf"/>
+   <copy todir="${dist.dir}/contrib/${name}">
+    <fileset dir="${build.dir}">
+       <include name="hadoop-${version}-${name}.jar" />
+     </fileset>
+   </copy>
+   <copy todir="${dist.dir}/contrib/${name}/conf">
+     <fileset dir="${root}/conf">
+       <include name="namespace-notifier-server-site.xml" />
+     </fileset>
+   </copy>
+   <copy todir="${dist.dir}/contrib/${name}">
+     <fileset dir="${build.dir}">
+       <include name="**/lib/"/>
+     </fileset>
+   </copy>
+  </target>
+
+</project>
+

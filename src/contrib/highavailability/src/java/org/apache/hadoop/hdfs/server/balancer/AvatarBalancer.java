@@ -30,7 +30,6 @@ import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.FailoverClient;
 import org.apache.hadoop.hdfs.FailoverClientHandler;
 import org.apache.hadoop.hdfs.server.FailoverNameNodeProtocol;
-import org.apache.hadoop.hdfs.server.namenode.UnsupportedActionException;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.util.StringUtils;
@@ -47,16 +46,15 @@ public class AvatarBalancer extends Balancer implements FailoverClient {
   private FailoverClientHandler failoverHandler;
   private URI logicalName;
 
-  public AvatarBalancer() throws UnsupportedActionException {
+  public AvatarBalancer() {
     super();
   }
 
-  public AvatarBalancer(Configuration conf) throws UnsupportedActionException {
+  public AvatarBalancer(Configuration conf) {
     super(conf);
   }
 
-  public AvatarBalancer(Configuration conf, double threshold)
-    throws UnsupportedActionException {
+  public AvatarBalancer(Configuration conf, double threshold) {
     super(conf, threshold);
   }
 

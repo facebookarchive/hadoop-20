@@ -150,6 +150,7 @@ public class TestDataNodeVolumeFailureToleration {
       DFSTestUtil.createFile(fs, file1, 1024, (short)3, 1L);
       DFSTestUtil.waitReplication(fs, file1, (short)2);
     
+      DFSTestUtil.waitNSecond(2);
       assertFalse("2nd DN should be dead", cluster.getDataNodes().get(1).isDatanodeUp());
     
       // If we restore the volume we should still only be able to get
@@ -159,6 +160,7 @@ public class TestDataNodeVolumeFailureToleration {
       DFSTestUtil.createFile(fs, file2, 1024, (short)3, 1L);
       DFSTestUtil.waitReplication(fs, file2, (short)2);
 
+      DFSTestUtil.waitNSecond(2);
       assertFalse("2nd DN should be dead", cluster.getDataNodes().get(1).isDatanodeUp());
     }
     finally {

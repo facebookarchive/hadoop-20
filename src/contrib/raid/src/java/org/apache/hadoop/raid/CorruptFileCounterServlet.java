@@ -18,7 +18,11 @@
 package org.apache.hadoop.raid;
 
 import java.io.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.Map;
+import java.util.TreeMap;
 import java.net.URLEncoder;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletException;
@@ -26,75 +30,386 @@ import javax.servlet.http.HttpServlet;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptFile;
+import org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptFileStatus;
+import org.apache.hadoop.raid.RaidHistogram.BlockFixStatus;
+import org.apache.hadoop.util.InjectionHandler;
+
 /**
- * This class is used in RaidNode's jetty to report the corrupt file counters 
- * to the namenode in the json form
+ * This class is used in RaidNode's jetty to report the corrupt file counters to
+ * the namenode in the json form
  */
 public class CorruptFileCounterServlet extends HttpServlet {
+  public static final Log LOG = LogFactory.getLog(CorruptFileCounterServlet.class);
+  private static final long serialVersionUID = 1L;
   final String CORRUPT_DIR_KEY = "path";
-  
+  public static CorruptFileStatus[] columns = new CorruptFileStatus[] {
+      CorruptFileStatus.RAID_UNRECOVERABLE,
+      CorruptFileStatus.NOT_RAIDED_UNRECOVERABLE,
+      CorruptFileStatus.POTENTIALLY_CORRUPT,
+      CorruptFileStatus.RECOVERABLE
+  };
+
   public static String getHTMLLinksText(String url, String text) {
-    return "<a class=\"warning\" href=\"" + url + "\">" 
-        + text + "</a>";
+    return "<a class=\"warning\" href=\"" + url + "\">" + text + "</a>";
   }
   
-  public static String generateTable(Map<String, Long> countersMap, String infoAddr) 
-      throws UnsupportedEncodingException {
-    StringBuilder htmlSb = new StringBuilder();
-    htmlSb.append(JspUtils.tr(
-        JspUtils.td("Root Directory") +
-        JspUtils.td("Files")));
-    for (String path : countersMap.keySet()) {
-      Long count = countersMap.get(path);
-      if (count <= 0) continue;
-      StringBuffer url = new StringBuffer(
-          "http://"+infoAddr+"/raidfsck.jsp");
-      url.append("?path=");
+  public static String getRecoveryLag(long window,
+      TreeMap<Long, BlockFixStatus> countersMap ) {
+    BlockFixStatus bfs = countersMap.get(window);
+    StringBuilder sb1 = new StringBuilder();
+    for (int i = 0; i < bfs.percents.size(); i++) {
+      if (i > 0) {
+        sb1.append("/");
+      }
+      if (bfs.percentValues != null && bfs.percentValues[i] >= 0) {
+        sb1.append(JspUtils.color(i,  
+            String.valueOf(bfs.percentValues[i])));
+      } else {
+        sb1.append("-");
+      }
+    }
+    return format(window) + " " + sb1.toString();
+  }
+  
+  public static String getFailedFiles(long window,
+      TreeMap<Long, BlockFixStatus> countersMap, String path, 
+      String infoAddr) throws UnsupportedEncodingException {
+    BlockFixStatus bfs = countersMap.get(window);
+    String counterDisplay = "";
+    if (bfs.failedPaths <= 0) { 
+      counterDisplay = "0";
+    } else {
+      StringBuffer url = new StringBuffer("http://" + infoAddr
+          + "/corruptfilecounter");
+      url.append("?root=");
       url.append(URLEncoder.encode(path, "UTF-8"));
-      htmlSb.append(JspUtils.tr(
-          JspUtils.td(path) +
-          JspUtils.td(getHTMLLinksText(url.toString(),
-              countersMap.get(path).toString()))));
-    } 
-    return JspUtils.table(htmlSb.toString());
+      url.append("&failedPaths=1");
+      counterDisplay = 
+          getHTMLLinksText(url.toString(), String.valueOf(bfs.failedPaths));
+    }
+    return counterDisplay;
+  }
+  
+  public static String getPercentHeader(RaidNode raidNode) {
+    String[] percentStrs = raidNode.getBlockIntegrityMonitor().getPercentStrs();
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < percentStrs.length; i++) {
+      if (i > 0) {
+        sb.append("/");
+      }
+      if (percentStrs[i].equals("0")) {
+        sb.append(JspUtils.color(i, "min"));
+      } else if (percentStrs[i].equals("100")) {
+        sb.append(JspUtils.color(i, "max"));
+      } else { 
+        sb.append(JspUtils.color(i, percentStrs[i]));
+      }
+    }
+    return sb.toString();
+  }
+
+  public static String generateTable(
+      Map<String, Map<CorruptFileStatus, Long>> corruptFilesCounterMap,
+      String infoAddr, double numDetectionsPerSec, RaidNode raidNode)
+          throws UnsupportedEncodingException, IOException {
+    StringBuilder htmlSb = new StringBuilder();
+    int imageSize = 30;
+    htmlSb.append(JspUtils.tr(JspUtils.td("Root Directory")
+        + JspUtils.td(JspUtils.image(raidNode, "RURF.jpg",
+            imageSize, imageSize), "Raid Unrecoverable Files")
+        + JspUtils.td(JspUtils.image(raidNode, "NRURF.jpg",
+            imageSize, imageSize), "Not-Raid Unrecoverable Files")
+        + JspUtils.td(JspUtils.image(raidNode, "PURF.jpg",
+            imageSize, imageSize), "Potential Unrecoverable Files")
+        + JspUtils.td(JspUtils.image(raidNode, "RF.jpg",
+            imageSize, imageSize), "Recoverable Files")
+        + JspUtils.td(JspUtils.image(raidNode, "DL.jpg",
+            imageSize, imageSize), "Detection Lag(s)")
+        + JspUtils.td(JspUtils.image(raidNode, "RL.jpg",
+            imageSize, imageSize) + " " + getPercentHeader(raidNode),
+            "Recovery Lag(s)")
+        + JspUtils.td(JspUtils.image(raidNode, "RFF.jpg",
+            imageSize, imageSize), "Recovery Failed Files")));
+    for (String path : corruptFilesCounterMap.keySet()) {
+      Map<CorruptFileStatus, Long> counters = corruptFilesCounterMap.get(path);
+      StringBuilder oneRow = new StringBuilder();
+      TreeMap<Long, BlockFixStatus> countersMap = 
+          raidNode.getBlockIntegrityMonitor().getBlockFixStatus(path, System.currentTimeMillis());
+      int windowSize = countersMap.keySet().size();
+      oneRow.append(JspUtils.th(windowSize, path));
+      // Append corrupt file counters
+      for (CorruptFileStatus cfs: columns) {
+        Long count = counters.get(cfs);
+        String counterDisplay = "";
+        if (count == null || count <= 0) { 
+          counterDisplay = "0";
+        } else {
+          StringBuffer url = new StringBuffer("http://" + infoAddr
+              + "/corruptfilecounter");
+          url.append("?root=");
+          url.append(URLEncoder.encode(path, "UTF-8"));
+          url.append("&status=");
+          url.append(URLEncoder.encode(cfs.name(), "UTF-8"));
+          counterDisplay = 
+              getHTMLLinksText(url.toString(), String.valueOf(count));
+        }
+        oneRow.append(JspUtils.th(windowSize, counterDisplay)); 
+      }
+      // Append detection lag
+      Long potentialCorruptFiles = counters.get(CorruptFileStatus.POTENTIALLY_CORRUPT);
+      String detectionLag = "";
+      if (potentialCorruptFiles == null || potentialCorruptFiles <= 0) {
+        detectionLag = "0";
+      } else if (numDetectionsPerSec < 1e-6) {
+        detectionLag = "-";
+      } else {
+        long costTime = (long)Math.ceil((double)potentialCorruptFiles/
+            numDetectionsPerSec);
+        detectionLag = Long.toString(costTime);
+      }
+      oneRow.append(JspUtils.th(windowSize, detectionLag));
+      oneRow.append(JspUtils.tdWithClass(getRecoveryLag(countersMap.firstKey(),
+                                         countersMap), JspUtils.SMALL_CELL));
+      oneRow.append(JspUtils.tdWithClass(getFailedFiles(countersMap.firstKey(),
+                                         countersMap, path, infoAddr),
+                                         JspUtils.SMALL_CELL));
+      htmlSb.append(JspUtils.tr(oneRow.toString()));
+      // Append recovery lags 
+      boolean head = true;
+      for (Long window: countersMap.keySet()) {
+        if (head) {
+          head = false;
+          continue;
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(JspUtils.tdWithClass(getRecoveryLag(window, countersMap),
+                                       JspUtils.SMALL_CELL));
+        sb.append(JspUtils.tdWithClass(getFailedFiles(window, countersMap,
+            path, infoAddr), JspUtils.SMALL_CELL));
+        htmlSb.append(JspUtils.tr(sb.toString()));
+      }
+    }
+    return JspUtils.smallTable(htmlSb.toString());
+  }
+  
+  public static String format(long msec) { 
+    long mins = msec / 60 / 1000;
+    long hours = mins / 60;
+    mins %= 60;
+    long days = hours / 24;
+    hours %= 24;
+    long weeks = days / 7;
+    days %= 7;
+    StringBuilder result = new StringBuilder();
+    if (weeks > 0) result.append(weeks + "weeks ");
+    if (days > 0) result.append(days + "days ");
+    if (hours > 0) result.append(hours + "hours ");
+    if (mins > 0) result.append(mins + "mins ");
+    return result.toString().trim();
   }
 
   public static void generateWarningText(PrintWriter out,
-                                         Map<String, Long> countersMap,
-                                         RaidNode raidNode) {
+      Map<String, Map<CorruptFileStatus, Long>> corruptFilesCounterMap,
+      RaidNode raidNode) {
     StringBuilder sb = new StringBuilder();
     if (raidNode.getInfoServer() == null)
       return;
-    String infoAddr = raidNode.getHostName() + ":" + raidNode.getInfoServer().getPort();
-    Long total = 0L;
-    for (Long value : countersMap.values()) {
-      total += value;
-    }
-    if (total <= 0) return;
+    String infoAddr = raidNode.getHostName() + ":"
+        + raidNode.getInfoServer().getPort();
     try {
-      sb.append("<a class=\"warning\">WARNING: RAID Unrecoverable corrupt files:</a>");
-      sb.append(generateTable(countersMap, infoAddr));
+      sb.append(getHTMLLinksText("http://" + infoAddr + "/missingblocks.jsp",
+          "WARNING Corrupt files:"));
+      sb.append(generateTable(corruptFilesCounterMap, infoAddr,
+          raidNode.getNumDetectionsPerSec(), raidNode));
       out.print(sb.toString());
     } catch (Exception e) {
-      RaidNode.LOG.error(e);
+      LOG.error("Get exception in generateWarningText", e);
     }
   }
   
-  @SuppressWarnings("unchecked")
-  public void doGet(HttpServletRequest request,
-                    HttpServletResponse response
-                    ) throws ServletException, IOException {
+  public static void generateFailedPaths(PrintWriter out, String monitorDir,
+      RaidNode raidNode) {
+    RaidHistogram histogram =
+        raidNode.getBlockIntegrityMonitor().getRecoveryTimes().get(monitorDir);
+    if (histogram == null) {
+      return;
+    }
+    int count = 0;
+    StringBuilder htmlSb = new StringBuilder();
+    htmlSb.append(JspUtils.tr(JspUtils.td("Path")));
+    StringBuilder pathSb = new StringBuilder();
+    for (String path: histogram.getFailedRecoveredFiles()) {
+      pathSb.append(path);
+      pathSb.append("<br>\n");
+      count++;
+    }
+    htmlSb.append(JspUtils.tr(JspUtils.td(pathSb.toString())));
+    out.println(JspUtils.table(htmlSb.toString()));
+    out.println(count + " files in total<br>");
+  }
+  
+  public static String getTimeSinceBlockMissing(long detecTime) {
+    long currentTime = System.currentTimeMillis();
+    long hoursSinceCorrupt = (currentTime - detecTime)/3600000;
+    long remainderMinutes = ((currentTime - detecTime)/60000) % 60;
+    return (detecTime > 0L) ?
+        hoursSinceCorrupt + " hrs " + remainderMinutes + " mins":
+        "now";
+  }
+  
+  public static class CorruptFileComapare implements Comparator<CorruptFile> {
+    public static final int
+      FIELD_TIME_SINCE_BLOCK_MISSING = 1,
+      FIELD_PATH                     = 2,
+      FIELD_NUM_CORRUPT_BLOCKS       = 3, 
+      SORT_ORDER_ASC          = 1,
+      SORT_ORDER_DSC          = 2;
+    int sortField = FIELD_TIME_SINCE_BLOCK_MISSING;
+    int sortOrder = SORT_ORDER_DSC;
+
+    public CorruptFileComapare(String field, String order) {
+      if (field.equals("timesinceblockmissing")) {
+        sortField = FIELD_TIME_SINCE_BLOCK_MISSING;
+      } else if (field.equals("path")) {
+        sortField = FIELD_PATH;
+      } else if (field.equals("numcorruptblocks")) {
+        sortField = FIELD_NUM_CORRUPT_BLOCKS;
+      }
+      if (order.equals("DSC")) {
+        sortOrder = SORT_ORDER_DSC;
+      } else {
+        sortOrder = SORT_ORDER_ASC;
+      }
+    }
+
+    public int compare(CorruptFile c1, CorruptFile c2) {
+      int ret = 0;
+      if (c2 == null) {
+        ret = -1;
+      } else {
+        switch (sortField) {
+          case FIELD_TIME_SINCE_BLOCK_MISSING:
+            ret = (int) (c2.detectTime - c1.detectTime);
+            if (ret == 0) {
+              ret = c1.path.compareTo(c2.path);
+            }
+            break;
+          case FIELD_PATH:
+            ret = c1.path.compareTo(c2.path);
+            break;
+          case FIELD_NUM_CORRUPT_BLOCKS:
+            ret = c1.numCorrupt - c2.numCorrupt;
+            if (ret == 0) {
+              ret = c1.path.compareTo(c2.path);
+            }
+            break;
+        }
+      }
+      return (sortOrder == SORT_ORDER_DSC) ? -ret : ret;
+    }
+  }
+  
+  public static String NodeHeaderStr(String name, String monitorDir,
+      String status, String sortField, String sortOrder) {
+    String ret = "class=header";
+    String order = "ASC";
+    if (name.equals(sortField) ) {
+      ret += sortOrder;
+      if ( sortOrder.equals("ASC") )
+        order = "DSC";
+    }
+    ret += " onClick=\"window.document.location=" +
+           "'corruptfilecounter?root="+monitorDir+"&status="+status+
+           "&sorter/field=" + name + "&sorter/order=" +
+    order + "'\" title=\"sort on this column\"";
+    return ret;
+  }
+  
+  public static void generateFileStatus(PrintWriter out, String monitorDir, 
+      String status, RaidNode raidNode, String field, String order) {
+    CorruptFileStatus matched = null;
+    for (CorruptFileStatus cfs: CorruptFileStatus.values()) {
+      if (cfs.name().equals(status)) {
+        matched = cfs;
+        break;
+      }
+    }
+    if (matched == null) {
+      return;
+    }
+    ArrayList<CorruptFile> corruptFiles =
+        raidNode.getCorruptFileList(monitorDir, matched);
+    if (field == null) {
+      field = "timesinceblockmissing";
+    }
+    if (order == null) {
+      order = "DSC";
+    }
+    Collections.sort(corruptFiles, new CorruptFileComapare(field, order));
+    out.println("<style> th:hover{text-decoration:underline;cursor:hand;cursor:pointer;}</style>");
+    out.println( "<div id=\"dfsnodetable\"> ");
+    out.println("<br> <a name=\"CorruptFiles\" id=\"title\"> " +
+        corruptFiles.size() + " files in total" + "</a><br><br>");
+    StringBuilder htmlSb = new StringBuilder();
+    htmlSb.append( "<tr class=\"headerRow\"> <th " +
+        NodeHeaderStr("timesinceblockmissing", monitorDir, status, field, order) +
+        "> Time Since<br>Block Missing <th " + 
+        NodeHeaderStr("numcorruptblocks", monitorDir, status, field, order) + 
+        "> Number Of <br> Corrupt Blocks <th " + 
+        NodeHeaderStr("path", monitorDir, status, field, order) +
+        "> Path \n");
+    for (CorruptFile cf: corruptFiles) {
+      htmlSb.append(
+          JspUtils.tr(
+              JspUtils.tdWithClass(getTimeSinceBlockMissing(cf.detectTime),
+                  "timesinceblockmissing") +  
+              JspUtils.tdWithClass(Integer.toString(cf.numCorrupt), "numcorruptblocks") + 
+              JspUtils.tdWithClass(cf.path, "path")));
+    }
+    out.println(JspUtils.table(htmlSb.toString()));
+    out.println("</div>");
+  }
+
+  public void doGet(HttpServletRequest request, HttpServletResponse response)
+      throws ServletException, IOException {
     ServletContext context = getServletContext();
     RaidNode raidNode = (RaidNode) context.getAttribute("raidnode");
     PrintWriter out = response.getWriter();
-    Map<String, Long> countersMap = raidNode.getCorruptFileCounterMap();
+    Map<String, Map<CorruptFileStatus, Long>> corruptFilesCounterMap = raidNode
+        .getCorruptFilesCounterMap();
     String path = request.getParameter(CORRUPT_DIR_KEY);
+    String sorterField = request.getParameter("sorter/field");
+    String sorterOrder = request.getParameter("sorter/order");
     if (path == null || path.length() == 0) {
-      generateWarningText(out, countersMap, raidNode);
+      String monitorDir = request.getParameter("root");
+      if (monitorDir == null || monitorDir.length() == 0) {
+        generateWarningText(out, corruptFilesCounterMap, raidNode);
+      } else {
+        String status = request.getParameter("status");
+        if (status == null || status.length() == 0) {
+          String failedPaths = request.getParameter("failedPaths");
+          if (failedPaths == null || !failedPaths.equals("1")) {
+            generateWarningText(out, corruptFilesCounterMap, raidNode);
+          } else {
+            generateFailedPaths(out, monitorDir, raidNode);
+          }
+        } else {
+          generateFileStatus(out, monitorDir, status, raidNode,
+              sorterField, sorterOrder);
+        }
+      }
     } else {
-      if (countersMap.containsKey(path)) {
-        out.println(countersMap.get(path));
+      if (corruptFilesCounterMap.containsKey(path)) {
+        out.println(corruptFilesCounterMap.get(path).get(
+                        CorruptFileStatus.RAID_UNRECOVERABLE) + 
+                    corruptFilesCounterMap.get(path).get(
+                        CorruptFileStatus.NOT_RAIDED_UNRECOVERABLE));
       }
     }
+    InjectionHandler.processEventIO(InjectionEvent.RAID_HTTPSERVER_TIMEOUT);
   }
 }

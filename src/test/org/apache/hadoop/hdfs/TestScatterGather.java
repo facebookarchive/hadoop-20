@@ -215,11 +215,9 @@ public class TestScatterGather extends TestCase {
     assertTrue(!fileSys.exists(name));
   }
   
-  /**
-   * Tests positional read in DFS.
-   */
-  public void testPreadDFS() throws IOException {
+  private void testPreadDFSInternal(boolean inlineChecksum) throws IOException {
     Configuration conf = new Configuration();
+    conf.setBoolean("dfs.use.inline.checksum", inlineChecksum);
     conf.setLong("dfs.block.size", 4096);
     conf.setLong("dfs.read.prefetch.size", 4096);
     if (simulatedStorage) {
@@ -240,6 +238,15 @@ public class TestScatterGather extends TestCase {
       fileSys.close();
       cluster.shutdown();
     }
+    
+  }
+  
+  /**
+   * Tests positional read in DFS.
+   */
+  public void testPreadDFS() throws IOException {
+    testPreadDFSInternal(true);
+    testPreadDFSInternal(false);
   }
 
   /**
@@ -247,7 +254,8 @@ public class TestScatterGather extends TestCase {
    */
   public void testPreadShortCircuitRead() throws IOException {
     shortCircuitRead = true;
-    testPreadDFS();
+    testPreadDFSInternal(false);
+    testPreadDFSInternal(true);
     shortCircuitRead = false;
   }
  

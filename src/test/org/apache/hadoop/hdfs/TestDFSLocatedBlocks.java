@@ -147,7 +147,7 @@ public class TestDFSLocatedBlocks {
       List<LocatedBlock> blocks) {
     return new DFSLocatedBlocks(new LocatedBlocks(
         blocks.size() > 0 ? getLastBlockEnd(blocks) : Integer.MAX_VALUE,
-            blocks, false));
+            blocks, false), 60000);
   }
 
   private static List<LocatedBlock> randomBlockSubrange(Random rand,

@@ -132,15 +132,17 @@
 <!-- <dependency org="javax.servlet"
       name="servlet-api"
       rev="${servlet-api.version}"
-      conf="jetty->master"/>   -->
+      conf="jetty->master"/> -->
+
+<!-- These two will be resolved from lib/
     <dependency org="org.mortbay.jetty"
       name="jetty"
       rev="${jetty.version}"
-      conf="jetty->master"/>
+      conf="jetty->master"/> 
     <dependency org="org.mortbay.jetty"
       name="jetty-util"
       rev="${jetty-util.version}"
-      conf="jetty->master"/>
+      conf="jetty->master"/> -->
 
     <dependency org="tomcat"
       name="jasper-runtime"
@@ -274,7 +276,11 @@
       conf="common->master"/>
     <dependency org="org.codehaus.jackson"
       name="jackson-mapper-asl"
-      rev="1.0.1"
+      rev="1.7.9"
+      conf="common->default"/>
+    <dependency org="org.apache.zookeeper"
+      name="zookeeper"
+      rev="3.4.3"
       conf="common->default"/>
     </dependencies>
   

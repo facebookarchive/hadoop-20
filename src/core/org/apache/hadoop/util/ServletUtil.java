@@ -52,10 +52,10 @@ public class ServletUtil {
   }
 
   public static final String HTML_TAIL = "<hr />\n"
-    + "This release is based on the <a href='https://github.com/facebook/hadoop-20-warehouse'>Facebook Distribution of Hadoop</a>, " 
+    + "This release is based on the <a href='https://github.com/facebook/hadoop-20'>Facebook Distribution of Hadoop</a>, "
     + "powering the largest Hadoop clusters in the Universe!\n"
     + "</body></html>";
-  
+
   /**
    * HTML footer to be added in the jsps.
    * @return the HTML footer.
@@ -63,11 +63,11 @@ public class ServletUtil {
   public static String htmlFooter() {
     return HTML_TAIL;
   }
-  
+
   /**
    * Generate the percentage graph and returns HTML representation string
    * of the same.
-   * 
+   *
    * @param perc The percentage value for which graph is to be generated
    * @param width The width of the display table
    * @return HTML String representation of the percentage graph
@@ -90,7 +90,7 @@ public class ServletUtil {
     builder.append("</tr></table>");
     return builder.toString();
   }
-  
+
   /**
    * Generate the percentage graph and returns HTML representation string
    * of the same.
@@ -101,5 +101,19 @@ public class ServletUtil {
    */
   public static String percentageGraph(float perc, int width) throws IOException {
     return percentageGraph((int)perc, width);
+  }
+  
+  /**
+   * @return a long value as passed in the given parameter, throwing
+   * an exception if it is not present or if it is not a valid number.
+   */
+  public static long parseLongParam(ServletRequest request, String param)
+      throws IOException {
+    String paramStr = request.getParameter(param);
+    if (paramStr == null) {
+      throw new IOException("Invalid request has no " + param + " parameter");
+    }
+    
+    return Long.valueOf(paramStr);
   }
 }

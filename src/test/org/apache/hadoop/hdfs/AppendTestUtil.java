@@ -191,6 +191,7 @@ public class AppendTestUtil {
       } catch (IOException e) {
         if (!e.getMessage().contains("being recovered") &&
             !e.getMessage().contains("being created")) {
+          LOG.info("Failed open for append, throw", e);
           throw e;
         }
         LOG.info("Failed open for append, waiting on lease recovery");

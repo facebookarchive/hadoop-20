@@ -47,4 +47,27 @@
   <description>The name of the s3n file system for testing.</description>
 </property>
 
+<property>  
+  <name>fs.trash.interval</name> 
+  <value>0</value>  
+  <description>Number of minutes between trash checkpoints.  
+    If zero, the trash feature is disabled. 
+  </description> 
+</property>
+
+<property>
+  <name>fs.hdfs.client.configuration.impl</name>
+  <value>org.apache.hadoop.conf.DefaultClientConfiguration</value>
+</property>
+
+<property>
+  <name>dfs.client.block.location.renewal.enabled</name>
+  <value>true</value>
+</property>
+
+<property>
+  <name>dfsclient.block.location.renewal.interval</name>
+  <value>1000</value>
+</property>
+
 </configuration>

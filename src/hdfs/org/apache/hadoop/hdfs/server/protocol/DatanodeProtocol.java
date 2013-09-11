@@ -33,7 +33,7 @@ import org.apache.hadoop.ipc.VersionedProtocol;
  * returning values from these functions.
  *
  **********************************************************************/
-public interface DatanodeProtocol extends VersionedProtocol {
+public interface DatanodeProtocol extends VersionedProtocol, BlockSynchronizationProtocol {
   /**
    * 20: nextGenerationStamp has a new parameter indicating if it is for
    * NameNode initiated lease recovery or not

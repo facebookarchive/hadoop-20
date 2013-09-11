@@ -6,7 +6,8 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniAvatarCluster;
 import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode.ServicePair;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.After;
 import org.junit.AfterClass;
@@ -82,7 +83,7 @@ public class TestAvatarDataNodeRestartService {
   private static class TestRestartServiceHandler extends InjectionHandler {
     private boolean enableOne = true;
     @Override
-    public void _processEvent(InjectionEvent event, Object... args) {
+    public void _processEvent(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.AVATARDATANODE_START_OFFERSERVICE1
           && enableOne) {
         rThread = new RestartThread(true);

@@ -5,6 +5,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.lang.reflect.Field;
+import java.net.InetAddress;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
@@ -21,15 +23,20 @@ import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
+import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeDirType;
-import org.apache.hadoop.hdfs.server.namenode.FSImage.NameNodeFile;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.MD5Hash;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -136,8 +143,10 @@ public class TestStartup extends TestCase {
    */
   private void corruptNameNodeFiles() throws IOException {
     // now corrupt/delete the directrory
-    List<File> nameDirs = (List<File>)FSNamesystem.getNamespaceDirs(config);
-    List<File> nameEditsDirs = (List<File>)FSNamesystem.getNamespaceEditsDirs(config);
+    List<File> nameDirs = (List<File>)DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getNamespaceDirs(config));
+    List<File> nameEditsDirs = (List<File>)DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getNamespaceEditsDirs(config));
 
     // get name dir and its length, then delete and recreate the directory
     File dir = nameDirs.get(0); // has only one
@@ -200,11 +209,11 @@ public class TestStartup extends TestCase {
       sd = it.next();
 
       if(sd.getStorageDirType().isOfType(NameNodeDirType.IMAGE)) {
-        File imf = FSImage.getImageFile(sd, NameNodeFile.IMAGE);
+        File imf = NNStorage.getStorageFile(sd, NameNodeFile.IMAGE);
         LOG.info("--image file " + imf.getAbsolutePath() + "; len = " + imf.length() + "; expected = " + expectedImgSize);
         assertEquals(expectedImgSize, imf.length());	
       } else if(sd.getStorageDirType().isOfType(NameNodeDirType.EDITS)) {
-        File edf = FSImage.getImageFile(sd, NameNodeFile.EDITS);
+        File edf = NNStorage.getStorageFile(sd, NameNodeFile.EDITS);
         LOG.info("-- edits file " + edf.getAbsolutePath() + "; len = " + edf.length()  + "; expected = " + expectedEditsSize);
         assertEquals(expectedEditsSize, edf.length());	
       } else {
@@ -292,10 +301,10 @@ public class TestStartup extends TestCase {
 
       // now verify that image and edits are created in the different directories
       FSImage image = nn.getFSImage();
-      StorageDirectory sd = image.getStorageDir(0); //only one
+      StorageDirectory sd = image.storage.getStorageDir(0); //only one
       assertEquals(sd.getStorageDirType(), NameNodeDirType.IMAGE_AND_EDITS);
-      File imf = FSImage.getImageFile(sd, NameNodeFile.IMAGE);
-      File edf = FSImage.getImageFile(sd, NameNodeFile.EDITS);
+      File imf = NNStorage.getStorageFile(sd, NameNodeFile.IMAGE);
+      File edf = NNStorage.getStorageFile(sd, NameNodeFile.EDITS);
       LOG.info("--image file " + imf.getAbsolutePath() + "; len = " + imf.length());
       LOG.info("--edits file " + edf.getAbsolutePath() + "; len = " + edf.length());
 
@@ -306,6 +315,41 @@ public class TestStartup extends TestCase {
       fail(StringUtils.stringifyException(e));
       System.err.println("checkpoint failed");
       throw e;
+    } finally {
+      if(sn!=null)
+        sn.shutdown();
+      if(cluster!=null)
+        cluster.shutdown();
+    }
+  }
+  
+  public void testSNNStartupFailure() throws IOException{
+    LOG.info("--starting SecondNN startup test with wrong registration");
+    
+    // different name dirs
+    config.set("dfs.name.dir", new File(hdfsDir, "name").getPath());
+    config.set("dfs.name.edits.dir", new File(hdfsDir, "name").getPath());
+    // same checkpoint dirs
+    config.set("fs.checkpoint.edits.dir", new File(hdfsDir, "chkpt_edits").getPath());
+    config.set("fs.checkpoint.dir", new File(hdfsDir, "chkpt").getPath());
+    config.set("dfs.secondary.http.address", "localhost:0");
+
+    MiniDFSCluster cluster = null;
+    SecondaryNameNode sn = null;
+    TestStartupHandler h = new TestStartupHandler();
+    InjectionHandler.set(h);
+    
+    try {
+      cluster = new MiniDFSCluster(0, config, 1, true, false, false,  null, null, null, null);
+      cluster.waitActive();
+      // start secondary node
+      LOG.info("--starting SecondNN");
+      try {
+        sn = new SecondaryNameNode(config);
+        fail("Should fail to instantiate SNN");
+      } catch (IOException e) {
+        LOG.info("Got exception:", e);
+      }      
     } finally {
       if(sn!=null)
         sn.shutdown();
@@ -375,69 +419,72 @@ public class TestStartup extends TestCase {
   }
   
   private void testImageChecksum(boolean compress) throws Exception {
+    MiniDFSCluster cluster = null;
     Configuration conf = new Configuration();
-    FileSystem.setDefaultUri(conf, "hdfs://localhost:0");
-    conf.set("dfs.http.address", "127.0.0.1:0");  
-    File base_dir = new File(
-        System.getProperty("test.build.data", "build/test/data"), "dfs/");
-    conf.set("dfs.name.dir", new File(base_dir, "name").getPath());
-    conf.setBoolean("dfs.permissions", false);
     if (compress) {
-      conf.setBoolean(HdfsConstants.DFS_IMAGE_COMPRESS_KEY, true);
+      conf.setBoolean("dfs.image.compression.codec", true);
     }
 
-    NameNode.format(conf); 
-
-    // create an image
-    LOG.info("Create an fsimage");
-    NameNode namenode = new NameNode(conf);
-    namenode.getNamesystem().mkdirs("/test", 
-        new PermissionStatus("hairong", null, FsPermission.getDefault()));
-    assertTrue(namenode.getFileInfo("/test").isDir());
-    namenode.setSafeMode(SafeModeAction.SAFEMODE_ENTER);
-    namenode.saveNamespace();
-    
-    FSImage image = namenode.getFSImage();
-    image.loadFSImage();
-
-    File versionFile = image.getStorageDir(0).getVersionFile();
-    
-    RandomAccessFile file = new RandomAccessFile(versionFile, "rws");
-    FileInputStream in = null;
-    FileOutputStream out = null;
     try {
-      // read the property from version file
-      in = new FileInputStream(file.getFD());
-      file.seek(0);
-      Properties props = new Properties();
-      props.load(in);
-      
-      // get the MD5 property and change it
-      String sMd5 = props.getProperty(FSImage.MESSAGE_DIGEST_PROPERTY);
-      MD5Hash md5 = new MD5Hash(sMd5);
-      byte[] bytes = md5.getDigest();
-      bytes[0] += 1;
-      md5 = new MD5Hash(bytes);
-      props.setProperty(FSImage.MESSAGE_DIGEST_PROPERTY, md5.toString());
-      
-      // write the properties back to version file
-      file.seek(0);
-      out = new FileOutputStream(file.getFD());
-      props.store(out, null);
-      out.flush();
-      file.setLength(out.getChannel().position());
-    
-      // now load the image again
-      image.loadFSImage();
-      
-      fail("Expect to get a checksumerror");
-    } catch(IOException e) {
-      assertTrue(e.getMessage().endsWith("is corrupt!"));
+        LOG.info("\n===========================================\n" +
+                 "Starting empty cluster");
+        
+        cluster = new MiniDFSCluster(conf, 0, true, null);
+        cluster.waitActive();
+        
+        FileSystem fs = cluster.getFileSystem();
+        fs.mkdirs(new Path("/test"));
+        
+        // Directory layout looks like:
+        // test/data/dfs/nameN/current/{fsimage,edits,...}
+        File nameDir = new File(cluster.getNameDirs(0).iterator().next().getPath());
+        File dfsDir = nameDir.getParentFile();
+        assertEquals(dfsDir.getName(), "dfs"); // make sure we got right dir
+        
+        LOG.info("Shutting down cluster #1");
+        cluster.shutdown();
+        cluster = null;
+
+        // Corrupt the md5 file to all 0s
+        File imageFile = new File(nameDir, "current/" + NNStorage.getImageFileName(-1));
+        MD5FileUtils.saveMD5File(imageFile, new MD5Hash(new byte[16]));
+        
+        // Try to start a new cluster
+        LOG.info("\n===========================================\n" +
+        "Starting same cluster after simulated crash");
+        try {
+          cluster = new MiniDFSCluster(conf, 0, false, null);
+          fail("Should not have successfully started with corrupt image");
+        } catch (IOException ioe) {
+          if (!ioe.getCause().getMessage().contains("is corrupt with MD5")) {
+            throw ioe;
+          }
+        }
     } finally {
-      IOUtils.closeStream(in);
-      IOUtils.closeStream(out);
-      namenode.stop();
-      namenode.join();
+      if (cluster != null) {
+        cluster.shutdown();
+      }
     }
-  } 
+  }
+  
+  class TestStartupHandler extends InjectionHandler {
+    @Override
+    protected void _processEvent(InjectionEventI event, Object... args) {
+      if (event == InjectionEvent.NAMENODE_VERIFY_CHECKPOINTER) {
+        if(args[0] == null)
+          return;
+        InetAddress addr = (InetAddress) args[0];
+        LOG.info("Processing event : " + event + " with address: " + addr);
+        try {
+          Field f = addr.getClass().getSuperclass().getDeclaredField("address");
+          f.setAccessible(true);
+          f.set(addr, 0);
+          LOG.info("Changed address to : " + addr);
+        } catch (Exception e) {
+          LOG.info("exception : ", e);
+          return;
+        }
+      }
+    }
+  }
 }

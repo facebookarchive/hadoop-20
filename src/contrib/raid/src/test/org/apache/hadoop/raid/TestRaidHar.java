@@ -20,6 +20,7 @@ package org.apache.hadoop.raid;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.FileNotFoundException;
+import java.io.IOException;
 import java.util.Random;
 
 import junit.framework.TestCase;
@@ -33,7 +34,11 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.TestDatanodeBlockScanner;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.mapred.MiniMRCluster;
 
 /**
@@ -47,6 +52,7 @@ public class TestRaidHar extends TestCase {
   final static long RELOAD_INTERVAL = 1000;
   final static Log LOG = LogFactory.getLog("org.apache.hadoop.raid.TestRaidNode");
   final Random rand = new Random();
+  final static int NUM_DATANODES = 3;
 
   {
     ((Log4JLogger)RaidNode.LOG).getLogger().setLevel(Level.ALL);
@@ -74,6 +80,7 @@ public class TestRaidHar extends TestCase {
 
     // scan all policies once every 5 second
     conf.setLong("raid.policy.rescan.interval", 5000);
+    conf.set("mapred.raid.http.address", "localhost:0");
 
     // the RaidNode does the raiding inline (instead of submitting to map/reduce)
     if (local) {
@@ -85,13 +92,12 @@ public class TestRaidHar extends TestCase {
     conf.set("raid.blockfix.classname",
              "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
 
-    conf.set("raid.server.address", "localhost:0");
-    conf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
 
     // create a dfs and map-reduce cluster
     final int taskTrackers = 4;
 
-    dfs = new MiniDFSCluster(conf, 3, true, null);
+    dfs = new MiniDFSCluster(conf, NUM_DATANODES, true, null);
     dfs.waitActive();
     fileSys = dfs.getFileSystem();
     namenode = fileSys.getUri().toString();
@@ -101,6 +107,8 @@ public class TestRaidHar extends TestCase {
 
     FileSystem.setDefaultUri(conf, namenode);
     conf.set("mapred.job.tracker", jobTrackerName);
+
+    Utils.loadTestCodecs(conf);
   }
     
   /**
@@ -113,7 +121,7 @@ public class TestRaidHar extends TestCase {
     String str = "<configuration> " +
                      "<policy name = \"RaidTest1\"> " +
                         "<srcPath prefix=\"/user/test/raidtest\"/> " +
-                        "<erasureCode>xor</erasureCode> " +
+                        "<codecId>xor</codecId> " +
                         "<property> " +
                           "<name>targetReplication</name> " +
                           "<value>" + targetReplication + "</value> " +
@@ -202,7 +210,7 @@ public class TestRaidHar extends TestCase {
     Path file1 = new Path(dir + "/file" + iter);
     RaidNode cnode = null;
     try {
-      Path destPath = new Path("/destraid/user/test/raidtest/subdir");
+      Path destPath = new Path("/raid/user/test/raidtest/subdir");
       fileSys.delete(dir, true);
       fileSys.delete(destPath, true);
       TestRaidNode.createOldFile(fileSys, file1, 1, numBlock, blockSize);
@@ -210,13 +218,14 @@ public class TestRaidHar extends TestCase {
 
       // create an instance of the RaidNode
       Configuration localConf = new Configuration(conf);
-      localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
       localConf.setInt(RaidNode.RAID_PARITY_HAR_THRESHOLD_DAYS_KEY, 0);
       cnode = RaidNode.createRaidNode(null, localConf);
       FileStatus[] listPaths = null;
 
       // wait till file is raided
       int count2 = 0;
+      Path partFile = null;
+      FileStatus partStat = null;
       while (true) {
         try {
           listPaths = fileSys.listStatus(destPath);
@@ -232,8 +241,8 @@ public class TestRaidHar extends TestCase {
             }
           }
           if (count == 1  && listPaths.length == 1) {
-            Path partfile = new Path(harPath, "part-0");
-            FileStatus partStat = fileSys.getFileStatus(partfile);
+            partFile = new Path(harPath, "part-0");
+            partStat = fileSys.getFileStatus(partFile);
             assertEquals(partStat.getReplication(), targetReplication);
             assertEquals(blockSize, partStat.getBlockSize());
             break;
@@ -245,6 +254,24 @@ public class TestRaidHar extends TestCase {
                  (listPaths == null ? "none" : listPaths.length));
         Thread.sleep(1000);                  // keep waiting
 
+      }
+      
+      // delete the source file to test the failure of the reconstruction of
+      // the hared parity file.
+      fileSys.delete(file1);
+      DistributedFileSystem distFS = (DistributedFileSystem)fileSys;
+      LocatedBlock block = distFS.getClient().getLocatedBlocks(
+          partFile.toUri().getPath(), 0, partStat.getLen()).
+          getLocatedBlocks().get(0);
+      corruptBlock(block.getBlock(), dfs);
+      distFS.getClient().namenode.reportBadBlocks(new LocatedBlock[]{block});
+      BlockReconstructor.CorruptBlockReconstructor fixer = 
+          new BlockReconstructor.CorruptBlockReconstructor(localConf);
+      try {
+        fixer.reconstructFile(partFile, null);
+        fail("Expected the failure of the block fixer");
+      } catch (IOException ex) {
+        LOG.warn("Expected failure: " + ex.getMessage(), ex);
       }
 
       fileSys.delete(dir, true);
@@ -279,5 +306,13 @@ public class TestRaidHar extends TestCase {
     }
     LOG.info("doTestHar completed:" + " blockSize=" + blockSize +
              " stripeLength=" + stripeLength);
+  }
+  
+  static void corruptBlock(Block block, MiniDFSCluster dfs) throws IOException {
+    boolean corrupted = false;
+    for (int i = 0; i < NUM_DATANODES; i++) {
+      corrupted |= TestDatanodeBlockScanner.corruptReplica(block, i, dfs);
+    }
+    assertTrue("could not corrupt block", corrupted);
   }
 }

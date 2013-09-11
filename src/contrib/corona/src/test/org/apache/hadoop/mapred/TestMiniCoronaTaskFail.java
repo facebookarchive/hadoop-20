@@ -226,6 +226,17 @@ public class TestMiniCoronaTaskFail extends TestCase {
         validateJob(rJob, jt, false);
         fileSys.delete(outDir, true);
       }
+      {
+        LOG.info("launch job with all attempts failing");
+        JobConf jobConf = mr.createJobConf();
+        jobConf.setMaxMapAttempts(3);
+        JobClient jc = prepareJob(jobConf, inDir, outDir, input);
+        RunningJob rJob = jc.submitJob(jobConf);
+        jt = (CoronaJobTracker) jc.jobSubmitClient;
+        rJob.waitForCompletion();
+        assertTrue(rJob.isComplete() && !rJob.isSuccessful());
+        fileSys.delete(outDir, true);
+      }
     } catch (InterruptedException e) {
       e.printStackTrace();
     } finally {

@@ -19,8 +19,9 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.DFSClient.DFSInputStream;
-import org.apache.hadoop.hdfs.DFSClient.DFSOutputStream;
+import org.apache.hadoop.hdfs.DFSInputStream;
+import org.apache.hadoop.hdfs.DFSOutputStream;
+import org.apache.hadoop.hdfs.DFSClient.MultiDataOutputStream;
 import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
@@ -44,8 +45,11 @@ import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
 import org.apache.hadoop.hdfs.server.namenode.FSImageAdapter;
 import org.apache.hadoop.hdfs.server.namenode.NameNodeAdapter;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.VersionedProtocol;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import static org.apache.hadoop.hdfs.AppendTestUtil.loseLeases;
 import org.apache.hadoop.fs.BlockLocation;
@@ -159,8 +163,10 @@ public class TestNameNodeIdempotence extends TestCase {
 
   /**
    * Test addBlock() name-node RPC is idempotent
+   * @throws InterruptedException 
    */
-  public void testIdepotentCallsAddBlock() throws IOException {
+  public void testIdepotentCallsAddBlock() throws IOException,
+      InterruptedException {
     ClientProtocol nn = cluster.getNameNode();
     FileSystem fs = cluster.getFileSystem();
     DFSClient dfsclient = ((DistributedFileSystem) fs).dfs;
@@ -168,25 +174,55 @@ public class TestNameNodeIdempotence extends TestCase {
     String src = "/testNameNodeFingerprintSent1.txt";
     // Path f = new Path(src);
 
+    // stop a second getAdditionalBlock() from happening too fast
+    InjectionHandler.set(new InjectionHandler() {
+      int thrownCount = 0;
+
+      @Override
+      protected void _processEventIO(InjectionEventI event, Object... args)
+          throws IOException {
+        if (event == InjectionEvent.DFSCLIENT_DATASTREAM_AFTER_WAIT
+            && thrownCount++ == 1) {
+          try {
+            Thread.sleep(1000);
+          } catch (InterruptedException e) {
+            e.printStackTrace();
+          }
+        }
+      }
+    });
+
     DFSOutputStream dos = (DFSOutputStream) dfsclient.create(src, true,
         (short) 1, 512L);
 
     FSDataOutputStream a_out = new FSDataOutputStream(dos); // fs.create(f);
 
+    // Writing two blocks.
     for (int i = 0; i < 512; i++) {
       a_out.writeBytes("bc");
     }
     a_out.flush();
+    
+    // Wait the DataStreamer and ResponseProcessor to process the blocks.
+    // DataStreamer will have finished closing the first block and be sleeping
+    // before asking for the second block. At this time, there is one block for
+    // the file and it is full.
+    //
+    Thread.sleep(500);
 
     LocatedBlocks lb = nn.getBlockLocations(src, 256, 257);
+    // Ask a new block
     LocatedBlock lb1 = nn.addBlockAndFetchMetaInfo(src, dfsclient.clientName,
         null, null, 512L, lb.getLocatedBlocks().get(lb.locatedBlockCount() - 1)
             .getBlock());
+    // Ask a new block with the same offset and last block information.
     LocatedBlock lb2 = nn.addBlockAndFetchMetaInfo(src, dfsclient.clientName,
         null, null, 512L, lb.getLocatedBlocks().get(lb.locatedBlockCount() - 1)
             .getBlock());
+    // We are expected to get the same block.
     TestCase.assertTrue("blocks: " + lb1.getBlock() + " and " + lb2.getBlock(),
         lb1.getBlock().equals(lb2.getBlock()));
+    a_out.close();
   }
 
 }

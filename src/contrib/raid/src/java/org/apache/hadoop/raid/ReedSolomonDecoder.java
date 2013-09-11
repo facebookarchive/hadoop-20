@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.ArrayList;
 
+import org.apache.hadoop.mapreduce.Mapper.Context;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -33,11 +34,14 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.raid.StripeStore.StripeInfo;
 import org.apache.hadoop.util.Progressable;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Semaphore;
+import java.util.zip.CRC32;
 
 public class ReedSolomonDecoder extends Decoder {
   public static final Log LOG = LogFactory.getLog(
@@ -47,11 +51,15 @@ public class ReedSolomonDecoder extends Decoder {
   private long waitTime;
   ExecutorService parallelDecoder;
   Semaphore decodeOps;
+  private int stripeSize;
+  private int paritySize;
 
   public ReedSolomonDecoder(
-    Configuration conf, int stripeSize, int paritySize) {
-    super(conf, stripeSize, paritySize);
+    Configuration conf) {
+    super(conf, Codec.getCodec("rs"));
     this.reedSolomonCode = new ReedSolomonCode[parallelism];
+    stripeSize = this.codec.stripeLength;
+    paritySize = this.codec.parityLength;
     for (int i = 0; i < parallelism; i++) {
       reedSolomonCode[i] = new ReedSolomonCode(stripeSize, paritySize);
     }
@@ -59,16 +67,36 @@ public class ReedSolomonDecoder extends Decoder {
   }
 
   @Override
-  protected void fixErasedBlockImpl(
+  protected long fixErasedBlockImpl(
       FileSystem fs, Path srcFile,
-      FileSystem parityFs, Path parityFile,
-       long blockSize, long errorOffset, long limit,
-       OutputStream out, Progressable reporter) throws IOException {
+      FileSystem parityFs, Path parityFile, boolean fixSource,
+       long blockSize, long errorOffset, long limit,  boolean
+       partial, OutputStream out, Context context, CRC32 crc,
+       StripeInfo si, boolean recoverFromStripeStore, Block lostBlock)
+           throws IOException {
+    
+    Progressable reporter = context;
+    if (reporter == null) {
+      reporter = RaidUtils.NULL_PROGRESSABLE;
+    }
+    
+    if (partial) {
+      throw new IOException ("We don't support partial reconstruction");
+    }
+    
+    long start = System.currentTimeMillis();
     FSDataInputStream[] inputs = new FSDataInputStream[stripeSize + paritySize];
     int[] erasedLocations = buildInputs(fs, srcFile, parityFs, parityFile, 
-                                        errorOffset, inputs);
-    int blockIdxInStripe = ((int)(errorOffset/blockSize)) % stripeSize;
-    int erasedLocationToFix = paritySize + blockIdxInStripe;
+                                        fixSource, errorOffset, inputs);
+    int erasedLocationToFix;
+    if (fixSource) {
+      int blockIdxInStripe = ((int)(errorOffset/blockSize)) % stripeSize;
+      erasedLocationToFix = paritySize + blockIdxInStripe;
+    } else {
+      // generate the idx for parity fixing.
+      int blockIdxInStripe = ((int)(errorOffset/blockSize)) % paritySize;
+      erasedLocationToFix = blockIdxInStripe;
+    }
 
     // Allows network reads to go on while decode is going on.
     int boundedBufferCapacity = 2;
@@ -79,43 +107,65 @@ public class ReedSolomonDecoder extends Decoder {
     decodeTime = 0;
     waitTime = 0;
     try {
-      writeFixedBlock(inputs, erasedLocations, erasedLocationToFix,
-                      limit, out, reporter, parallelReader);
+      return writeFixedBlock(inputs, erasedLocations, erasedLocationToFix,
+                      limit, out, reporter, parallelReader, crc);
     } finally {
       // Inputs will be closed by parallelReader.shutdown().
       parallelReader.shutdown();
       LOG.info("Time spent in read " + parallelReader.readTime +
-        ", decode " + decodeTime + " wait " + waitTime);
+        ", decode " + decodeTime + ", wait " + waitTime + ", delay " +
+          (System.currentTimeMillis() - start));
       parallelDecoder.shutdownNow();
     }
   }
 
   protected int[] buildInputs(FileSystem fs, Path srcFile, 
                               FileSystem parityFs, Path parityFile,
+                              boolean fixSource,
                               long errorOffset, FSDataInputStream[] inputs)
       throws IOException {
     LOG.info("Building inputs to recover block starting at " + errorOffset);
     try {
       FileStatus srcStat = fs.getFileStatus(srcFile);
+      FileStatus parityStat = parityFs.getFileStatus(parityFile);
       long blockSize = srcStat.getBlockSize();
       long blockIdx = (int)(errorOffset / blockSize);
-      long stripeIdx = blockIdx / stripeSize;
+      long stripeIdx;
+      if (fixSource) {
+        stripeIdx = blockIdx / stripeSize;
+      } else {
+        stripeIdx = blockIdx / paritySize;
+      }
+
       LOG.info("FileSize = " + srcStat.getLen() + ", blockSize = " + blockSize +
                ", blockIdx = " + blockIdx + ", stripeIdx = " + stripeIdx);
       ArrayList<Integer> erasedLocations = new ArrayList<Integer>();
       // First open streams to the parity blocks.
       for (int i = 0; i < paritySize; i++) {
         long offset = blockSize * (stripeIdx * paritySize + i);
-        FSDataInputStream in = parityFs.open(
-          parityFile, conf.getInt("io.file.buffer.size", 64 * 1024));
-        in.seek(offset);
-        LOG.info("Adding " + parityFile + ":" + offset + " as input " + i);
-        inputs[i] = in;
+        if ((!fixSource) && offset == errorOffset) {
+          LOG.info(parityFile + ":" + offset + 
+              " is known to have error, adding zeros as input " + i);
+          inputs[i] = new FSDataInputStream(new RaidUtils.ZeroInputStream(
+                offset + blockSize));
+          erasedLocations.add(i);
+        } else if (offset > parityStat.getLen()) {
+          LOG.info(parityFile + ":" + offset +
+                   " is past file size, adding zeros as input " + i);
+          inputs[i] = new FSDataInputStream(new RaidUtils.ZeroInputStream(
+              offset + blockSize));
+        } else {
+          FSDataInputStream in = parityFs.open(
+              parityFile, conf.getInt("io.file.buffer.size", 64 * 1024));
+          in.seek(offset);
+          LOG.info("Adding " + parityFile + ":" + offset + " as input " + i);
+          inputs[i] = in;
+        }
       }
       // Now open streams to the data blocks.
       for (int i = paritySize; i < paritySize + stripeSize; i++) {
         long offset = blockSize * (stripeIdx * stripeSize + i - paritySize);
-        if (offset == errorOffset) {
+        if (fixSource && offset == errorOffset) {
           LOG.info(srcFile + ":" + offset +
               " is known to have error, adding zeros as input " + i);
           inputs[i] = new FSDataInputStream(new RaidUtils.ZeroInputStream(
@@ -158,23 +208,28 @@ public class ReedSolomonDecoder extends Decoder {
    * @param erasedLocationToFix index in the inputs which needs to be fixed.
    * @param limit maximum number of bytes to be written.
    * @param out the output.
+   * @return size of recovered bytes
    * @throws IOException
    */
-  void writeFixedBlock(
+  long writeFixedBlock(
           FSDataInputStream[] inputs,
           int[] erasedLocations,
           int erasedLocationToFix,
           long limit,
           OutputStream out,
           Progressable reporter,
-          ParallelStreamReader parallelReader) throws IOException {
+          ParallelStreamReader parallelReader, CRC32 crc) throws IOException {
 
     LOG.info("Need to write " + limit +
              " bytes for erased location index " + erasedLocationToFix);
+    if (crc != null) {
+      crc.reset();
+    }
     int[] tmp = new int[inputs.length];
     int[] decoded = new int[erasedLocations.length];
     // Loop while the number of written bytes is less than the max.
-    for (long written = 0; written < limit; ) {
+    long written; 
+    for (written = 0; written < limit; ) {
       erasedLocations = readFromInputs(
         inputs, erasedLocations, limit, reporter, parallelReader);
       if (decoded.length != erasedLocations.length) {
@@ -182,8 +237,8 @@ public class ReedSolomonDecoder extends Decoder {
       }
 
       int toWrite = (int)Math.min((long)bufSize, limit - written);
-
       int partSize = (int) Math.ceil(bufSize * 1.0 / parallelism);
+      
       try {
         long startTime = System.currentTimeMillis();
         for (int i = 0; i < parallelism; i++) {
@@ -205,11 +260,15 @@ public class ReedSolomonDecoder extends Decoder {
       for (int i = 0; i < erasedLocations.length; i++) {
         if (erasedLocations[i] == erasedLocationToFix) {
           out.write(writeBufs[i], 0, toWrite);
+          if (crc != null) {
+            crc.update(writeBufs[i], 0, toWrite);
+          }
           written += toWrite;
           break;
         }
       }
     }
+    return written;
   }
 
   int[] readFromInputs(

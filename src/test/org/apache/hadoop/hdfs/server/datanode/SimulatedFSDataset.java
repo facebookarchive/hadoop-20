@@ -17,10 +17,18 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
+import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.WritableByteChannel;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Random;
@@ -28,12 +36,14 @@ import java.util.Random;
 import javax.management.NotCompliantMBeanException;
 import javax.management.ObjectName;
 import javax.management.StandardMBean;
-import javax.naming.OperationNotSupportedException;
 
+import org.apache.commons.lang.NotImplementedException;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.datanode.BlockDataFile.Reader;
 import org.apache.hadoop.hdfs.server.datanode.metrics.FSDatasetMBean;
 import org.apache.hadoop.hdfs.server.protocol.BlockRecoveryInfo;
 import org.apache.hadoop.metrics.util.MBeanUtil;
@@ -56,7 +66,7 @@ import org.apache.hadoop.util.DiskChecker.DiskErrorException;
  * Note the synchronization is coarse grained - it is at each method. 
  */
 
-public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Configurable{
+public class SimulatedFSDataset implements FSConstants, FSDatasetInterface, Configurable{
   
   public static final String CONFIG_PROPERTY_SIMULATED =
                                     "dfs.datanode.simulateddatastorage";
@@ -77,19 +87,26 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
                               CHECKSUM_NULL, 16*1024 );
     byte[] nullCrcHeader = checksum.getHeader();
     nullCrcFileData =  new byte[2 + nullCrcHeader.length];
-    nullCrcFileData[0] = (byte) ((FSDataset.METADATA_VERSION >>> 8) & 0xff);
-    nullCrcFileData[1] = (byte) (FSDataset.METADATA_VERSION & 0xff);
+    nullCrcFileData[0] = (byte) ((FSDataset.FORMAT_VERSION_NON_INLINECHECKSUM >>> 8) & 0xff);
+    nullCrcFileData[1] = (byte) (FSDataset.FORMAT_VERSION_NON_INLINECHECKSUM & 0xff);
     for (int i = 0; i < nullCrcHeader.length; i++) {
       nullCrcFileData[i+2] = nullCrcHeader[i];
     }
   }
   
-  private class BInfo implements ReplicaBeingWritten{ // information about a single block
+  private class BInfo implements ReplicaBeingWritten, ReplicaToRead { // information about a single block
     Block theBlock;
     private boolean finalized = false; // if not finalized => ongoing creation
     SimulatedOutputStream oStream = null;
-    BInfo(int namespaceId, Block b, boolean forWriting) throws IOException {
+    private int checksumType;
+    private int bytesPerChecksum;
+
+    BInfo(int namespaceId, Block b, boolean forWriting, int checksumType,
+        int bytesPerChecksum) throws IOException {
       theBlock = new Block(b);
+      this.checksumType = checksumType;
+      this.bytesPerChecksum = bytesPerChecksum;
+
       if (theBlock.getNumBytes() < 0) {
         theBlock.setNumBytes(0);
       }
@@ -132,6 +149,10 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
         theBlock.setNumBytes(length);
       }
     }
+    
+    @Override
+    public void setBytesReceived(long length) {
+    }
 
     @Override
     public void setBytesOnDisk(long length) {
@@ -146,9 +167,13 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     synchronized SimulatedInputStream getIStream() throws IOException {
       if (!finalized) {
         // throw new IOException("Trying to read an unfinalized block");
-         return new SimulatedInputStream(oStream.getLength(), DEFAULT_DATABYTE);
+         return new SimulatedInputStream(oStream.getLength(), DEFAULT_DATABYTE, true);
       } else {
-        return new SimulatedInputStream(theBlock.getNumBytes(), DEFAULT_DATABYTE);
+        return new SimulatedInputStream(
+            BlockInlineChecksumReader.getFileLengthFromBlockSize(
+                theBlock.getNumBytes(), bytesPerChecksum,
+                DataChecksum.getChecksumSizeByType(checksumType)),
+            DEFAULT_DATABYTE, true);
       }
     }
     
@@ -186,13 +211,78 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
       oStream = null;
       return;
     }
-    
-    SimulatedInputStream getMetaIStream() {
-      return new SimulatedInputStream(nullCrcFileData);  
+
+    public synchronized boolean isFinalized() {
+      return finalized;
     }
 
-    synchronized boolean isFinalized() {
-      return finalized;
+    @Override
+    public File getDataFileToRead() {
+      return null;
+    }
+
+    @Override
+    public boolean isInlineChecksum() {
+      return true;
+    }
+    
+    @Override
+    public long getBytesVisible() throws IOException {
+      return getlength();
+    }
+
+    @Override
+    public long getBytesWritten() throws IOException {
+      return getlength();
+    }
+
+    @Override
+    public int getChecksumType() {
+      return this.checksumType;
+    }
+
+    @Override
+    public int getBytesPerChecksum() {
+      return bytesPerChecksum;
+    }
+
+    @Override
+    public InputStream getBlockInputStream(DataNode datanode, long offset)
+        throws IOException {
+      return getIStream();
+    }
+
+    @Override
+    public boolean hasBlockCrcInfo() {
+      // TODO Auto-generated method stub
+      return false;
+    }
+
+    @Override
+    public int getBlockCrc() throws IOException {
+      // TODO Auto-generated method stub
+      return 0;
+    }
+
+    @Override
+    public void updateBlockCrc(long offset, int length,
+        int crc) {
+      // TODO Auto-generated method stub
+      
+    }
+
+    public BlockDataFile getBlockDataFile() throws IOException {
+      FileChannel fc = null;
+      if (!finalized) {
+        fc = new SimulatedFileChannel(oStream.getLength(), DEFAULT_DATABYTE, true);
+      } else {
+        fc = new SimulatedFileChannel(
+            BlockInlineChecksumReader.getFileLengthFromBlockSize(
+                theBlock.getNumBytes(), bytesPerChecksum,
+                DataChecksum.getChecksumSizeByType(checksumType)),
+            DEFAULT_DATABYTE, true);
+      }
+      return BlockDataFile.getDummyDataFileFromFileChannel(fc);
     }
   }
   
@@ -322,7 +412,8 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
         blockMap.put(namespaceId, blkMap);
       }
       for (Block b: injectBlocks) {
-          BInfo binfo = new BInfo(namespaceId, b, false);
+        BInfo binfo = new BInfo(namespaceId, b, false,
+            DataChecksum.CHECKSUM_NULL, 512);
           blkMap.put(b, binfo);
       }
     }
@@ -403,11 +494,6 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
       throw new IOException("Block " + b + " is not found in namespace " + namespaceId);
     }
     return binfo.getlength();
-  }
-
-  @Override
-  public long getVisibleLength(int namespaceId, Block b) throws IOException {
-    return getFinalizedBlockLength(namespaceId, b);
   }
 
   @Override
@@ -495,9 +581,32 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
     return getStorageInfo();
   }
 
-  public synchronized BlockWriteStreams writeToBlock(int namespaceId, Block b, 
+  static class SimulatedBlockInlineChecksumFileWriter extends
+      BlockInlineChecksumWriter {
+    SimulatedBlockInlineChecksumFileWriter(final OutputStream dataOut,
+        Block block, int checksumType, int bytesPerChecksum) {
+      super(new BlockDataFile(null, null) {
+        @Override
+        public Writer getWriter(int bufferSize) {
+          return new BlockDataFile.Writer(dataOut, null, null);
+        }
+      }, checksumType, bytesPerChecksum,
+          HdfsConstants.DEFAULT_PACKETSIZE);
+      this.block = block;
+    }
+    
+    BlockDataFile getBlockDataFile() {
+      return blockDataFile;
+    }
+  }
+
+  public synchronized DatanodeBlockWriter writeToBlock(int namespaceId,
+                                            Block oldBlock,
+                                            Block b,
                                             boolean isRecovery,
-                                            boolean isReplicationRequest)
+                                            boolean isReplicationRequest,
+                                            int checksumType,
+                                            int bytesPerChecksum)
                                             throws IOException {
     if (isValidBlock(namespaceId, b, false)) {
           throw new BlockAlreadyExistsException("Block " + b + 
@@ -507,109 +616,164 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
         throw new BlockAlreadyExistsException("Block " + b + 
             " is being written, and cannot be written to.");
     }
-      BInfo binfo = new BInfo(namespaceId, b, true);
-      getBlockMap(namespaceId).put(b, binfo);
-      SimulatedOutputStream crcStream = new SimulatedOutputStream();
-      return new BlockWriteStreams(binfo.oStream, crcStream);
-  }
+    BInfo binfo = new BInfo(namespaceId, b, true, DataChecksum.CHECKSUM_NULL,
+        bytesPerChecksum);
+    getBlockMap(namespaceId).remove(oldBlock);    
+    getBlockMap(namespaceId).put(b, binfo);
+    return new SimulatedBlockInlineChecksumFileWriter(binfo.oStream, b,
+        checksumType, bytesPerChecksum) {
+      @Override
+      public void setChannelPosition(long dataOffset, boolean ifParitialChunk)
+          throws IOException {
+        BInfo binfo = getBlockMap(namespaceId).get(block);
+        if (binfo == null) {
+          throw new IOException("No such Block " + block);
+        }
+        binfo.setlength(dataOffset);
+      }
 
-  public synchronized InputStream getBlockInputStream(int namespaceId, Block b)
-                                            throws IOException {
-    BInfo binfo = getBlockMap(namespaceId).get(b);
-    if (binfo == null) {
-      throw new IOException("No such Block " + b );  
-    }
-    
-    //DataNode.LOG.info("Opening block(" + b.blkid + ") of length " + b.len);
-    return binfo.getIStream();
-  }
-  
-  public synchronized InputStream getBlockInputStream(int namespaceId, Block b, long seekOffset)
-                              throws IOException {
-    InputStream result = getBlockInputStream(namespaceId, b);
-    result.skip(seekOffset);
-    return result;
-  }
-
-  /** Not supported */
-  public BlockInputStreams getTmpInputStreams(int namespaceId, Block b, long blkoff, long ckoff
-      ) throws IOException {
-    throw new IOException("Not supported");
+      @Override
+      public long getChannelPosition() throws IOException {
+        BInfo binfo = getBlockMap(namespaceId).get(block);
+        if (binfo == null) {
+          throw new IOException("No such Block " + block);
+        }
+        return binfo.getlength();
+      }
+    };
   }
 
   /** No-op */
   public void validateBlockMetadata(int namespaceId, Block b) {
   }
 
-  /**
-   * Returns metaData of block b as an input stream
-   * @param b - the block for which the metadata is desired
-   * @return metaData of block b as an input stream
-   * @throws IOException - block does not exist or problems accessing
-   *  the meta file
-   */
-  private synchronized InputStream getMetaDataInStream(int namespaceId, Block b)
-                                              throws IOException {
-    BInfo binfo = getBlockMap(namespaceId).get(b);
-    if (binfo == null) {
-      throw new IOException("No such Block " + b );  
-    }
-    if (!binfo.finalized) {
-      throw new IOException("Block " + b + 
-          " is being written, its meta cannot be read");
-    }
-    return binfo.getMetaIStream();
-  }
-
-  public synchronized long getMetaDataLength(int namespaceId, Block b) throws IOException {
-    BInfo binfo = getBlockMap(namespaceId).get(b);
-    if (binfo == null) {
-      throw new IOException("No such Block " + b );  
-    }
-    if (!binfo.finalized) {
-      throw new IOException("Block " + b +
-          " is being written, its metalength cannot be read");
-    }
-    return binfo.getMetaIStream().getLength();
-  }
-  
-  public MetaDataInputStream getMetaDataInputStream(int namespaceId, Block b)
-  throws IOException {
-
-       return new MetaDataInputStream(getMetaDataInStream(namespaceId, b),
-                                                getMetaDataLength(namespaceId, b));
-  }
-
-  public synchronized boolean metaFileExists(int namespaceId, Block b) throws IOException {
-    if (!isValidBlock(namespaceId, b, false)) {
-          throw new IOException("Block " + b +
-              " is valid, and cannot be written to.");
-      }
-    return true; // crc exists for all valid blocks
-  }
-
   public void checkDataDir() throws DiskErrorException {
     // nothing to check for simulated data set
   }
-
-  public synchronized long getChannelPosition(int namespaceId, Block b, 
-                                              BlockWriteStreams stream)
-                                              throws IOException {
-    BInfo binfo = getBlockMap(namespaceId).get(b);
-    if (binfo == null) {
-      throw new IOException("No such Block " + b );
+  
+  static private class SimulatedFileChannel extends FileChannel {
+    
+    boolean inlineChecksum = false;
+    byte theRepeatedData = 7;
+    long length; // bytes
+    
+    /**
+     * An input stream of size l with repeated bytes
+     * @param l
+     * @param iRepeatedData
+     */
+    SimulatedFileChannel(long l, byte iRepeatedData, boolean ic) {
+      length = l;
+      theRepeatedData = iRepeatedData;
+      inlineChecksum = ic;
     }
-    return binfo.getlength();
-  }
 
-  public synchronized void setChannelPosition(int namespaceId, Block b, BlockWriteStreams stream, 
-                                              long dataOffset, long ckOffset)
-                                              throws IOException {
-    BInfo binfo = getBlockMap(namespaceId).get(b);
-    if (binfo == null) {
-      throw new IOException("No such Block " + b );
+    @Override
+    public int read(ByteBuffer dst) throws IOException {
+      throw new NotImplementedException();
     }
-    binfo.setlength(dataOffset);
+
+    @Override
+    public long read(ByteBuffer[] dsts, int offset, int length)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public int write(ByteBuffer src) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long write(ByteBuffer[] srcs, int offset, int length)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long position() throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public FileChannel position(long newPosition) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long size() throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public FileChannel truncate(long size) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public void force(boolean metaData) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long transferTo(long position, long count, WritableByteChannel target)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public long transferFrom(ReadableByteChannel src, long position, long count)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public int read(ByteBuffer dst, long position) throws IOException {
+      if (dst == null) {
+        throw new NullPointerException();
+      }
+      if (position < 0) {
+        throw new IllegalArgumentException("Negative position");
+      }
+      if (position >= length) { // EOF
+        return -1;
+      }
+      int bytesRead = (int) Math.min(dst.remaining(), length-position);
+      
+      for (int i = 0; i < bytesRead; i++) {
+          dst.put(theRepeatedData);
+      }
+      return bytesRead;
+    }
+
+    @Override
+    public int write(ByteBuffer src, long position) throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public MappedByteBuffer map(MapMode mode, long position, long size)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public FileLock lock(long position, long size, boolean shared)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    public FileLock tryLock(long position, long size, boolean shared)
+        throws IOException {
+      throw new NotImplementedException();
+    }
+
+    @Override
+    protected void implCloseChannel() throws IOException {
+      throw new NotImplementedException();
+    }
+    
   }
 
   /** 
@@ -618,7 +782,7 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
    */
   static private class SimulatedInputStream extends java.io.InputStream {
     
-
+    boolean inlineChecksum = false;
     byte theRepeatedData = 7;
     long length; // bytes
     int currentPos = 0;
@@ -629,36 +793,23 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
      * @param l
      * @param iRepeatedData
      */
-    SimulatedInputStream(long l, byte iRepeatedData) {
+    SimulatedInputStream(long l, byte iRepeatedData, boolean ic) {
       length = l;
       theRepeatedData = iRepeatedData;
-    }
-    
-    /**
-     * An input stream of of the supplied data
-     * 
-     * @param iData
-     */
-    SimulatedInputStream(byte[] iData) {
-      data = iData;
-      length = data.length;
-      
-    }
-    
-    /**
-     * 
-     * @return the lenght of the input stream
-     */
-    long getLength() {
-      return length;
+      inlineChecksum = ic;
     }
 
     @Override
     public int read() throws IOException {
+      int headerLength = inlineChecksum ? BlockInlineChecksumReader
+          .getHeaderSize() : nullCrcFileData.length;
       if (currentPos >= length)
         return -1;
-      if (data !=null) {
-        return data[currentPos++];
+      if (currentPos < headerLength) {
+        return nullCrcFileData[currentPos++];
+      }
+      if (data != null) {
+        return data[currentPos++ - headerLength];
       } else {
         currentPos++;
         return theRepeatedData;
@@ -678,10 +829,20 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
         return -1;
       }
       int bytesRead = (int) Math.min(b.length, length-currentPos);
+      int needCopyHeader = 0;
+      if (currentPos < nullCrcFileData.length) {
+        needCopyHeader = Math.min(nullCrcFileData.length - currentPos, b.length);
+        System.arraycopy(nullCrcFileData, currentPos, b, 0, needCopyHeader);
+        currentPos += needCopyHeader;
+        if (currentPos < nullCrcFileData.length) {
+          return bytesRead;
+        }
+      }
       if (data != null) {
-        System.arraycopy(data, currentPos, b, 0, bytesRead);
+        System.arraycopy(data, currentPos - nullCrcFileData.length, b, 0,
+            bytesRead - needCopyHeader);
       } else { // all data is zero
-        for (int i : b) {  
+        for (int i = needCopyHeader; i < b.length; i++) {  
           b[i] = theRepeatedData;
         }
       }
@@ -823,5 +984,21 @@ public class SimulatedFSDataset  implements FSConstants, FSDatasetInterface, Con
   public long size(int namespaceId) {
     HashMap<Block, BInfo> map = blockMap.get(namespaceId);
     return map != null ? map.size() : 0;
+  }
+
+  @Override
+  public DatanodeBlockInfo getDatanodeBlockInfo(int namespaceId, Block block) {
+    throw new NotImplementedException();
+  }
+
+  @Override
+  public ReplicaToRead getReplicaToRead(int namespaceId, Block block){
+    try {
+      return getBlockMap(namespaceId).get(block);
+    } catch (IOException e) {
+      // TODO Auto-generated catch block
+      e.printStackTrace();
+      return null;
+    }
   }
 }

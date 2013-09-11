@@ -17,8 +17,15 @@
  */
 package org.apache.hadoop.fs;
 
+import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.HftpFileSystem;
+import org.apache.hadoop.util.DataChecksum;
+import org.apache.log4j.Level;
+
 import java.io.*;
+import java.util.Random;
+
 import junit.framework.*;
 
 /**
@@ -152,5 +159,43 @@ public class TestLocalFileSystem extends TestCase {
     FileStatus status = fs.getFileStatus(path);
     assertEquals(path.makeQualified(fs), status.getPath());
     cleanupFile(fs, path);
+  }
+  
+  public void testFileCrc() throws IOException {
+    testFileCrcInternal(true);
+    testFileCrcInternal(false);
+  }
+  
+  void testFileCrcInternal(boolean inlineChecksum) throws IOException {
+    ((Log4JLogger) HftpFileSystem.LOG).getLogger().setLevel(Level.ALL);
+
+    Random random = new Random(1);
+
+    final long seed = random.nextLong();
+    random.setSeed(seed);
+    FileSystem fs = FileSystem.getLocal(new Configuration());
+
+    // generate random data
+    final byte[] data = new byte[1024 * 1024 + 512 * 7 + 66];
+    random.nextBytes(data);
+
+    // write data to a file
+    Path foo = new Path(TEST_ROOT_DIR, "foo_" + inlineChecksum);
+    {
+      final FSDataOutputStream out = fs.create(foo, false, 512, (short) 2, 512);
+      out.write(data);
+      out.close();
+    }
+
+    // compute data CRC
+    DataChecksum checksum = DataChecksum.newDataChecksum(
+        DataChecksum.CHECKSUM_CRC32, 1);
+    checksum.update(data, 0, data.length);
+
+    // compute checksum
+    final int crc = fs.getFileCrc(foo);
+    System.out.println("crc=" + crc);
+
+    TestCase.assertEquals((int) checksum.getValue(), crc);
   }
 }

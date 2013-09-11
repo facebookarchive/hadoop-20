@@ -23,6 +23,7 @@ import java.net.URI;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.io.WriteOptions;
 import org.apache.hadoop.util.Progressable;
 
 /****************************************************************
@@ -127,8 +128,8 @@ public class FilterFileSystem extends FileSystem {
       boolean overwrite, int bufferSize, short replication, long blockSize,
       int bytesPerChecksum, Progressable progress, boolean forceSync)
   throws IOException {
-	 return fs.create(f, permission, overwrite, bufferSize, replication,
-			 blockSize, bytesPerChecksum, progress);
+    return fs.create(f, permission, overwrite, bufferSize, replication,
+                     blockSize, bytesPerChecksum, progress, forceSync);
   }
 
   /** {@inheritDoc} */
@@ -150,6 +151,18 @@ public class FilterFileSystem extends FileSystem {
 		 replication, blockSize, progress);
     }
 
+   @Override
+   public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
+       boolean overwrite,
+       int bufferSize, short replication, long blockSize,
+       Progressable progress, boolean forceSync, boolean doParallelWrites,
+       WriteOptions options)
+     throws IOException {
+     return createNonRecursive(f, permission, overwrite, bufferSize,
+         replication, blockSize, progress);
+   }
+
+
   /**
    * Set replication for an existing file.
    * 
@@ -161,6 +174,17 @@ public class FilterFileSystem extends FileSystem {
    */
   public boolean setReplication(Path src, short replication) throws IOException {
     return fs.setReplication(src, replication);
+  }
+  
+  /**
+   * hard link Path dst to Path src. Can take place on DFS. 
+   */ 
+  public boolean hardLink(Path src, Path dst) throws IOException {  
+    return fs.hardLink(src, dst);
+  } 
+
+  public String[] getHardLinkedFiles(Path src) throws IOException {
+    return fs.getHardLinkedFiles(src);
   }
   
   /**
@@ -180,7 +204,18 @@ public class FilterFileSystem extends FileSystem {
   public boolean delete(Path f, boolean recursive) throws IOException {
     return fs.delete(f, recursive);
   }
+
+  @Override
+  public boolean delete(Path f, boolean recursive, boolean skipTrash)
+      throws IOException {
+    return fs.delete(f, recursive, skipTrash);
+  }
   
+  @Override
+  public boolean undelete(Path f, String userName) throws IOException {
+    return fs.undelete(f, userName);
+  }
+
   /**
    * Mark a path to be deleted when FileSystem is closed.
    * When the JVM shuts down,
@@ -198,11 +233,6 @@ public class FilterFileSystem extends FileSystem {
     return fs.deleteOnExit(f);
   }    
     
-  @Override
-  public boolean undelete(Path f, String userName) throws IOException {
-    return fs.undelete(f, userName);
-  }
-
   /** List files in a directory. */
   public FileStatus[] listStatus(Path f) throws IOException {
     return fs.listStatus(f);
@@ -221,6 +251,13 @@ public class FilterFileSystem extends FileSystem {
   public RemoteIterator<LocatedFileStatus> listLocatedStatus(Path f)
   throws IOException {
     return fs.listLocatedStatus(f);
+  }
+
+  @Override
+  public RemoteIterator<LocatedBlockFileStatus> listLocatedBlockStatus(
+      Path f, PathFilter filter)
+  throws IOException {
+    return fs.listLocatedBlockStatus(f, filter);
   }
 
   /** list a directory, piggyback block locations to each file status */
@@ -363,6 +400,12 @@ public class FilterFileSystem extends FileSystem {
   public FileChecksum getFileChecksum(Path f) throws IOException {
     return fs.getFileChecksum(f);
   }
+
+  /** {@inheritDoc} */
+  public int getFileCrc(Path f) throws IOException {
+    return fs.getFileCrc(f);
+  }
+
   
   /** {@inheritDoc} */
   public void setVerifyChecksum(boolean verifyChecksum) {
@@ -400,4 +443,11 @@ public class FilterFileSystem extends FileSystem {
       ) throws IOException {
     fs.setPermission(p, permission);
   }
+
+  /** {@inheritDoc} */
+  @Override
+  protected long getUniqueId() {
+    return fs.getUniqueId();
+  }
+
 }

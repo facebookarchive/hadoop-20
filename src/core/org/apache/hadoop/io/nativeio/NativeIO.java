@@ -22,6 +22,9 @@ import java.io.FileDescriptor;
 import java.io.IOException;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.HardLink;
+import org.apache.hadoop.util.InjectionEventCore;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.NativeCodeLoader;
 
 import org.apache.commons.logging.Log;
@@ -59,7 +62,16 @@ public class NativeIO {
   /* Don't need these pages.  */
   public static final int POSIX_FADV_DONTNEED = 4; 
   /* Data will be accessed once.  */
-  public static final int POSIX_FADV_NOREUSE = 5; 
+  public static final int POSIX_FADV_NOREUSE = 5;
+
+  // Flags for clock_gettime from time.h
+  public static final int CLOCK_REALTIME           = 0;
+  public static final int CLOCK_MONOTONIC          = 1;
+  public static final int CLOCK_PROCESS_CPUTIME_ID = 2;
+  public static final int CLOCK_THREAD_CPUTIME_ID  = 3;
+  public static final int CLOCK_MONOTONIC_RAW      = 4;
+  public static final int CLOCK_REALTIME_COARSE    = 5;
+  public static final int CLOCK_MONOTONIC_COARSE   = 6;
 
 
   /* Wait upon writeout of all pages
@@ -81,11 +93,18 @@ public class NativeIO {
   private static boolean nativeLoaded = false;
   private static boolean workaroundNonThreadSafePasswdCalls = false;
   private static boolean fadvisePossible = true;
+  private static boolean ioprioPossible = true;
   private static boolean syncFileRangePossible = true;
 
   static final String WORKAROUND_NON_THREADSAFE_CALLS_KEY =
     "hadoop.workaround.non.threadsafe.getpwuid";
   static final boolean WORKAROUND_NON_THREADSAFE_CALLS_DEFAULT = false;
+
+  // Copied from ioprio.h
+  public static final int IOPRIO_CLASS_NONE = 0;
+  public static final int IOPRIO_CLASS_RT = 1;
+  public static final int IOPRIO_CLASS_BE = 2;
+  public static final int IOPRIO_CLASS_IDLE = 3;
 
   static {
     if (NativeCodeLoader.isNativeCodeLoaded()) {
@@ -106,6 +125,14 @@ public class NativeIO {
     }
   }
 
+  public static boolean isfadvisePossible() {
+    return fadvisePossible;
+  }
+
+  public static boolean isIoprioPossible() {
+    return ioprioPossible;
+  }
+
   /**
    * Return true if the JNI-based native IO extensions are available.
    */
@@ -123,9 +150,11 @@ public class NativeIO {
   public static native void link(String src, String dst) throws IOException;
   /** Wrapper around chmod(2) */
   public static native void chmod(String path, int mode) throws IOException;
+  /** Wrapper around fsync(2) (Java does not support fsync on directory) */
+  public static native void fsync(String path) throws IOException;
 
   /** Wrapper around posix_fadvise(2) */
-  static native void posix_fadvise(
+  public static native void posix_fadvise(
     FileDescriptor fd, long offset, long len, int flags) throws NativeIOException;
 
   /** Wrapper around sync_file_range(2) */
@@ -134,6 +163,27 @@ public class NativeIO {
 
   /** Initialize the JNI method ID and class ID cache */
   private static native void initNative();
+
+  /**
+   * Wrapper around ioprio_set, we always do this for the current thread so
+   * we omit 'which' and 'who'.
+   */
+  static native void ioprio_set(int classOfService, int priority) throws IOException;
+
+  /**
+   * Wrapper around ioprio_set, we always do this for the current thread so
+   * we omit 'which' and 'who'. This is different from ioprio_set(class,
+   * priority) in the sense that this is the value that is returned by
+   * ioprio_get and we can directly pass this value in to reset the
+   * priority of a thread.
+   */
+  static native void ioprio_set(int ioprio_prio_value) throws IOException;
+
+  /**
+   * Wrapper around ioprio_get, we always do this for the current thread so
+   * we omit 'which' and 'who'.
+   */
+  static native int ioprio_get() throws IOException;
 
   /**
    * Wrapper around native stat()
@@ -152,9 +202,123 @@ public class NativeIO {
     if (src == null || dst == null) {
       throw new IllegalArgumentException("Null parameter passed");
     }
-    link(src.getAbsolutePath(), dst.getAbsolutePath());
+    if (isAvailable()) {
+      link(src.getAbsolutePath(), dst.getAbsolutePath());
+    } else {
+      HardLink.createHardLink(src, dst);
+    }
   }
 
+  /**
+   * Wrapper around native clock_gettime()
+   */
+  public static native void clock_gettime(int which_clock,
+                                          TimeSpec tp) throws IOException;
+
+  public static void validateIoprioSet(int classOfService, int data) {
+    if (classOfService < 0 || classOfService > 3) {
+      throw new IllegalArgumentException("Invalid class of service : "
+          + classOfService + " (0-3) supported");
+    }
+    if (data < 0 || data > 7) {
+      throw new IllegalArgumentException("Invalid class of service : "
+          + classOfService + " (0-7) supported");
+    }
+  }
+  public static void validatePosixFadvise(int advise) {
+    if (advise < NativeIO.POSIX_FADV_NORMAL
+        || advise > NativeIO.POSIX_FADV_NOREUSE) {
+      throw new IllegalArgumentException("Invalid posix fadvise : " + advise);
+    }
+  }
+
+  /**
+   * Call ioprio_get for this thread.
+   *
+   * @throws NativeIOException
+   *           if there is an error with the syscall
+   * @return -1 on failure, ioprio value on success.
+   */
+  public static int ioprioGetIfPossible() throws IOException {
+    if (nativeLoaded && ioprioPossible) {
+      try {
+        return ioprio_get();
+      } catch (UnsupportedOperationException uoe) {
+        LOG.warn("ioprioGetIfPossible() failed", uoe);
+        ioprioPossible = false;
+      } catch (UnsatisfiedLinkError ule) {
+        LOG.warn("ioprioGetIfPossible() failed", ule);
+        ioprioPossible = false;
+      } catch (NativeIOException nie) {
+        LOG.warn("ioprioGetIfPossible() failed", nie);
+        throw nie;
+      }
+    }
+    return -1;
+  }
+
+  /**
+   * Call ioprio_set(ioprio_value) for this thread.
+   *
+   * @throws NativeIOException
+   *           if there is an error with the syscall
+   */
+  public static void ioprioSetIfPossible(int ioprio_value) throws IOException {
+    if (nativeLoaded && ioprioPossible) {
+      try {
+        ioprio_set(ioprio_value);
+      } catch (UnsupportedOperationException uoe) {
+        LOG.warn("ioprioSetIfPossible() failed", uoe);
+        ioprioPossible = false;
+      } catch (UnsatisfiedLinkError ule) {
+        LOG.warn("ioprioSetIfPossible() failed", ule);
+        ioprioPossible = false;
+      } catch (NativeIOException nie) {
+        LOG.warn("ioprioSetIfPossible() failed", nie);
+        throw nie;
+      }
+    }
+  }
+
+  /**
+   * Call ioprio_set(class, data) for this thread.
+   *
+   * @throws NativeIOException
+   *           if there is an error with the syscall
+   */
+  public static void ioprioSetIfPossible(int classOfService, int data)
+      throws IOException {
+    if (nativeLoaded && ioprioPossible) {
+      if (classOfService == IOPRIO_CLASS_NONE) {
+        // ioprio is disabled.
+        return;
+      }
+      try {
+        ioprio_set(classOfService, data);
+      } catch (UnsupportedOperationException uoe) {
+        LOG.warn("ioprioSetIfPossible() failed", uoe);
+        ioprioPossible = false;
+      } catch (UnsatisfiedLinkError ule) {
+        LOG.warn("ioprioSetIfPossible() failed", ule);
+        ioprioPossible = false;
+      } catch (NativeIOException nie) {
+        LOG.warn("ioprioSetIfPossible() failed", nie);
+        throw nie;
+      }
+    }
+  }
+
+  /**
+   * Calls fsync on the given file/dir path.
+   */
+  public static void fsyncIfPossible(String path) throws IOException {
+    if (nativeLoaded) {
+      fsync(path);
+    } else {
+      LOG.warn("Cannot fsync : " + path +
+          " since native libraries are not available");
+    }
+  }
 
   /**
    * Call posix_fadvise on the given file descriptor. See the manpage
@@ -169,10 +333,17 @@ public class NativeIO {
     if (nativeLoaded && fadvisePossible) {
       try {
         posix_fadvise(fd, offset, len, flags);
+        InjectionHandler.processEvent(
+            InjectionEventCore.NATIVEIO_POSIX_FADVISE, flags);
       } catch (UnsupportedOperationException uoe) {
+        LOG.warn("posixFadviseIfPossible() failed", uoe);
         fadvisePossible = false;
       } catch (UnsatisfiedLinkError ule) {
+        LOG.warn("posixFadviseIfPossible() failed", ule);
         fadvisePossible = false;
+      } catch (NativeIOException nie) {
+        LOG.warn("posixFadviseIfPossible() failed", nie);
+        throw nie;
       }
     }
   }
@@ -187,16 +358,35 @@ public class NativeIO {
   public static void syncFileRangeIfPossible(
       FileDescriptor fd, long offset, long nbytes, int flags)
       throws NativeIOException {
+    InjectionHandler.processEvent(InjectionEventCore.NATIVEIO_SYNC_FILE_RANGE,
+        flags);
     if (nativeLoaded && syncFileRangePossible) {
       try {
         sync_file_range(fd, offset, nbytes, flags);
       } catch (UnsupportedOperationException uoe) {
+        LOG.warn("syncFileRangeIfPossible() failed", uoe);
         syncFileRangePossible = false;
       } catch (UnsatisfiedLinkError ule) {
+        LOG.warn("syncFileRangeIfPossible() failed", ule);
         syncFileRangePossible = false;
+      } catch (NativeIOException nie) {
+        LOG.warn("syncFileRangeIfPossible() failed: fd " + fd + " offset "
+            + offset + " nbytes " + nbytes + " flags " + flags, nie);
+        throw nie;
       }
     }
   }
+
+  public static void clockGetTimeIfPossible(int which_clock,
+                                            TimeSpec tp) throws IOException {
+    if (nativeLoaded) {
+      clock_gettime(which_clock, tp);
+    } else {
+      throw new IOException("Native not loaded.");
+    }
+  }
+
+
 
   /**
    * Result type of the fstat call
@@ -254,6 +444,18 @@ public class NativeIO {
     }
     public int getHardLinks() {
       return this.hardlinks;
+    }
+  }
+
+  /**
+   * Result type of the clock_gettime call
+   */
+  public static class TimeSpec {
+    public long tv_sec = 0;
+    public long tv_nsec = 0;
+
+    public String toString() {
+      return "{tv_sec=" + tv_sec + "," + "tv_nsec=" + tv_nsec + "}";
     }
   }
 }

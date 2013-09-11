@@ -44,11 +44,13 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumWriter;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDatasetInterface;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
+import org.apache.hadoop.hdfs.server.namenode.NNStorageConfiguration;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
 import org.apache.hadoop.hdfs.tools.DFSAdmin;
 import org.apache.hadoop.fs.FileSystem;
@@ -56,6 +58,14 @@ import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.security.*;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.hadoop.util.StringUtils;
+import static org.mockito.Matchers.anyInt;
+import static org.mockito.Matchers.any;
+import static org.mockito.Mockito.atLeast;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * This class creates a single-process DFS cluster for junit testing.
@@ -149,7 +159,7 @@ public class MiniDFSCluster {
   }
   
   boolean federation = false;
-  private Configuration conf;
+  Configuration conf;
   private NameNodeInfo[] nameNodes;
   
   /**
@@ -510,6 +520,8 @@ public class MiniDFSCluster {
     conf.setClass("topology.node.switch.mapping.impl", 
                    StaticMapping.class, DNSToSwitchMapping.class);
     
+    //http image download timeout
+    conf.setInt("dfs.image.transfer.timeout", 10 * 1000);
     
     this.federation = federation;
     
@@ -621,6 +633,10 @@ public class MiniDFSCluster {
       if (this.nameNodes[nnIndex] != null) {
         Configuration nnconf = this.nameNodes[nnIndex].conf;
         conf.set("dfs.name.dir", nnconf.get("dfs.name.dir"));
+        String editsDir = nnconf.get("dfs.name.edits.dir");
+        if (editsDir != null) {
+          conf.set("dfs.name.edits.dir", editsDir);
+        }
         conf.set("fs.checkpoint.dir", nnconf.get("fs.checkpoint.dir"));
       } else {
         conf.set("dfs.name.dir", new File(base_dir, "name" + (2*nnIndex + 1)).getPath()+","+
@@ -932,6 +948,12 @@ public class MiniDFSCluster {
     return getNameNode(0);
   }
   
+  /** Get the namenode's configuration */
+  public Configuration getNameNodeConf() {
+    checkSingleNameNode();
+    return nameNodes[0].conf;
+  }
+  
   public NameNode getNameNode(int nnIndex) {
     return nameNodes[nnIndex].nameNode;
   }
@@ -1032,6 +1054,10 @@ public class MiniDFSCluster {
    * Adds all namenodes to shutdown list
    */
   private void processNamenodesForShutdown(Collection<Thread> threads) {
+    Runtime runtime = Runtime.getRuntime();
+    runtime = spy(runtime);
+    doNothing().when(runtime).exit(anyInt());
+    FSEditLog.setRuntimeForTesting(runtime);
     for (NameNodeInfo nnInfo : nameNodes) {
       Thread st = new Thread(new ShutDownUtil(nnInfo));
       st.start();
@@ -1132,22 +1158,31 @@ public class MiniDFSCluster {
   /*
    * Corrupt a block on all datanode
    */
-  void corruptBlockOnDataNodes(String blockName) throws Exception{
+  void corruptBlockOnDataNodes(Block block) throws Exception{
     for (int i=0; i < dataNodes.size(); i++)
-      corruptBlockOnDataNode(i,blockName);
+      corruptBlockOnDataNode(i,block);
   }
 
   /*
    * Corrupt a block on a particular datanode
    */
-  boolean corruptBlockOnDataNode(int i, String blockName) throws Exception {
+  boolean corruptBlockOnDataNode(int i, Block block) throws Exception {
     Random random = new Random();
     boolean corrupted = false;
     if (i < 0 || i >= dataNodes.size())
       return false;
     for (int dn = i*2; dn < i*2+2; dn++) {
+      String blockFileName;
+      if (this.getDataNodes().get(0).useInlineChecksum) {
+        blockFileName = BlockInlineChecksumWriter.getInlineChecksumFileName(
+            block, FSConstants.CHECKSUM_TYPE, conf
+                .getInt("io.bytes.per.checksum",
+                    FSConstants.DEFAULT_BYTES_PER_CHECKSUM));
+      } else {
+        blockFileName = block.getBlockName();
+      }
       File blockFile = new File(getBlockDirectory("data" + (dn+1)),
-                                blockName);
+          blockFileName);
       System.out.println("Corrupting for: " + blockFile);
       if (blockFile.exists()) {
         // Corrupt replica by writing random bytes into replica
@@ -1300,11 +1335,23 @@ public class MiniDFSCluster {
    */
   public FileSystem getFileSystem() throws IOException {
     checkSingleNameNode();
-    return getFileSystem(0);
+    return getFileSystem(0, null);
+  }
+
+  public FileSystem getFileSystem(int nnIndex) throws IOException{
+    return getFileSystem(nnIndex, null);
   }
   
-  public FileSystem getFileSystem(int nnIndex) throws IOException{
-    return FileSystem.get(getURI(nnIndex), nameNodes[nnIndex].conf);
+  public FileSystem getFileSystem(int nnIndex, Configuration conf) throws IOException{
+    if (conf == null) {
+      conf = nameNodes[nnIndex].conf;
+    }
+    return FileSystem.get(getURI(nnIndex), conf);
+  }
+  
+  public FileSystem getFileSystem(Configuration conf) throws IOException {
+    checkSingleNameNode();
+    return getFileSystem(0, conf);
   }
 
   /**
@@ -1324,7 +1371,8 @@ public class MiniDFSCluster {
   }
   
   public Collection<File> getNameDirs(int nnIndex) {
-    return FSNamesystem.getNamespaceDirs(nameNodes[nnIndex].conf);
+    return DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getNamespaceDirs(nameNodes[nnIndex].conf));
   }
 
   /**
@@ -1336,7 +1384,8 @@ public class MiniDFSCluster {
   }
   
   public Collection<File> getNameEditsDirs(int nnIndex) {
-    return FSNamesystem.getNamespaceEditsDirs(nameNodes[nnIndex].conf);
+    return DFSTestUtil.getFileStorageDirs(
+        NNStorageConfiguration.getNamespaceEditsDirs(nameNodes[nnIndex].conf));
   }
 
   /**
@@ -1592,13 +1641,20 @@ public class MiniDFSCluster {
     return new File(base_dir, "data");
   }
 
-  private File getBaseDirectory() {
+  public File getBaseDirectory() {
     return getBaseDirectory(conf);
   }
 
   public static File getBaseDirectory(Configuration conf) {
+    String clusterId = (conf == null ? "" : conf.get(DFS_CLUSTER_ID, ""));
     return new File(System.getProperty("test.build.data", "build/test/data"),
-        "dfs/" + conf.get(DFS_CLUSTER_ID, ""));
+        "dfs/" + clusterId);
+  }
+  
+  public static void clearBaseDirectory(Configuration conf) throws IOException {
+    File baseDir = getBaseDirectory(conf);
+    FileUtil.fullyDelete(baseDir);
+    baseDir.mkdirs();
   }
 
   /**

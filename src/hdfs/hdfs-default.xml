@@ -16,6 +16,12 @@ creations/deletions), or "all".</description>
 </property>
 
 <property>
+  <name>dfs.access.time.touchable</name>
+  <value>true</value>
+  <description> This branch of HDFS supports touch changing file accessTime.</description>
+</property>
+
+<property>
   <name>dfs.secondary.http.address</name>
   <value>0.0.0.0:50090</value>
   <description>
@@ -146,6 +152,18 @@ creations/deletions), or "all".</description>
 </property>
 
 <property>
+  <name>dfs.name.dir.policy</name>
+  <value>0</value>
+  <description>Determines the DFS name node directory policy. 
+    0 - No enforcement
+    1 - Enforce that there should be at least two copies and they must be on 
+        different devices
+    2 - Enforce that there should be at least two copies on different devices
+        and at least one must be on an NFS device
+  </description>
+</property>
+
+<property>
   <name>dfs.name.dir</name>
   <value>${hadoop.tmp.dir}/dfs/name</value>
   <description>Determines where on the local filesystem the DFS name node
@@ -197,6 +215,17 @@ creations/deletions), or "all".</description>
   list of directories, then data will be stored in all named
   directories, typically on different devices.
   Directories that do not exist are ignored.
+  </description>
+</property>
+
+<property>
+  <name>dfs.datadir.confpath</name>
+  <value></value>
+  <description>Determines where on the local filesystem on the DFS data node
+  to locate the config file with the list of working directories. This is an
+  absolute path to that file and the data is stored in a new line deliminated
+  file. This allows for a dynamic list of directories without modifying the 
+  actual config file itself.
   </description>
 </property>
 
@@ -323,6 +352,13 @@ creations/deletions), or "all".</description>
 </property> 
 
 <property>
+  <name>dfs.hosts.ignoremissing</name>
+  <value></value>
+  <description>Ignore missing include/exclude files.
+  </description>
+</property> 
+
+<property>
   <name>dfs.max.objects</name>
   <value>0</value>
   <description>The maximum number of files, directories and blocks
@@ -405,7 +441,7 @@ creations/deletions), or "all".</description>
 
 <property>
   <name>dfs.fastcopy.file.wait_time</name>
-  <value>1800000</value>
+  <value>300000</value>
   <description>The number of milliseconds FastCopy should wait for a file to be
     completed.
   </description>
@@ -505,6 +541,47 @@ creations/deletions), or "all".</description>
   <value>false</value>
   <description>The flag indicating if namenode lease recovery could
   discard a file's last block that has no synced data
+  </description>
+</property>
+
+<property>
+  <name>dfs.safemode.leave.threads</name>
+  <value>16</value>
+  <description>Maximum number of threads which will be used when exiting safemode.
+  </description>
+</property>
+
+<property>
+  <name>dfs.name.edits.dir.minimum</name>
+  <value>1</value>
+  <description>Minimum number of journals to sync transactions to.
+  If the number of streams is below the threshold, the NN will shut down.
+  </description>
+</property>
+
+<property>
+  <name>dfs.name.edits.dir.minimum.nonlocal</name>
+  <value>0</value>
+  <description>Minimum number of remote or shared journals to sync transactions to.
+  If the number of such streams is below the threshold, the NN will shut down.
+  </description>
+</property>
+
+<property>
+  <name>dfs.enableHftp</name>
+  <value>true</value>
+  <description>Whether {listPaths|data|fileChecksum} servlets should be loaded at name node startup
+  </description>
+</property>
+
+<property>
+  <name>dfs.client.shutdownhook.enable</name>
+  <value>true</value>
+  <description>If true, the HDFS FileSystem will register a shutdown hook
+    to close all file systems if a shutdown occurs.  This is the default.
+    Set this to false if your application is registering its own shutdown
+    hook; in this case, HDFS will not register one, so the application
+    shutdown should include calling FileSystem.closeAll().
   </description>
 </property>
 </configuration>

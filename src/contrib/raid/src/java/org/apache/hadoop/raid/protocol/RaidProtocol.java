@@ -35,8 +35,9 @@ public interface RaidProtocol extends VersionedProtocol {
    * Compared to the previous version the following changes have been introduced:
    * Only the latest change is reflected.
    * 1: new protocol introduced
+   * 2: send recovery lag
    */
-  public static final long versionID = 1L;
+  public static final long versionID = 2L;
 
   /**
    * Get a listing of all configured policies
@@ -54,5 +55,12 @@ public interface RaidProtocol extends VersionedProtocol {
    * @param corruptOffset The offset that has the corruption
    */
   public String recoverFile(String inputPath, long corruptOffset) throws IOException;
+  
+  /*
+   * When a file is fixed, the block fixer task will send the recovery time to
+   * raidnode for data collection.
+   * If the path fails to fix, recoveryTime will be Integer.MAX_VALUE
+   */
+  public void sendRecoveryTime(String path, long recoveryTime) throws IOException;
 
 }

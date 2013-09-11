@@ -4,33 +4,29 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.util.Arrays;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.StringUtils;
-import org.apache.thrift.protocol.TBinaryProtocol;
-import org.apache.thrift.protocol.TBinaryProtocol.Factory;
 import org.apache.thrift.server.TServer;
-import org.apache.thrift.server.TThreadPoolServer;
-import org.apache.thrift.transport.TServerSocket;
 import org.apache.thrift.transport.TTransportException;
-import org.apache.thrift.transport.TTransportFactory;
 
 public class ClusterManagerServer extends Thread {
+  public static final Log LOG = LogFactory.getLog(ClusterManagerServer.class);
 
-  static{
+  static {
     Configuration.addDefaultResource("mapred-default.xml");
     Configuration.addDefaultResource("mapred-site.xml");
+    Utilities.makeProcessExitOnUncaughtException(LOG);
   }
-
-  public static final Log LOG = LogFactory.getLog(ClusterManagerServer.class);
 
   Configuration conf;
   int port;
   TServer server;
-  volatile boolean running = true;;
+  volatile boolean running = true;
 
   public ClusterManagerServer(Configuration conf, ClusterManager cm)
     throws IOException {
@@ -42,16 +38,12 @@ public class ClusterManagerServer extends Thread {
     this.conf = conf;
     String target = conf.getClusterManagerAddress();
     InetSocketAddress addr = NetUtils.createSocketAddr(target);
+    this.port = addr.getPort();
     ServerSocket serverSocket = new ServerSocket(addr.getPort());
     this.port = serverSocket.getLocalPort();
-    TServerSocket socket = new TServerSocket(serverSocket, conf.getCMSoTimeout());
-
-    TThreadPoolServer.Args args = new TThreadPoolServer.Args(socket);
-    args.stopTimeoutVal = 0;
-    args.processor(new ClusterManagerService.Processor(cm));
-    args.transportFactory(new TTransportFactory());
-    args.protocolFactory(new TBinaryProtocol.Factory(true, true));
-    server = new TThreadPoolServer(args);
+    server = TFactoryBasedThreadPoolServer.createNewServer(
+      new ClusterManagerService.Processor(cm), serverSocket,
+      conf.getCMSoTimeout());
   }
 
   public void stopRunning() {
@@ -62,34 +54,42 @@ public class ClusterManagerServer extends Thread {
     // Thread.interrupt() does not help.
     try {
       new Socket(java.net.InetAddress.getByName("127.0.0.1"), port).close();
-    } catch (Exception e) {}
+    } catch (IOException e) {}
     this.interrupt();
   }
 
   public void run() {
-    while (running) {
-      try {
-        server.serve();
-      } catch (Exception e) {
-        LOG.error("Caught exception " + e);
-      }
-    }
+    server.serve();
+  }
+
+  public static void printUsage(String[] args) {
+    System.err.println("Invalid command line: " + Arrays.toString(args));
+    System.err.println(
+      "Usage: " + ClusterManagerServer.class + " [-recoverFromDisk]");
   }
 
   public static void main(String[] args)
       throws IOException, TTransportException {
     StringUtils.startupShutdownMessage(ClusterManager.class, args, LOG);
     Configuration conf = new Configuration();
-    ClusterManager cm = new ClusterManager(conf);
-    ClusterManagerServer server = new ClusterManagerServer(conf, cm);
-    server.start();
+    boolean recoverFromDisk = false;
+    // Check if we want to start the ClusterManager to restore the persisted
+    // state
+    if (args.length > 0) {
+      if (args.length != 1 || !args[0].equals("-recoverFromDisk")) {
+        printUsage(args);
+        System.exit(-1);
+      } else {
+        recoverFromDisk = true;
+      }
+    }
+    ClusterManager cm = new ClusterManager(conf, recoverFromDisk);
     try {
+      ClusterManagerServer server = new ClusterManagerServer(conf, cm);
+      server.start();
       server.join();
     } catch (InterruptedException e) {
       System.exit(0);
-    } catch (Exception e) {
-      LOG.error(StringUtils.stringifyException(e));
-      System.exit(-1);
     }
   }
 }

@@ -36,7 +36,7 @@ abstract public class FSInputChecker extends FSInputStream {
   
   /** The file name from which data is read from */
   protected Path file;
-  private Checksum sum;
+  protected Checksum sum;
   private boolean verifyChecksum = true;
   private byte[] buf;
   private byte[] checksum;
@@ -47,6 +47,8 @@ abstract public class FSInputChecker extends FSInputStream {
   
   // cached file position
   private long chunkPos = 0;
+  
+  protected FSClientReadProfilingData cliData = null;
   
   /** Constructor
    * 
@@ -237,6 +239,10 @@ abstract public class FSInputChecker extends FSInputStream {
           if( needChecksum() ) {
             sum.update(b, off, read);
             verifySum(chunkPos);
+            
+            if (cliData != null) {
+              cliData.recordVerifyChunkCheckSumTime();
+            }
           }
           chunkPos += read;
         } 

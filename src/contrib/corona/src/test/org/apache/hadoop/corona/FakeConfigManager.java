@@ -14,8 +14,8 @@ public class FakeConfigManager extends ConfigManager {
 
   private enum PROPERTY {
     MAX, MIN, WEIGHT, PREEMPTED_TASKS_MAX_RUNNING_TIME,
-    COMPARATOR, SHARE_STARVING_RATIO, STARVING_TIME_FOR_SHARE,
-    STARVING_TIME_FOR_MIN, LOCALITY_WAIT;
+    COMPARATOR, SHARE_STARVING_RATIO, MIN_PREEMPT_PERIOD,
+    STARVING_TIME_FOR_SHARE, STARVING_TIME_FOR_MIN, LOCALITY_WAIT;
 
     final private static String POSTFIX = "" + ((char)2);
     @Override
@@ -35,57 +35,62 @@ public class FakeConfigManager extends ConfigManager {
   public void close() {
   }
 
-
-  public void setMaximum(String name, String type, int val) {
-    String key = PROPERTY.MAX + name + SEPARATOR + type;
+  public void setMaximum(PoolInfo poolInfo, String type, int val) {
+    String key = PROPERTY.MAX + PoolInfo.createStringFromPoolInfo(poolInfo) +
+        SEPARATOR + type;
     config.put(key, val);
   }
 
   @Override
-  public int getMaximum(String name, ResourceType type) {
-    String key = PROPERTY.MAX + name + SEPARATOR + type;
+  public int getPoolMaximum(PoolInfo poolInfo, ResourceType type) {
+    String key = PROPERTY.MAX + PoolInfo.createStringFromPoolInfo(poolInfo) +
+        SEPARATOR + type;
     if (!config.containsKey(key)) {
       return Integer.MAX_VALUE;
     }
     return (Integer)config.get(key);
   }
 
-  public void setMinimum(String name, ResourceType type, int val) {
-    String key = PROPERTY.MIN + name + SEPARATOR + type;
+  public void setMinimum(PoolInfo poolInfo, ResourceType type, int val) {
+    String key = PROPERTY.MIN + PoolInfo.createStringFromPoolInfo(poolInfo) +
+        SEPARATOR + type;
     config.put(key, val);
   }
 
   @Override
-  public int getMinimum(String name, ResourceType type) {
-    String key = PROPERTY.MIN + name + SEPARATOR + type;
+  public int getPoolMinimum(PoolInfo poolInfo, ResourceType type) {
+    String key = PROPERTY.MIN + PoolInfo.createStringFromPoolInfo(poolInfo) +
+        SEPARATOR + type;
     if (!config.containsKey(key)) {
       return 0;
     }
     return (Integer)config.get(key);
   }
 
-  public void setWeight(String name, double val) {
-    String key = PROPERTY.WEIGHT + name;
+  public void setWeight(PoolInfo poolInfo, double val) {
+    String key = PROPERTY.WEIGHT + PoolInfo.createStringFromPoolInfo(poolInfo);
     config.put(key, val);
   }
 
   @Override
-  public double getWeight(String name) {
-    String key = PROPERTY.WEIGHT + name;
+  public double getWeight(PoolInfo poolInfo) {
+    String key = PROPERTY.WEIGHT + PoolInfo.createStringFromPoolInfo(poolInfo);
     if (!config.containsKey(key)) {
       return 1.0;
     }
     return (Integer)config.get(key);
   }
 
-  public void setComparator(String name, ScheduleComparator val) {
-    String key = PROPERTY.COMPARATOR + name;
+  public void setComparator(PoolInfo poolInfo, ScheduleComparator val) {
+    String key =
+        PROPERTY.COMPARATOR + PoolInfo.createStringFromPoolInfo(poolInfo);
     config.put(key, val);
   }
 
   @Override
-  public ScheduleComparator getComparator(String name) {
-    String key = PROPERTY.COMPARATOR + name;
+  public ScheduleComparator getComparator(PoolInfo poolInfo) {
+    String key =
+        PROPERTY.COMPARATOR + PoolInfo.createStringFromPoolInfo(poolInfo);
     if (!config.containsKey(key)) {
       return ScheduleComparator.FIFO;
     }
@@ -118,6 +123,19 @@ public class FakeConfigManager extends ConfigManager {
     return (Double)config.get(key);
   }
 
+  public void setMinPreemptPeriod(long val) {
+    config.put(PROPERTY.MIN_PREEMPT_PERIOD.toString(), val);
+  }
+
+  @Override
+  public long getMinPreemptPeriod() {
+    String key = PROPERTY.MIN_PREEMPT_PERIOD.toString();
+    if (!config.containsKey(key)) {
+      return ConfigManager.DEFAULT_MIN_PREEMPT_PERIOD;
+    }
+    return (Long) config.get(key);
+  }
+
   public void setStarvingTimeForShare(long val) {
     config.put(PROPERTY.STARVING_TIME_FOR_SHARE.toString(), val);
   }
@@ -126,7 +144,7 @@ public class FakeConfigManager extends ConfigManager {
   public long getStarvingTimeForShare() {
     String key = PROPERTY.STARVING_TIME_FOR_SHARE.toString();
     if (!config.containsKey(key)) {
-      return Long.MAX_VALUE;
+      return ConfigManager.DEFAULT_STARVING_TIME_FOR_SHARE;
     }
     return (Long)config.get(key);
   }
@@ -139,7 +157,7 @@ public class FakeConfigManager extends ConfigManager {
   public long getStarvingTimeForMinimum() {
     String key = PROPERTY.STARVING_TIME_FOR_MIN.toString();
     if (!config.containsKey(key)) {
-      return Long.MAX_VALUE;
+      return ConfigManager.DEFAULT_STARVING_TIME_FOR_MINIMUM;
     }
     return (Long)config.get(key);
   }

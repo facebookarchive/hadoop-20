@@ -24,8 +24,7 @@ import java.util.Date;
 import org.apache.hadoop.fs.FsShell.CmdHandler;
 
 class FsShellTouch {
-
-  static String TOUCH_USAGE = "-touch [-acdm] PATH...";
+  static String TOUCH_USAGE = "-touch [-acdmu] PATH...";
 
   protected static final SimpleDateFormat dateFmt =
     new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
@@ -36,6 +35,7 @@ class FsShellTouch {
     boolean setATime;
     boolean setMTime;
     Date newDate;
+    Long unixTime;
 
     TouchWorker(FileSystem fs) {
       this.fs = fs;
@@ -43,10 +43,12 @@ class FsShellTouch {
       this.setATime = false;
       this.setMTime = false;
       this.newDate = null;
+      this.unixTime = null;
     }
 
     void touch(String src) throws IOException {
       Path f = new Path(src);
+      fs = f.getFileSystem(fs.getConf());
       boolean justCreated = false;
 
       if (!fs.exists(f)) {         // file doesn't exist
@@ -63,19 +65,25 @@ class FsShellTouch {
         return;
       }
 
-      Date d = newDate;
-      if (d == null) {
+      Long ut = null;
+      if (newDate != null) {
+        ut = newDate.getTime();
+      }
+      if (ut == null && unixTime != null) {
+        ut = unixTime;
+      }
+      if (ut == null) {
         // Date was not specified. Using current date for each file.
-        d = new Date();
+        ut = new Date().getTime();
       }
 
       long atime = -1;
       long mtime = -1;
       if (setATime) {
-        atime = d.getTime();
+        atime = ut;
       }
       if (setMTime) {
-        mtime = d.getTime();
+        mtime = ut;
       }
       fs.setTimes(f, mtime, atime);
     }
@@ -121,6 +129,13 @@ class FsShellTouch {
               break;
             case 'c':
               worker.createFiles = false;
+              break;
+            case 'u':
+              if (i != arg.length() - 1 || startIndex == argv.length - 1) {
+                throw new IOException("expected timestamp after 'u' option");
+              }
+              ++startIndex;
+              worker.unixTime = Long.parseLong(argv[startIndex]);
               break;
             case 'd':
               if (i != arg.length() - 1 || startIndex == argv.length - 1) {

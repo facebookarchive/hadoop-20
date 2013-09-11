@@ -5,7 +5,32 @@
 
 <configuration>
 
- <property>
+<property>                                                                  
+  <name>cm.heartbeat.delay.max</name>                               
+  <value>300000</value>     
+</property>  
+
+<property>                                                                  
+  <name>cm.config.reload.period.ms</name>                               
+  <value>5000</value>     
+  <description>How often to reload the config</description>      
+</property>  
+
+<property>                                                                  
+  <name>cm.pools.config.file</name>                               
+  <value>coronapools.xml</value>     
+  <description>Pools config file.</description>      
+</property>  
+
+<!--
+<property>
+  <name>cm.pools.config.document.generator</name>
+  <value>org.apache.hadoop.corona.EmptyPoolsConfigDocumentGenerator</value>
+  <description>Document generator to create the pools files.</description>
+</property>
+-->
+
+<property>
   <name>mapred.jobtracker.retirejob.interval</name>
   <value>3600000</value>
   <description>Time to retire the jobs.  Defaulting to one hour.</description>
@@ -21,6 +46,12 @@
   <name>mapred.job.tracker.http.address</name>
   <value>0.0.0.0:0</value>
   <description>JobTracker address. For Corona - bind to any free port
+  </description>
+</property>
+<property>
+  <name>cm.configured.pools.only</name>
+  <value>true</value>
+  <description>Only allow configured pools.
   </description>
 </property>
 <property>
@@ -46,6 +77,12 @@
   <name>cm.server.http.address</name>
   <value>localhost:50032</value>
   <description>The host and port for Corona ClusterManager web server
+  </description>
+</property>
+<property>
+  <name>cm.sessions.num.retired</name>
+  <value>4000</value>
+  <description>Number of retired sessions to keep in Cluster Manager memory.
   </description>
 </property>
 <property>
@@ -124,4 +161,100 @@
   <value>true</value>
 </property>
 
+<property>
+  <name>mapred.jobtracker.cgroup.mem.root</name>
+  <value>/cgroup/memory/jobtrackers</value>
+</property>
+
+<property>
+  <name>mapred.jobtracker.cgroup.mem</name>
+  <value>false</value>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.mem.root</name>
+  <value>/cgroup/memory/tasktrackers</value>
+  <description>The virtual file system for memory CGroup</description>
+</property>
+
+<property>
+  <name>mapred.container.cgroup.mem.root</name>
+  <value>/cgroup/memory/task_container</value>
+</property>
+
+
+<property>
+  <name>mapred.tasktracker.cgroup.mem</name>
+  <value>false</value>
+  <description>If a tasktracker shall set up memory CGroup</description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.mem.tasklimit</name>
+  <value>false</value>
+  <description>If we shall setup CGroup memory limit for individual tasks
+  </description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memwatcher</name>
+  <value>false</value>
+  <description>If a tasktracker shall set up memory CGroup watcher</description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.interval</name>
+  <value>2000</value>
+  <description>Sleep interval for CGroupMemoryWatcher</description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.mininterval</name>
+  <value>200</value>
+  <description>Min sleep interval for CGroupMemoryWatcher</description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.oldtask.threshold</name>
+  <value>864000000</value>
+  <description>If a task has been in the CGroup longer than this,
+    it will be removed
+  </description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.low.threshold</name>
+  <value>536870912</value>
+  <description>The threshold that a tasktracker group will be treated
+    as close to OOM
+  </description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.task.threshold</name>
+  <value>65536</value>
+  <description>
+  </description>The threshold that a task will be treated as close to OOM
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.memory.historysize</name>
+  <value>50</value>
+  <description>
+  </description>Number of recent killed tasks to keep for the tasktracker page
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.cpu</name>
+  <value>false</value>
+  <description>If a tasktracker shall setup CPU CGroup
+  </description>
+</property>
+
+<property>
+  <name>mapred.tasktracker.cgroup.cpu.root</name>
+  <value>/cgroup/cpu/tasktrackers</value>
+  <description>The virtual file system for CPU CGroup
+  </description>
+</property>
 </configuration>

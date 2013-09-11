@@ -32,6 +32,7 @@ import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.mapred.TaskCompletionEvent;
 import org.apache.hadoop.mapred.LocalJobRunner;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
@@ -273,6 +274,12 @@ public class TestLocalRunner extends TestCase {
     }
 
     job.waitForCompletion(true);
+
+    TaskCompletionEvent[] taskCompletionEvents = job.getTaskCompletionEvents(0);
+    assertTrue(taskCompletionEvents.length == 6);
+    for(int i = 0; i < 6; i++) {
+      assertTrue(taskCompletionEvents[i].getTaskStatus() == TaskCompletionEvent.Status.SUCCEEDED);
+    }
 
     verifyOutput(outputPath);
   }

@@ -76,7 +76,12 @@ public class LayoutVersion {
     RESERVED_REL23(-34, -30, "Reserved for release 0.23"),
     FEDERATION(-35, "Support for namenode federation"),
     LEASE_REASSIGNMENT(-36, "Support for persisting lease holder reassignment"),
-    STORED_TXIDS(-37, "Transaction IDs are stored in edits log and image files");
+    STORED_TXIDS(-37, "Transaction IDs are stored in edits log and image files"),
+    TXID_BASED_LAYOUT(-38, "File names in NN Storage are based on transaction IDs"), 
+    EDITLOG_OP_OPTIMIZATION(-39,
+        "Use LongWritable and ShortWritable directly instead of ArrayWritable of UTF8"),
+    HARDLINK(-40, "HardLink inforamation is stored in edits log and image files"),
+    SUPPORT_INLINE_CHECKSUM(-41, "Support inline checksum");
     
     final int lv;
     final int ancestorLV;

@@ -44,10 +44,12 @@ import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
+import org.apache.hadoop.metrics.util.MetricsLongValue;
+import org.apache.hadoop.raid.protocol.PolicyInfo;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -59,9 +61,11 @@ public class PlacementMonitor {
   /**
    * Maps number of neighbor blocks to number of blocks
    */
-  Map<ErasureCodeType, Map<Integer, Long>> blockHistograms;
+  Map<String, Map<Integer, Long>> blockHistograms;
+  Map<String, Map<Integer, Long>> blockHistogramsPerRack;
   Configuration conf;
-  private volatile Map<ErasureCodeType, Map<Integer, Long>> lastBlockHistograms;
+  private volatile Map<String, Map<Integer, Long>> lastBlockHistograms;
+  private volatile Map<String, Map<Integer, Long>> lastBlockHistogramsPerRack;
   private volatile long lastUpdateStartTime = 0L;
   private volatile long lastUpdateFinishTime = 0L;
   private volatile long lastUpdateUsedTime = 0L;
@@ -75,21 +79,27 @@ public class PlacementMonitor {
   
   RaidNodeMetrics metrics;
   BlockMover blockMover;
+  int blockMoveMinRepl = DEFAULT_BLOCK_MOVE_MIN_REPLICATION;
 
   final static String NUM_MOVING_THREADS_KEY = "hdfs.raid.block.move.threads";
   final static String SIMULATE_KEY = "hdfs.raid.block.move.simulate";
   final static String BLOCK_MOVE_QUEUE_LENGTH_KEY = "hdfs.raid.block.move.queue.length";
+  final static String BLOCK_MOVE_MIN_REPLICATION_KEY =
+      "hdfs.raid.block.move.min.replication";
   final static int DEFAULT_NUM_MOVING_THREADS = 10;
   final static int DEFAULT_BLOCK_MOVE_QUEUE_LENGTH = 30000;
   final static int ALWAYS_SUBMIT_PRIORITY = 3;
+  final static int DEFAULT_BLOCK_MOVE_MIN_REPLICATION = 2;
 
   PlacementMonitor(Configuration conf) throws IOException {
     this.conf = conf;
-    this.blockHistograms = createEmptyHistograms();
+    createEmptyHistograms();
     int numMovingThreads = conf.getInt(
         NUM_MOVING_THREADS_KEY, DEFAULT_NUM_MOVING_THREADS);
     int maxMovingQueueSize = conf.getInt(
         BLOCK_MOVE_QUEUE_LENGTH_KEY, DEFAULT_BLOCK_MOVE_QUEUE_LENGTH);
+    this.blockMoveMinRepl = conf.getInt(BLOCK_MOVE_MIN_REPLICATION_KEY,
+        DEFAULT_BLOCK_MOVE_MIN_REPLICATION);
 
     boolean simulate = conf.getBoolean(SIMULATE_KEY, true);
     blockMover = new BlockMover(
@@ -98,13 +108,13 @@ public class PlacementMonitor {
     this.metrics = RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
   }
 
-  private Map<ErasureCodeType, Map<Integer, Long>> createEmptyHistograms() {
-    Map<ErasureCodeType, Map<Integer, Long>> histo =
-        new HashMap<ErasureCodeType, Map<Integer, Long>>();
-    for (ErasureCodeType type : ErasureCodeType.values()) {
-      histo.put(type, new HashMap<Integer, Long>());
+  private void createEmptyHistograms() {
+    blockHistograms = new HashMap<String, Map<Integer, Long>>();
+    blockHistogramsPerRack = new HashMap<String, Map<Integer, Long>>();
+    for (Codec codec : Codec.getCodecs()) {
+      blockHistograms.put(codec.id, new HashMap<Integer, Long>());
+      blockHistogramsPerRack.put(codec.id, new HashMap<Integer, Long>());
     }
-    return new EnumMap<ErasureCodeType, Map<Integer, Long>>(histo);
   }
 
   public void start() {
@@ -125,9 +135,9 @@ public class PlacementMonitor {
 
   public void checkFile(FileSystem srcFs, FileStatus srcFile,
             FileSystem parityFs, Path partFile, HarIndex.IndexEntry entry,
-            ErasureCodeType code) throws IOException {
-    if (srcFile.getReplication() > 1) {
-      // We only check placement for the file with one replica
+            Codec codec, PolicyInfo policy) throws IOException {
+    if (srcFile.getReplication() > blockMoveMinRepl) {
+      // We only check placement for the file with 0..blockMoveMinRepl replicas.
       return;
     }
     if (srcFs.getUri().equals(parityFs.getUri())) {
@@ -136,7 +146,7 @@ public class PlacementMonitor {
       checkBlockLocations(
           getBlockInfos(srcFs, srcFile),
           getBlockInfos(parityFs, partFile, entry.startOffset, entry.length),
-          code, srcFile, resolver);
+          codec, policy, srcFile, resolver);
     } else { 
       // TODO: Move blocks in two clusters separately
       LOG.warn("Source and parity are in different file system. " +
@@ -147,19 +157,30 @@ public class PlacementMonitor {
 
   public void checkFile(FileSystem srcFs, FileStatus srcFile,
                         FileSystem parityFs, FileStatus parityFile,
-                        ErasureCodeType code)
+                        Codec codec, PolicyInfo policy)
       throws IOException {
-    if (srcFile.getReplication() > 1) {
-      // We only check placement for the file with one replica
+    
+    if (!codec.isDirRaid) {
+      if (srcFile.getReplication() > blockMoveMinRepl) {
+        // We only check placement for the file with 0..blockMoveMinRepl replicas.
+        return;
+      }
+    } 
+    List<BlockInfo> srcLstBI = getBlockInfos(srcFs, srcFile);
+    if (srcLstBI.size() == 0) 
       return;
+    if (codec.isDirRaid) {
+      if (srcLstBI.get(0).file.getReplication() > blockMoveMinRepl) {
+        return;
+      }
     }
     if (srcFs.equals(parityFs)) {
       BlockAndDatanodeResolver resolver = new BlockAndDatanodeResolver(
           srcFile.getPath(), srcFs, parityFile.getPath(), parityFs);
       checkBlockLocations(
-          getBlockInfos(srcFs, srcFile),
+          srcLstBI,
           getBlockInfos(parityFs, parityFile),
-          code, srcFile, resolver);
+          codec, policy, srcFile, resolver);
     } else {
       // TODO: Move blocks in two clusters separately
       LOG.warn("Source and parity are in different file systems. Skip");
@@ -197,8 +218,8 @@ public class PlacementMonitor {
 
   static class BlockInfo {
     final BlockLocation blockLocation;
-    final Path file;
-    BlockInfo(BlockLocation blockLocation, Path file) {
+    final FileStatus file;
+    BlockInfo(BlockLocation blockLocation, FileStatus file) {
       this.blockLocation = blockLocation;
       this.file = file;
     }
@@ -213,8 +234,25 @@ public class PlacementMonitor {
 
   List<BlockInfo> getBlockInfos(
     FileSystem fs, FileStatus stat) throws IOException {
-    return getBlockInfos(
-      fs, stat.getPath(), 0, stat.getLen());
+    if (stat.isDir()) {
+      return getDirBlockInfos(fs, stat.getPath());
+    } else {
+      return getBlockInfos(
+        fs, stat.getPath(), 0, stat.getLen());
+    }
+  }
+  
+  List<BlockInfo> getDirBlockInfos(FileSystem fs, Path dirPath)
+      throws IOException {
+    List<LocatedFileStatus> lfs = RaidNode.listDirectoryRaidLocatedFileStatus(conf,
+        fs, dirPath);
+    List<BlockInfo> result = new ArrayList<BlockInfo>();
+    for (LocatedFileStatus stat: lfs) {
+      for (BlockLocation loc : stat.getBlockLocations()) {
+        result.add(new BlockInfo(loc, stat));
+      }
+    }
+    return result;
   }
 
   List<BlockInfo> getBlockInfos(
@@ -226,7 +264,7 @@ public class PlacementMonitor {
     if (stat != null) {
       for (BlockLocation loc : stat.getBlockLocations()) {
         if (loc.getOffset() >= start && loc.getOffset() < end) {
-          result.add(new BlockInfo(loc, path));
+          result.add(new BlockInfo(loc, stat));
         }
       }
     }
@@ -234,19 +272,21 @@ public class PlacementMonitor {
   }
 
   void checkBlockLocations(List<BlockInfo> srcBlocks,
-      List<BlockInfo> parityBlocks, ErasureCodeType code,
+      List<BlockInfo> parityBlocks, Codec codec, PolicyInfo policy,
       FileStatus srcFile, BlockAndDatanodeResolver resolver) throws IOException {
     if (srcBlocks == null || parityBlocks == null) {
       return;
     }
-    int stripeLength = RaidNode.getStripeLength(conf);
-    int parityLength = code == ErasureCodeType.XOR ?
-        1 : RaidNode.rsParityLength(conf);
-    int numBlocks = (int)Math.ceil(1D * srcFile.getLen() /
-                                   srcFile.getBlockSize());
-    int numStripes = (int)Math.ceil(1D * (numBlocks) / stripeLength);
-
+    int stripeLength = codec.stripeLength;
+    int parityLength = codec.parityLength;
+    int numBlocks = 0;
+    int numStripes = 0;
+    numBlocks = srcBlocks.size();
+    numStripes = (int)RaidNode.numStripes(numBlocks, stripeLength);
+    
     Map<String, Integer> nodeToNumBlocks = new HashMap<String, Integer>();
+    Map<DatanodeInfo, Integer> rackToNumBlocks = 
+        new HashMap<DatanodeInfo, Integer>();
     Set<String> nodesInThisStripe = new HashSet<String>();
 
     for (int stripeIndex = 0; stripeIndex < numStripes; ++stripeIndex) {
@@ -255,12 +295,15 @@ public class PlacementMonitor {
           stripeIndex, srcBlocks, stripeLength, parityBlocks, parityLength);
 
       countBlocksOnEachNode(stripeBlocks, nodeToNumBlocks, nodesInThisStripe);
+      
+      countBlocksOnEachRack(nodeToNumBlocks, rackToNumBlocks, resolver);
 
       logBadFile(nodeToNumBlocks, stripeIndex, parityLength, srcFile);
 
-      updateBlockPlacementHistogram(nodeToNumBlocks, blockHistograms.get(code));
+      updateBlockPlacementHistogram(nodeToNumBlocks, rackToNumBlocks, 
+          blockHistograms.get(codec.id), blockHistogramsPerRack.get(codec.id));
 
-      submitBlockMoves(
+      submitBlockMoves(srcFile, stripeIndex, policy,
           nodeToNumBlocks, stripeBlocks, nodesInThisStripe, resolver);
 
     }
@@ -305,7 +348,7 @@ public class PlacementMonitor {
     }
     return stripeBlocks;
   }
-
+  
   static void countBlocksOnEachNode(List<BlockInfo> stripeBlocks,
       Map<String, Integer> nodeToNumBlocks,
       Set<String> nodesInThisStripe) throws IOException {
@@ -313,6 +356,7 @@ public class PlacementMonitor {
     nodesInThisStripe.clear();
     for (BlockInfo block : stripeBlocks) {
       for (String node : block.getNames()) {
+        
         Integer n = nodeToNumBlocks.get(node);
         if (n == null) {
           n = 0;
@@ -323,9 +367,40 @@ public class PlacementMonitor {
     }
   }
 
-  private static void updateBlockPlacementHistogram(
+  private void countBlocksOnEachRack(Map<String, Integer> nodeToNumBlocks, 
+      Map<DatanodeInfo, Integer> rackToNumBlocks,
+      BlockAndDatanodeResolver resolver) throws IOException {
+    rackToNumBlocks.clear();
+    
+    // calculate the number of blocks on each rack.
+    for (String node : nodeToNumBlocks.keySet()) {
+      DatanodeInfo nodeInfo = resolver.getDatanodeInfo(node);
+      int n = nodeToNumBlocks.get(node);
+      
+      boolean foundOnSameRack = false;
+      for (DatanodeInfo nodeOnRack : rackToNumBlocks.keySet()) {
+        if (blockMover.isOnSameRack(nodeInfo, nodeOnRack)) {
+          rackToNumBlocks.put(nodeOnRack, rackToNumBlocks.get(nodeOnRack) + n);
+          foundOnSameRack = true;
+          break;
+        }
+      }
+      
+      if (!foundOnSameRack) {
+        Integer v = rackToNumBlocks.get(nodeInfo);
+        if (v == null) {
+          v = 0;
+        }
+        rackToNumBlocks.put(nodeInfo, n + v);
+      }
+    }
+  }
+
+  private void updateBlockPlacementHistogram(
       Map<String, Integer> nodeToNumBlocks,
-      Map<Integer, Long> blockHistogram) {
+      Map<DatanodeInfo, Integer> rackToNumBlocks,
+      Map<Integer, Long> blockHistogram,
+      Map<Integer, Long> blockHistogramPerRack) {
     for (Integer numBlocks : nodeToNumBlocks.values()) {
       Long n = blockHistogram.get(numBlocks - 1);
       if (n == null) {
@@ -334,85 +409,180 @@ public class PlacementMonitor {
       // Number of neighbor blocks to number of blocks
       blockHistogram.put(numBlocks - 1, n + 1);
     }
+    
+    for (Integer numBlocks : rackToNumBlocks.values()) {
+      Long n = blockHistogramPerRack.get(numBlocks - 1);
+      if (n == null) {
+        n = 0L;
+      }
+      // Number of neighbor blocks to number of blocks
+      blockHistogramPerRack.put(numBlocks - 1, n + 1);
+    }
   }
 
-  private void submitBlockMoves(Map<String, Integer> nodeToNumBlocks,
+  private void submitBlockMoves(FileStatus srcFile, int stripeIndex,
+      PolicyInfo policy,
+      Map<String, Integer> nodeToNumBlocks,
       List<BlockInfo> stripeBlocks, Set<String> excludedNodes,
       BlockAndDatanodeResolver resolver) throws IOException {
-    // For all the nodes that has more than 2 blocks, find and move the blocks
+    
+    if (!shouldSubmitMove(policy, nodeToNumBlocks, stripeBlocks)) {
+      LOG.warn("We skip the block movement for " + srcFile + ", stripe index " 
+          + stripeIndex);
+      return;
+    }
+    
+    // Initialize resolver
+    for (BlockInfo block: stripeBlocks) {
+      resolver.initialize(block.file.getPath(), resolver.srcFs);
+    }
+   
+    Set<DatanodeInfo> excludedDatanodes = new HashSet<DatanodeInfo>();
+    for (String name : excludedNodes) {
+      excludedDatanodes.add(resolver.getDatanodeInfo(name));
+    }
+    Map<String, Integer> numBlocksOnSameRack = getNodeToNumBlocksOnSameRack(
+        nodeToNumBlocks, resolver);
+    Set<String> processedNode = new HashSet<String>();
+    // For all the nodes/racks that has more than 2 blocks, find and move the blocks
     // so that there are only one block left on this node.
     for (String node : nodeToNumBlocks.keySet()) {
-      int numberOfNeighborBlocks = nodeToNumBlocks.get(node) - 1;
-      if (numberOfNeighborBlocks == 0) {
-        // Most of the time we will be hitting this
+      int numBlocks = numBlocksOnSameRack.get(node) - 1;
+      if (processedNode.contains(node) || numBlocks == 0) {
+        continue;
+      }
+      DatanodeInfo datanode = resolver.getDatanodeInfo(node);            
+      if (datanode == null) {
+        LOG.warn("Couldn't find information for " + node + " in resolver");
         continue;
       }
       boolean skip = true;
       for (BlockInfo block : stripeBlocks) {
         for (String otherNode : block.getNames()) {
-          if (node.equals(otherNode)) {
+          DatanodeInfo replicaNode = resolver.getDatanodeInfo(otherNode);
+          if (node.equals(otherNode) ||
+                  blockMover.isOnSameRack(datanode, replicaNode)) {
             if (skip) {
               // leave the first block where it is
               skip = false;
-              break;
+              continue;
             }
-            int priority = numberOfNeighborBlocks;
+            
+            int priority = numBlocks;
             LocatedBlockWithMetaInfo lb = resolver.getLocatedBlock(block);
-            DatanodeInfo datanode = resolver.getDatanodeInfo(node);
-            Set<DatanodeInfo> excludedDatanodes = new HashSet<DatanodeInfo>();
-            for (String name : excludedNodes) {
-              excludedDatanodes.add(resolver.getDatanodeInfo(name));
+            processedNode.add(otherNode);
+            DatanodeInfo target = blockMover.chooseTargetNodes(excludedDatanodes);
+            excludedDatanodes.add(target);
+            if (lb != null) {
+              blockMover.move(lb, replicaNode, target, excludedDatanodes, priority,
+                  lb.getDataProtocolVersion(), lb.getNamespaceID());
             }
-            blockMover.move(lb, datanode, excludedDatanodes, priority,
-                lb.getDataProtocolVersion(), lb.getNamespaceID());
-            break;
           }
         }
       }
     }
   }
+  
+  /**
+   * We will not submit more block move if the namenode hasn't deleted the 
+   * over replicated blocks yet.
+   */
+  private boolean shouldSubmitMove(PolicyInfo policy,
+      Map<String, Integer> nodeToNumBlocks,
+      List<BlockInfo> stripeBlocks) {
+    
+    if (policy == null) {
+      return true;
+    }
+    int targetRepl = Integer.parseInt(policy.getProperty("targetReplication"));
+    int parityRepl = Integer.parseInt(policy.getProperty("metaReplication"));
 
+    Codec codec = Codec.getCodec(policy.getCodecId());
+    int numParityBlks = codec.parityLength;
+    int numSrcBlks = stripeBlocks.size() - numParityBlks;
+    int expectNumReplicas = numSrcBlks * targetRepl + numParityBlks * parityRepl;
+    
+    int actualNumReplicas = 0;
+    for (int num : nodeToNumBlocks.values()) {
+      actualNumReplicas += num;
+    }
+    
+    if (actualNumReplicas != expectNumReplicas) {
+      String msg = "Expected number of replicas in the stripe: " + expectNumReplicas 
+          + ", but actual number is: " + actualNumReplicas + ". ";
+      if (stripeBlocks.size() > 0) {
+        msg += "filePath: " + stripeBlocks.get(0).file.getPath();
+      }
+      LOG.warn(msg);
+    }
+    return actualNumReplicas == expectNumReplicas;
+  }
+
+  private Map<String, Integer> getNodeToNumBlocksOnSameRack(
+      Map<String, Integer> nodeToNumBlocks, BlockAndDatanodeResolver resolver) 
+          throws IOException {
+    Map<String, Integer> blocksOnSameRack = new HashMap<String, Integer>();
+    for (Entry<String, Integer> e : nodeToNumBlocks.entrySet()) {
+      int n = e.getValue();
+      for (Entry<String, Integer> e1 : nodeToNumBlocks.entrySet()) {
+        if (e.getKey().equals(e1.getKey())) {
+          continue;
+        }
+        if (blockMover.isOnSameRack(resolver.getDatanodeInfo(e.getKey()), 
+            resolver.getDatanodeInfo(e1.getKey()))) {
+          n += e1.getValue();
+        }
+      }
+      
+      blocksOnSameRack.put(e.getKey(), n);
+    }
+    return blocksOnSameRack;
+  }
+  
   /**
    * Report the placement histogram to {@link RaidNodeMetrics}. This should only
    * be called right after a complete parity file traversal is done.
    */
   public void clearAndReport() {
     synchronized (metrics) {
-      int extra = 0;
-      for (Entry<Integer, Long> e :
-          blockHistograms.get(ErasureCodeType.RS).entrySet()) {
-        if (e.getKey() < metrics.misplacedRs.length - 1) {
-          metrics.misplacedRs[e.getKey()].set(e.getValue());
-        } else {
-          extra += e.getValue();
+      for (Codec codec : Codec.getCodecs()) {
+        String id = codec.id;
+        int extra = 0;
+        Map<Integer, MetricsLongValue> codecStatsMap =
+          metrics.codecToMisplacedBlocks.get(id);
+        // Reset the values.
+        for (Entry<Integer, MetricsLongValue> e: codecStatsMap.entrySet()) {
+          e.getValue().set(0);
         }
-      }
-      metrics.misplacedRs[metrics.misplacedRs.length - 1].set(extra);
-      extra = 0;
-      for (Entry<Integer, Long> e :
-          blockHistograms.get(ErasureCodeType.XOR).entrySet()) {
-        if (e.getKey() < metrics.misplacedXor.length - 1) {
-          metrics.misplacedXor[e.getKey()].set(e.getValue());
-        } else {
-          extra += e.getValue();
+        for (Entry<Integer, Long> e : blockHistograms.get(id).entrySet()) {
+          if (e.getKey() < RaidNodeMetrics.MAX_MONITORED_MISPLACED_BLOCKS - 1) {
+            MetricsLongValue v = codecStatsMap.get(e.getKey());
+            v.set(e.getValue());
+          } else {
+            extra += e.getValue();
+          }
         }
+        MetricsLongValue v = codecStatsMap.get(
+            RaidNodeMetrics.MAX_MONITORED_MISPLACED_BLOCKS - 1);
+        v.set(extra);
       }
-      metrics.misplacedXor[metrics.misplacedXor.length - 1].set(extra);
     }
     lastBlockHistograms = blockHistograms;
+    lastBlockHistogramsPerRack = blockHistogramsPerRack;
     lastUpdateFinishTime = RaidNode.now();
     lastUpdateUsedTime = lastUpdateFinishTime - lastUpdateStartTime;
     LOG.info("Reporting metrices:\n" + toString());
-    blockHistograms = createEmptyHistograms();
+    createEmptyHistograms();
   }
 
   @Override
   public String toString() {
-    if (lastBlockHistograms == null) {
+    if (lastBlockHistograms == null || lastBlockHistogramsPerRack == null) {
       return "Not available";
     }
     String result = "";
-    for (ErasureCodeType code : ErasureCodeType.values()) {
+    for (Codec codec : Codec.getCodecs()) {
+      String code = codec.id;
       Map<Integer, Long> histo = lastBlockHistograms.get(code);
       result += code + " Blocks\n";
       List<Integer> neighbors = new ArrayList<Integer>();
@@ -423,22 +593,46 @@ public class PlacementMonitor {
         result += i + " co-localted blocks:" + numBlocks + "\n";
       }
     }
+    
+    result += "\n";
+    for (Codec codec : Codec.getCodecs()) {
+      String code = codec.id;
+      Map<Integer, Long> histo = lastBlockHistogramsPerRack.get(code);
+      result += code + " Blocks\n";
+      List<Integer> neighbors = new ArrayList<Integer>();
+      neighbors.addAll(histo.keySet());
+      Collections.sort(neighbors);
+      for (Integer i : neighbors) {
+        Long numBlocks = histo.get(i);
+        result += i + " rack co-localted blocks:" + numBlocks + "\n";
+      }
+    }
     return result;
   }
 
   public String htmlTable() {
+    return htmlTable(lastBlockHistograms);
+  }
+  
+  public String htmlTablePerRack() {
+    return htmlTable(lastBlockHistogramsPerRack);
+  }
+  
+  public String htmlTable(
+      Map<String, Map<Integer, Long>> lastBlockHistograms) {
     if (lastBlockHistograms == null) {
       return "Not available";
     }
-    int max = computeMaxColocatedBlocks();
+    int max = computeMaxColocatedBlocks(lastBlockHistograms);
     String head = "";
     for (int i = 0; i <= max; ++i) {
       head += JspUtils.td(i + "");
     }
     head = JspUtils.tr(JspUtils.td("CODE") + head);
     String result = head;
-    for (ErasureCodeType code : ErasureCodeType.values()) {
-      String row = JspUtils.td(code.toString());
+    for (Codec codec : Codec.getCodecs()) {
+      String code = codec.id;
+      String row = JspUtils.td(code);
       Map<Integer, Long> histo = lastBlockHistograms.get(code);
       for (int i = 0; i <= max; ++i) {
         Long numBlocks = histo.get(i);
@@ -459,9 +653,11 @@ public class PlacementMonitor {
     return lastUpdateUsedTime;
   }
 
-  private int computeMaxColocatedBlocks() {
+  private int computeMaxColocatedBlocks
+              (Map<String, Map<Integer, Long>> lastBlockHistograms) {
     int max = 0;
-    for (ErasureCodeType code : ErasureCodeType.values()) {
+    for (Codec codec : Codec.getCodecs()) {
+      String code = codec.id;
       Map<Integer, Long> histo = lastBlockHistograms.get(code);
       for (Integer i : histo.keySet()) {
         max = Math.max(i, max);
@@ -481,15 +677,16 @@ public class PlacementMonitor {
     final FileSystem parityFs;
 
     private boolean inited = false;
-    private Map<String, DatanodeInfo> nameToDatanodeInfo = null;
+    private Map<String, DatanodeInfo> nameToDatanodeInfo = 
+        new HashMap<String, DatanodeInfo>();
     private Map<Path, Map<Long, LocatedBlockWithMetaInfo>>
-      pathAndOffsetToLocatedBlock = null;
-
+      pathAndOffsetToLocatedBlock =
+        new HashMap<Path, Map<Long, LocatedBlockWithMetaInfo>>();
     // For test
     BlockAndDatanodeResolver() {
       this.src = null;
       this.srcFs = null;
-      this.parity =null;
+      this.parity = null;
       this.parityFs = null;
     }
 
@@ -502,9 +699,10 @@ public class PlacementMonitor {
     }
 
     public LocatedBlockWithMetaInfo getLocatedBlock(BlockInfo blk) throws IOException {
-      checkInitialized();
+      checkParityInitialized();
+      initialize(blk.file.getPath(), srcFs);
       Map<Long, LocatedBlockWithMetaInfo> offsetToLocatedBlock =
-          pathAndOffsetToLocatedBlock.get(blk.file);
+          pathAndOffsetToLocatedBlock.get(blk.file.getPath());
       if (offsetToLocatedBlock != null) {
         LocatedBlockWithMetaInfo lb = offsetToLocatedBlock.get(
             blk.blockLocation.getOffset());
@@ -514,34 +712,32 @@ public class PlacementMonitor {
       }
       // This should not happen
       throw new IOException("Cannot find the " + LocatedBlock.class +
-          " for the block in file:" + blk.file +
+          " for the block in file:" + blk.file.getPath() +
           " offset:" + blk.blockLocation.getOffset());
     }
 
     public DatanodeInfo getDatanodeInfo(String name) throws IOException {
-      checkInitialized();
+      checkParityInitialized();
       return nameToDatanodeInfo.get(name);
     }
 
-    private void checkInitialized() throws IOException{
+    private void checkParityInitialized() throws IOException{
       if (inited) {
         return;
       }
-      initialize();
+      initialize(parity, parityFs);
       inited = true;
     }
-    private void initialize() throws IOException {
-      pathAndOffsetToLocatedBlock =
-          new HashMap<Path, Map<Long, LocatedBlockWithMetaInfo>>();
-      VersionedLocatedBlocks srcLbs = getLocatedBlocks(src, srcFs);
-      VersionedLocatedBlocks parityLbs = getLocatedBlocks(parity, parityFs);
+    
+    public void initialize(Path path, FileSystem fs) throws IOException {
+      if (pathAndOffsetToLocatedBlock.containsKey(path)) {
+        return;
+      }
+      VersionedLocatedBlocks pathLbs = getLocatedBlocks(path, fs);
       pathAndOffsetToLocatedBlock.put(
-          src, createOffsetToLocatedBlockMap(srcLbs));
-      pathAndOffsetToLocatedBlock.put(
-          parity, createOffsetToLocatedBlockMap(parityLbs));
+          path, createOffsetToLocatedBlockMap(pathLbs));
 
-      nameToDatanodeInfo = new HashMap<String, DatanodeInfo>();
-      for (LocatedBlocks lbs : Arrays.asList(srcLbs, parityLbs)) {
+      for (LocatedBlocks lbs : Arrays.asList(pathLbs)) {
         for (LocatedBlock lb : lbs.getLocatedBlocks()) {
           for (DatanodeInfo dn : lb.getLocations()) {
             nameToDatanodeInfo.put(dn.getName(), dn);

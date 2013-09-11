@@ -104,7 +104,7 @@ public class INodeDirectoryWithQuota extends INodeDirectory {
   /** Get the number of names in the subtree rooted at this directory
    * @return the size of the subtree rooted at this directory
    */
-  long numItemsInTree() {
+  public long numItemsInTree() {
     return nsCount;
   }
   
@@ -120,16 +120,6 @@ public class INodeDirectoryWithQuota extends INodeDirectory {
   void updateNumItemsInTree(long nsDelta, long dsDelta) {
     nsCount += nsDelta;
     diskspace += dsDelta;
-  }
-
-  /** Update the size of the tree
-   * 
-   * @param nsDelta the change of the tree size
-   * @param dsDelta change to disk space occupied
-   **/
-  void unprotectedUpdateNumItemsInTree(long nsDelta, long dsDelta) {
-    nsCount = nsCount + nsDelta;
-    diskspace = diskspace + dsDelta;
   }
   
   /** 

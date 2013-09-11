@@ -17,54 +17,107 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import junit.framework.TestCase;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.MiniDFSCluster;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Matchers.anyObject;
+import static org.mockito.Matchers.anyString;
+import static org.mockito.Matchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
 
-import static org.mockito.Matchers.anyObject;
-import static org.mockito.Matchers.anyString;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.eq;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.spy;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
+import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.junit.Test;
 
-public class TestLeaseManager extends TestCase {
+public class TestLeaseManager{
   public static final Log LOG = LogFactory.getLog(TestLeaseManager.class);
+  
+  public static void createUnderConstructionFile(FileSystem fs, Path path) throws IOException {
+    FSDataOutputStream stm = fs
+        .create(path, true, 4096, (short) 1, (long) 1024);
+    stm.writeBytes("test data");
+  }
+  
+  @Test
+  public void testLeaseManagerWithRename() throws IOException {
+    Configuration conf = new Configuration();
+    conf.setFloat("fs.trash.interval", 60);
+    MiniDFSCluster cluster = null;
+    try {
+      cluster = new MiniDFSCluster(conf, 0, true, null);
+      DistributedFileSystem fs = DFSUtil.convertToDFS(cluster.getFileSystem());
+      LeaseManager manager = cluster.getNameNode().getNamesystem().leaseManager;
+      Path src = new Path("/test/testRename");
+      createUnderConstructionFile(fs, src);
+      
+      // rename to file location
+      fs.rename(src, new Path("/test/testRename2"));
+      assertTrue(fs.exists(new Path("/test/testRename2")));
+      // verify the lease
+      assertNotNull("Can not find the lease.", manager.getLeaseByPath("/test/testRename2"));
+      
+      // rename to the dir location
+      fs.rename(new Path("/test/testRename2"), new Path("/"));
+      assertTrue(fs.exists(new Path("/testRename2")));
+      // verify the lease
+      assertNotNull("Can not find the lease.", manager.getLeaseByPath("/testRename2"));
+
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+    }
+  }
 
   /*
    * test case: two leases are added for a singler holder, should use
    * the internalReleaseOne method
    */
+  @Test
   public void testMultiPathLeaseRecovery()
-    throws IOException, InterruptedException {
+      throws IOException, InterruptedException {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 3, true, null);
-    NameNode namenode = cluster.getNameNode();
-    FSNamesystem spyNamesystem = spy(namenode.getNamesystem());
-    LeaseManager leaseManager = new LeaseManager(spyNamesystem);
+    MiniDFSCluster cluster = null;
+    try {
+      cluster = new MiniDFSCluster(conf, 3, true, null);
+      NameNode namenode = cluster.getNameNode();
+      FSNamesystem spyNamesystem = spy(namenode.getNamesystem());
+      LeaseManager leaseManager = new LeaseManager(spyNamesystem);
 
-    spyNamesystem.leaseManager = leaseManager;
-    spyNamesystem.lmthread.interrupt();
+      spyNamesystem.leaseManager = leaseManager;
+      spyNamesystem.lmthread.interrupt();
 
-    String holder = "client-1";
-    String path1 = "/file-1";
-    String path2 = "/file-2";
+      String holder = "client-1";
+      String path1 = "/file-1";
+      String path2 = "/file-2";
 
-    leaseManager.setLeasePeriod(1, 2);
-    leaseManager.addLease(holder, path1, System.currentTimeMillis());
-    leaseManager.addLease(holder, path2, System.currentTimeMillis());
-    Thread.sleep(1000);
+      leaseManager.setLeasePeriod(1, 2);
+      leaseManager.addLease(holder, path1, System.currentTimeMillis());
+      leaseManager.addLease(holder, path2, System.currentTimeMillis());
+      Thread.sleep(1000);
 
-    synchronized (spyNamesystem) { // checkLeases is always called with FSN lock
-      leaseManager.checkLeases();
+      synchronized (spyNamesystem) { // checkLeases is always called with FSN lock
+        leaseManager.checkLeases();
+      }
+
+      verify(spyNamesystem).internalReleaseLeaseOne((LeaseManager.Lease)anyObject(), eq("/file-1"), eq(false));
+      verify(spyNamesystem).internalReleaseLeaseOne((LeaseManager.Lease)anyObject(), eq("/file-2"), eq(false));
+      verify(spyNamesystem, never()).internalReleaseLease((LeaseManager.Lease)anyObject(), anyString(), (INodeFileUnderConstruction)anyObject());
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
     }
-
-    verify(spyNamesystem).internalReleaseLeaseOne((LeaseManager.Lease)anyObject(), eq("/file-1"), eq(false));
-    verify(spyNamesystem).internalReleaseLeaseOne((LeaseManager.Lease)anyObject(), eq("/file-2"), eq(false));
-    verify(spyNamesystem, never()).internalReleaseLease((LeaseManager.Lease)anyObject(), anyString(), (INodeFileUnderConstruction)anyObject());
   }
 }

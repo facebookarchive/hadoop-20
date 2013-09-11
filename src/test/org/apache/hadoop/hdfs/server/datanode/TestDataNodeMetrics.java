@@ -24,6 +24,9 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.conf.Configuration;
 import org.junit.Before;
 import junit.framework.TestCase;
@@ -39,6 +42,7 @@ public class TestDataNodeMetrics extends TestCase {
   protected void setUp() throws Exception {
     super.setUp();
     final Configuration conf = new Configuration();
+    conf.setLong("dfs.datanode.thread.liveness.threshold", 5000);
     init(conf);
   }
 
@@ -53,7 +57,7 @@ public class TestDataNodeMetrics extends TestCase {
     if (cluster != null) {
       cluster.shutdown();
     }
-    conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
+    //conf.setBoolean(SimulatedFSDataset.CONFIG_PROPERTY_SIMULATED, true);
     cluster = new MiniDFSCluster(conf, 1, true, null);
     cluster.waitClusterUp();
     fileSystem = cluster.getFileSystem();
@@ -75,6 +79,30 @@ public class TestDataNodeMetrics extends TestCase {
 
     assertEquals(LONG_FILE_LEN, metrics.bytesWritten.getCurrentIntervalValue());
 
+    metrics.doUpdates(null);
     assertTrue(metrics.bytesWrittenLatency.getMaxTime() > 0);
   }
+  
+  public void testThreadLivenessMetrics() throws Exception {
+    Thread.sleep(5000);
+    TestCase.assertEquals(1, metrics.threadActiveness.get());
+    
+    InjectionHandler.set(new InjectionHandler() {
+      @Override 
+      protected void _processEvent(InjectionEventI event, Object... args) {
+        if (event == InjectionEvent.DATAXEIVER_SERVER_PRE_ACCEPT) {
+          try {
+            Thread.sleep(10000);
+          } catch (InterruptedException e) {
+            // TODO Auto-generated catch block
+            e.printStackTrace();
+          }
+        }
+      }
+    });
+    
+    Thread.sleep(7000);
+    TestCase.assertEquals(0, metrics.threadActiveness.get());
+    
+  }  
 }

@@ -29,7 +29,7 @@ import org.apache.hadoop.io.WritableFactory;
  * A block with its location and data transfer version number.
  */
 public class VersionedLocatedBlock extends LocatedBlock {
-  private int dataProtocolVersion = -1;  // data transfer version number
+  protected int dataProtocolVersion = -1;  // data transfer version number
 
   VersionedLocatedBlock() {
   }

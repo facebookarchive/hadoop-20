@@ -18,102 +18,151 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
 import java.io.IOException;
-import java.io.OutputStream;
 
-import org.apache.hadoop.io.Writable;
+import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingRate;
+import org.apache.jasper.compiler.JspUtil;
 
 /**
  * A generic abstract class to support journaling of edits logs into 
  * a persistent storage.
  */
-abstract class EditLogOutputStream extends OutputStream {
+public abstract class EditLogOutputStream {
   // these are statistics counters
   private long numSync;        // number of sync(s) to disk
   private long totalTimeSync;  // total time to sync
   public MetricsTimeVaryingRate sync;
 
-  EditLogOutputStream() throws IOException {
+  public EditLogOutputStream() throws IOException {
     numSync = totalTimeSync = 0;
   }
-
-  /**
-   * Get this stream name.
+  
+  /** 
+   * Get this stream name. 
    * 
    * @return name of the stream
-   */
-  abstract String getName();
-
-  /** {@inheritDoc} */
-  abstract public void write(int b) throws IOException;
+   */    
+  abstract public String getName();
 
   /**
-   * Write edits log record into the stream. The record is represented by
-   * operation name and an array of Writable arguments.
+   * Write edits log operation to the stream.
    * 
-   * @param op
-   *          an {@link FSEditOp} to write
-   * @param writables
-   *          array of Writable arguments
+   * @param op operation
    * @throws IOException
    */
-  abstract void write(FSEditOp op, Writable... writables) throws IOException;
-
+  abstract public void write(FSEditLogOp op) throws IOException;
+  
+  /**
+   * Write a transaction to the edit log in serialized form.
+   *
+   * @param bytes the bytes of the transaction to write.
+   * @param offset offset in the bytes to write from
+   * @param length number of bytes to write
+   * @param txid transaction id
+   * @throws IOException
+   */
+  abstract public void writeRawOp(byte[] bytes, int offset, int length, long txid)
+      throws IOException;
+  
+  /**
+   * Write raw data to an edit log. This data should already have
+   * the transaction ID, checksum, etc included. It is for use
+   * within the JournalNode when replicating edits from the
+   * NameNode.
+   *
+   * @param bytes the bytes to write.
+   * @param offset offset in the bytes to write from
+   * @param length number of bytes to write
+   * @throws IOException
+   */
+  abstract public void writeRaw(byte[] bytes, int offset, int length)
+      throws IOException;
+  
   /**
    * Create and initialize new edits log storage.
    * 
    * @throws IOException
    */
-  abstract void create() throws IOException;
+  abstract public void create() throws IOException;
 
   /** {@inheritDoc} */
   abstract public void close() throws IOException;
-
+  
   /**
    * All data that has been written to the stream so far will be flushed.
    * New data can be still written to the stream while flushing is performed.
    */
-  abstract void setReadyToFlush() throws IOException;
+  abstract public void setReadyToFlush() throws IOException;
 
   /**
    * Flush and sync all data that is ready to be flush 
    * {@link #setReadyToFlush()} into underlying persistent store.
    * @throws IOException
    */
-  abstract protected void flushAndSync() throws IOException;
+  abstract protected void flushAndSync(boolean durable) throws IOException;
 
+  public void flush() throws IOException {
+    flush(true);
+  }
+  
   /**
    * Flush data to persistent store.
    * Collect sync metrics.
    */
-  public void flush() throws IOException {
+  public void flush(boolean durable) throws IOException {
     numSync++;
-    long start = FSNamesystem.now();
-    flushAndSync();
-    long end = FSNamesystem.now();
-    totalTimeSync += (end - start);
+    long start = System.nanoTime();
+    flushAndSync(durable);
+    long time = DFSUtil.getElapsedTimeMicroSeconds(start);
+    totalTimeSync += time;
     if (sync != null) {
-      sync.inc(end - start);
+      sync.inc(time);
     }
   }
-
+  
   /**
    * Return the size of the current edits log.
    * Length is used to check when it is large enough to start a checkpoint.
    */
-  abstract long length() throws IOException;
-
+  abstract public long length() throws IOException;
+  
   /**
    * Return total time spent in {@link #flushAndSync()}
    */
-  long getTotalSyncTime() {
+  public long getTotalSyncTime() {
     return totalTimeSync;
   }
 
   /**
    * Return number of calls to {@link #flushAndSync()}
    */
-  long getNumSync() {
+  public long getNumSync() {
     return numSync;
+  }
+
+  /**
+   * Aborts this stream
+   */
+  public void abort() throws IOException {
+    
+  }
+  
+  /**
+   * Implement the policy when to automatically sync the buffered edits log
+   * The buffered edits can be flushed when the buffer becomes full or
+   * a certain period of time is elapsed.
+   * 
+   * @return true if the buffered data should be automatically synced to disk
+   */
+  public boolean shouldForceSync() {
+    return false;
+  }
+  
+  /**
+   * @return a short HTML snippet suitable for describing the current
+   * status of the stream
+   */
+  public String generateHtmlReport() {
+    return "";
   }
 }

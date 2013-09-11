@@ -1,6 +1,7 @@
 package org.apache.hadoop.mapred;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -8,22 +9,29 @@ import java.util.List;
 import java.util.Map;
 import java.util.Vector;
 
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocalDirAllocator;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.util.Shell;
 
 public class CoronaJobTrackerRunner extends TaskRunner {
   @SuppressWarnings("unused")
   private final CoronaSessionInfo coronaSessionInfo;
   private final File workDir;
+  private final String originalPath;
+  private final String releasePath;
   private Path localizedJobFile;
   @SuppressWarnings("deprecation")
   public CoronaJobTrackerRunner(
       TaskTracker.TaskInProgress tip, Task task, TaskTracker tracker,
-      JobConf ttConf, CoronaSessionInfo info) throws IOException {
+      JobConf ttConf, CoronaSessionInfo info, String originalPath,
+      String releasePath) throws IOException {
     super(tip, task, tracker, ttConf);
     this.coronaSessionInfo = info;
+    this.originalPath = originalPath;
+    this.releasePath = releasePath;
     LocalDirAllocator lDirAlloc = new LocalDirAllocator("mapred.local.dir");
 
     workDir = new File(lDirAlloc.getLocalPathForWrite(
@@ -52,9 +60,23 @@ public class CoronaJobTrackerRunner extends TaskRunner {
     Path jobFile = new Path(t.getJobFile());
     FileSystem systemFS = tracker.systemFS;
     this.localizedJobFile = new Path(workDir, jobID + ".xml");
-    LOG.info("Localizing CJT configuration from " + jobFile + " to "
-        + localizedJobFile);
+    LOG.info("Localizing CJT configuration from " + jobFile + " to " +
+        localizedJobFile);
     systemFS.copyToLocalFile(jobFile, localizedJobFile);
+    JobConf localJobConf = new JobConf(localizedJobFile);
+    boolean modified = Task.saveStaticResolutions(localJobConf);
+    if (modified) {
+      FSDataOutputStream out = new FSDataOutputStream(
+        new FileOutputStream(localizedJobFile.toUri().getPath()));
+      try {
+        localJobConf.writeXml(out);
+      } catch (IOException e) {
+        out.close();
+        throw e;
+      }
+    }
+    // Add the values from the job conf to the configuration of this runner
+    this.conf.addResource(localizedJobFile);
   }
 
   /** Delete any temporary files from previous failed attempts. */
@@ -79,6 +101,13 @@ public class CoronaJobTrackerRunner extends TaskRunner {
     return conf.get("mapred.corona.standalonecjt.java.opts",
                        JobConf.DEFAULT_MAPRED_TASK_JAVA_OPTS);
   }
+  
+  private static File getJobStdLogFile(TaskAttemptID taskid, TaskLog.LogName filter) {
+    return new File(
+      CoronaTaskTracker.jobTrackerLogDir() + File.separator + "userlogs" + 
+      File.separator+ taskid.toString() + File.separator + filter.toString()
+    );
+  }
 
   @SuppressWarnings("deprecation")
   @Override
@@ -101,9 +130,14 @@ public class CoronaJobTrackerRunner extends TaskRunner {
         classPath.append(sep);
       }
       // start with same classpath as parent process
-      classPath.append(System.getProperty("java.class.path"));
-      classPath.append(sep);
 
+      String systemClassPath = System.getProperty("java.class.path");
+      if (releasePath != null && !releasePath.isEmpty() &&
+        originalPath != null && !releasePath.isEmpty()) {
+        systemClassPath = systemClassPath.replaceAll(originalPath, releasePath);
+      }
+      classPath.append(systemClassPath);
+      classPath.append(sep);
       //  Build exec child jmv args.
       Vector<String> vargs = new Vector<String>(8);
       File jvm =                                  // use same jvm as parent
@@ -113,6 +147,7 @@ public class CoronaJobTrackerRunner extends TaskRunner {
 
       // Add child (task) java-vm options.
       String javaOpts = getCJTJavaOpts(conf);
+      javaOpts = javaOpts.replace("@taskid@", taskid.toString());
       String [] javaOptsSplit = javaOpts.split(" ");
       for (int i = 0; i < javaOptsSplit.length; i++) {
         vargs.add(javaOptsSplit[i]);
@@ -163,9 +198,10 @@ public class CoronaJobTrackerRunner extends TaskRunner {
       vargs.add(task.getTaskID().toString()); // Pass attempt id.
       vargs.add(coronaSessionInfo.getJobTrackerAddr().getHostName());
       vargs.add(Integer.toString(coronaSessionInfo.getJobTrackerAddr()
-          .getPort()));
+        .getPort()));
 
-      tracker.addToMemoryManager(task.getTaskID(), task.isMapTask(), conf);
+      tracker.addToMemoryManager(task.getTaskID(), task.isMapTask(), conf,
+        false);
 
       // set memory limit using ulimit if feasible and necessary ...
       String[] ulimitCmd = Shell.getUlimitMemoryCommand(getChildUlimit(conf));
@@ -178,8 +214,8 @@ public class CoronaJobTrackerRunner extends TaskRunner {
       }
 
       // Set up the redirection of the task's stdout and stderr streams
-      File stdout = TaskLog.getTaskLogFile(taskid, TaskLog.LogName.STDOUT);
-      File stderr = TaskLog.getTaskLogFile(taskid, TaskLog.LogName.STDERR);
+      File stdout = getJobStdLogFile(taskid, TaskLog.LogName.STDOUT);
+      File stderr = getJobStdLogFile(taskid, TaskLog.LogName.STDERR);
       stdout.getParentFile().mkdirs();
 
       Map<String, String> env = new HashMap<String, String>();

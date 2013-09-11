@@ -17,46 +17,73 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
+import java.io.IOException;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.Map;
-import java.util.Map.Entry;
 
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset.ActiveFile;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSVolume;
+import org.apache.hadoop.hdfs.server.datanode.FSDataset.FSDatasetDeltaInterface;
 
 /**
  * Maintains the replicas map.
  */
 class VolumeMap {
 
-  // Map of block Id to DatanodeBlockInfo, indexed by namespace
-  private Map<Integer, Map<Block, DatanodeBlockInfo>> namespaceMap;
-  private Map<Integer, Map<Block, ActiveFile>> ongoingCreates;
+  private Map<Integer, NamespaceMap> nsMap;
+  
+  private FSDatasetDeltaInterface datasetDelta;
 
+  synchronized void setDatasetDelta(FSDatasetDeltaInterface stateChangeCallback) {
+    this.datasetDelta = stateChangeCallback;
+  }
+  
   VolumeMap(int numNamespaces) {
-    namespaceMap = new HashMap<Integer, Map<Block, DatanodeBlockInfo>>(numNamespaces);
-    ongoingCreates = new HashMap<Integer, Map<Block, ActiveFile>>(numNamespaces);
+    nsMap = new HashMap<Integer, NamespaceMap>(numNamespaces);
   }
 
   /**
-   * Returns an immutable instance of the volume map for a given namespace.
-   * @param namespaceID the namespaceID for which the volume map needs to be
-   * returned.
+   * Return the namespace map object for the namespace.
+   * 
+   * @param namespaceID
+   *          the namespaceID for which the namespace map should be returned.
    */
-  public Map <Block, DatanodeBlockInfo> getNamespaceMap(int namespaceID) {
-    return Collections.unmodifiableMap(namespaceMap.get(namespaceID));
+  public synchronized NamespaceMap getNamespaceMap(int namespaceID) {
+    return nsMap.get(namespaceID);
   }
 
   synchronized Integer[] getNamespaceList() {
-    return namespaceMap.keySet().toArray(
-        new Integer[namespaceMap.keySet().size()]);
+    return nsMap.keySet().toArray(new Integer[nsMap.keySet().size()]);
   }
 
-  private void checkBlock(Block b) {
+  /**
+   * @param namespaceId
+   * @param reader
+   * @return number of blocks whose CRCs were updated.
+   * @throws IOException
+   */
+  int updateBlockCrc(int namespaceId, BlockCrcFileReader reader)
+      throws IOException {
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm != null) {
+      return nm.updateBlockCrc(reader);
+    } else {
+      return 0;
+    }
+  }
+  
+  int getNumBuckets(int namespaceId) {
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm != null) {
+      return nm.getNumBucket();
+    } else {
+      return 0;
+    }
+  }
+  
+  static private void checkBlock(Block b) {
     if (b == null) {
       throw new IllegalArgumentException("Block is null");
     }
@@ -65,26 +92,13 @@ class VolumeMap {
   synchronized int removeUnhealthyVolumes(Collection<FSVolume> failed_vols) {
     int removed_blocks = 0;
 
-    for (Integer namespaceId : namespaceMap.keySet()) {
-      Map<Block, DatanodeBlockInfo> m = namespaceMap.get(namespaceId);
-      Iterator<Entry<Block, DatanodeBlockInfo>> dbi = m.entrySet().iterator();
-      while (dbi.hasNext()) {
-        Entry<Block, DatanodeBlockInfo> entry = dbi.next();
-        for (FSVolume v : failed_vols) {
-          if (entry.getValue().getVolume() == v) {
-            DataNode.LOG.warn("removing block " + entry.getKey().getBlockId()
-                + " from vol " + v.toString() + ", form namespace: "
-                + namespaceId);
-            dbi.remove();
-            removed_blocks++;
-            break;
-          }
-        }
-      }
+    for (Integer namespaceId : nsMap.keySet()) {
+      removed_blocks += nsMap.get(namespaceId).removeUnhealthyVolumes(
+          failed_vols, datasetDelta);
     }
     return removed_blocks;
   }
-
+  
 
   /**
    * Get the meta information of the replica that matches both block id and
@@ -99,10 +113,11 @@ class VolumeMap {
    */
   DatanodeBlockInfo get(int namespaceId, Block block) {
     checkBlock(block);
-    synchronized(this){
-      Map<Block, DatanodeBlockInfo> m = namespaceMap.get(namespaceId);
-      return m != null ? m.get(block) : null;
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm == null) {
+      return null;
     }
+    return nm.getBlockInfo(block);
   }
 
   /**
@@ -118,25 +133,28 @@ class VolumeMap {
   DatanodeBlockInfo add(int namespaceId, Block block,
       DatanodeBlockInfo replicaInfo) {
     checkBlock(block);
-    synchronized(this){
-      Map<Block, DatanodeBlockInfo> m = namespaceMap.get(namespaceId);
-      return m.put(block, replicaInfo);
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm == null) {
+      return null;
     }
+    replicaInfo.setBlock(block);
+    if (datasetDelta != null) {
+      datasetDelta.addBlock(namespaceId, block);
+    }
+    return nm.addBlockInfo(block, replicaInfo);
   }
 
   DatanodeBlockInfo update(int namespaceId, Block oldB, Block newB) {
-    Map<Block, DatanodeBlockInfo> m = namespaceMap.get(namespaceId);
-    if (m == null) {
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm == null) {
       return null;
     }
-
-    DatanodeBlockInfo bi = m.remove(oldB);
-    if (bi != null) {
-      m.put(newB, bi);
+    if (datasetDelta != null) {
+      datasetDelta.updateBlock(namespaceId, oldB, newB);
     }
-    return bi;
+    return nm.updateBlockInfo(oldB, newB);
   }
-
+  
   /**
    * Remove the replica's meta information from the map that matches the input
    * block's id and generation stamp
@@ -149,11 +167,14 @@ class VolumeMap {
    *           if the input block is null
    */
   DatanodeBlockInfo remove(int namespaceId, Block block) {
-    checkBlock(block);
-    synchronized(this){
-      Map<Block, DatanodeBlockInfo> m = namespaceMap.get(namespaceId);
-      return m != null ? m.remove(block) : null;
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm == null) {
+      return null;
     }
+    if (datasetDelta != null) {
+      datasetDelta.removeBlock(namespaceId, block);
+    }
+    return nm.removeBlockInfo(block);
   }
 
   /**
@@ -162,52 +183,54 @@ class VolumeMap {
    * @param namespaceId
    * @return the number of replicas in the map
    */
-  synchronized int size(int namespaceId) {
-    Map<Block, DatanodeBlockInfo> m = namespaceMap.get(namespaceId);
-    return m != null ? m.size() : 0;
+  int size(int namespaceId) {
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm == null) {
+      return 0;
+    }
+    return nm.size();
   }
 
   synchronized void initNamespace(int namespaceId) {
-    Map<Block, DatanodeBlockInfo> m = namespaceMap.get(namespaceId);
-    if(m != null){
+    NamespaceMap nm = nsMap.get(namespaceId);
+    if(nm != null){
       return; 
     }
-    m = new HashMap<Block, DatanodeBlockInfo>();
-    namespaceMap.put(namespaceId, m);    
-    Map<Block, ActiveFile> oc = new HashMap<Block, ActiveFile>();
-    ongoingCreates.put(namespaceId, oc);
+    nsMap.put(namespaceId, new NamespaceMap(namespaceId));
   }
 
   
   synchronized void removeNamespace(int namespaceId){
-    namespaceMap.remove(namespaceId);
-    ongoingCreates.remove(namespaceId);
+    nsMap.remove(namespaceId);
   }
 
   // for ongoing creates
 
   ActiveFile getOngoingCreates(int namespaceId, Block block) {
     checkBlock(block);
-    synchronized(this){
-      Map<Block, ActiveFile> m = ongoingCreates.get(namespaceId);
-      return m != null ? m.get(block) : null;
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm == null) {
+      return null;
     }
+    return nm.getOngoingCreates(block);
   }
 
   ActiveFile removeOngoingCreates(int namespaceId, Block block) { 
     checkBlock(block);
-    synchronized(this){
-      Map<Block, ActiveFile> m = ongoingCreates.get(namespaceId);
-      return m != null ? m.remove(block) : null;
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm == null) {
+      return null;
     }
+    return nm.removeOngoingCreates(block);
   }
 
   ActiveFile addOngoingCreates(int namespaceId, Block block, ActiveFile af) {
     checkBlock(block);
-    synchronized(this){
-      Map<Block, ActiveFile> m = ongoingCreates.get(namespaceId);
-      return m.put(block, af);
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm == null) {
+      return null;
     }
+    return nm.addOngoingCreates(block, af);
   }
 
   /**
@@ -223,24 +246,16 @@ class VolumeMap {
    */
   void copyOngoingCreates(int namespaceId, Block block) throws CloneNotSupportedException {
     checkBlock(block);
-    synchronized(this){
-      Map<Block, ActiveFile> m = ongoingCreates.get(namespaceId);
-      ActiveFile af = m.get(block);
-      if (af == null) {
-        return;
-      }
-      
-      m.put(block, af.getClone());
+    NamespaceMap nm = getNamespaceMap(namespaceId);
+    if (nm != null) {
+      nm.copyOngoingCreates(block);
     }
   }
 
-
   public synchronized String toString() {
     String ret = "VolumeMap: ";
-    for (Integer namespaceId : namespaceMap.keySet()) {
-      ret += namespaceMap.get(namespaceId).toString();
-      ret += "\n---\n";
-      ret += ongoingCreates.get(namespaceId).toString();
+    for (Integer namespaceId : nsMap.keySet()) {
+      ret += nsMap.get(namespaceId).toString();
     }
     return ret;
   }

@@ -15,6 +15,8 @@ import java.util.LinkedList;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.Watcher;
 import org.apache.zookeeper.data.Stat;
@@ -108,8 +110,10 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
 
     public String invoke() throws IOException, InterruptedException,
         KeeperException {
+          InjectionHandler.processEvent(
+              InjectionEvent.CACHINGAVATARZK_GET_PRIMARY_ADDRESS);
       return CachingAvatarZooKeeperClient.super.getPrimaryAvatarAddress(
-          address, stat,
+          address.getAuthority(), stat,
           retry);
     }
   }
@@ -274,7 +278,7 @@ public class CachingAvatarZooKeeperClient extends AvatarZooKeeperClient {
       boolean firstAttempt) throws IOException, KeeperException,
          InterruptedException {
     if (!useCache) {
-      return super.getPrimaryAvatarAddress(address, stat, retry);
+      return super.getPrimaryAvatarAddress(address.getAuthority(), stat, retry);
     }
     ZooKeeperCall call = new GetAddr(address, stat, retry);
     return populateCache(call);

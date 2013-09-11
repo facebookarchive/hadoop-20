@@ -56,6 +56,9 @@ public class Hoopla extends Configured implements Tool {
   static private int numIterationsPerThread = 10000;
   static private short replication = 1;
   static private boolean doScatterGatherPread = true;
+  static private boolean useLocal = true;
+  static private boolean verifyChecksum = false;
+
 
   // switch off all logging so that the benchmark runs in constant time
   {
@@ -66,7 +69,8 @@ public class Hoopla extends Configured implements Tool {
 
   public static void printUsage() {
     System.out.println("USAGE: bin/hadoop hadoop-*.jar Hoopla [-noscattergather] [-fileName] " +
-                       "[-fileSize] [-blockSize] [-numThreads] [-numIterationsPerThread]");
+                       "[-fileSize] [-blockSize] [-numThreads] [-numIterationsPerThread] " +
+                       "[-nolocal] [-verifychecksum]");
     System.exit(0);
   }
 
@@ -87,6 +91,10 @@ public class Hoopla extends Configured implements Tool {
     for (int i = 0; i < args.length; i++) {
       if (args[i].equals("-noscattergather")) {
         doScatterGatherPread = false;
+      } else if (args[i].equals("-nolocal")) {
+        useLocal = false;
+      } else if (args[i].equals("-verifychecksum")) {
+        verifyChecksum = true;
       } else if (args[i].equals("-fileName")) {
         fileName = new Path(args[++i]);
       } else if (args[i].equals("-blocksize")) {
@@ -114,11 +122,14 @@ public class Hoopla extends Configured implements Tool {
     // is not impacted by unavailabity of server threads.
     Configuration conf = new Configuration();
     conf.setInt("dfs.datanode.scan.period.hours", -1); // disable periodic scanner
-    conf.setInt("dfs.datanode.max.xcievers", numThreads); // datanode threads
+    conf.setInt("dfs.datanode.max.xcievers",
+      Math.max(100, (int)(numThreads * 1.2))); // datanode threads
+    conf.setBoolean("dfs.read.shortcircuit", useLocal);
 
     // create cluster
     MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
     FileSystem fs = cluster.getFileSystem(0);
+    fs.setVerifyChecksum(verifyChecksum);
 
     // create a single large file
     FSDataOutputStream stm = fs.create(fileName, true,

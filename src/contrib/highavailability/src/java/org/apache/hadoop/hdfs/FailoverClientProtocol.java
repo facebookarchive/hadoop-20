@@ -28,11 +28,13 @@ import org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.CorruptFileBlocks;
+import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.DirectoryListing;
 import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlockWithMetaInfo;
+import org.apache.hadoop.hdfs.protocol.LocatedBlockWithOldGS;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlockWithFileName;
@@ -43,10 +45,12 @@ import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.ipc.ProtocolSignature;
 import org.apache.hadoop.ipc.RPC.VersionIncompatible;
 import org.apache.hadoop.ipc.RemoteException;
 import org.apache.hadoop.security.AccessControlException;
+import org.apache.hadoop.util.InjectionHandler;
 
 
 /**
@@ -413,6 +417,20 @@ public class FailoverClientProtocol implements ClientProtocol {
       }
     }).callFS();
   }
+  
+  @Override
+  public LocatedBlockWithOldGS appendAndFetchOldGS(final String src,
+      final String clientName) throws IOException {
+    return (failoverHandler.new MutableFSCaller<LocatedBlockWithOldGS>() {
+      @Override
+      public LocatedBlockWithOldGS call(int retries) throws IOException {
+        if (retries > 0) {
+          namenode.complete(src, clientName);
+        }
+        return namenode.appendAndFetchOldGS(src, clientName);
+      }
+    }).callFS();
+  }
 
   @Override
   public boolean complete(final String src, final String clientName)
@@ -551,6 +569,8 @@ public class FailoverClientProtocol implements ClientProtocol {
               try {
                 namenode.create(src, masked, clientName, overwrite,
                     createParent, replication, blockSize);
+                InjectionHandler
+                    .processEvent(InjectionEvent.FAILOVERCLIENTPROTOCOL_AFTER_CREATE_FILE);
               } catch (RemoteException re) {
                 if (re.unwrapRemoteException() instanceof AlreadyBeingCreatedException) {
                   AlreadyBeingCreatedException aex = (AlreadyBeingCreatedException) re
@@ -809,6 +829,16 @@ public class FailoverClientProtocol implements ClientProtocol {
   }
 
   @Override
+  public void blockReplication(final boolean isEnable) throws IOException {
+    (failoverHandler.new ImmutableFSCaller<Boolean>() {
+      public Boolean call() throws IOException {
+        namenode.blockReplication(isEnable);
+        return true;
+      }
+    }).callFS();
+  }
+
+  @Override
   public OpenFileInfo[] iterativeGetOpenFiles(
       final String path, final int millis, final String start) throws IOException {
     return (failoverHandler.new ImmutableFSCaller<OpenFileInfo[]>() {
@@ -834,6 +864,27 @@ public class FailoverClientProtocol implements ClientProtocol {
       public Boolean call() throws IOException {
         namenode.refreshNodes();
         return true;
+      }
+    }).callFS();
+  }
+
+  @Override
+  public boolean hardLink(final String src, final String dst) throws IOException {
+    return (failoverHandler.new MutableFSCaller<Boolean>() {
+
+      @Override
+      public Boolean call(int retries) throws IOException {
+        return namenode.hardLink(src, dst);
+      }
+    }).callFS();
+  }
+
+  @Override
+  public String[] getHardLinkedFiles(final String src) throws IOException {
+    return (failoverHandler.new ImmutableFSCaller<String[]>() {
+      @Override
+      public String[] call() throws IOException {
+        return namenode.getHardLinkedFiles(src);
       }
     }).callFS();
   }
@@ -894,6 +945,16 @@ public class FailoverClientProtocol implements ClientProtocol {
     (failoverHandler.new MutableFSCaller<Boolean>() {
       public Boolean call(int r) throws IOException {
         namenode.saveNamespace();
+        return true;
+      }
+    }).callFS();
+  }
+  
+  @Override
+  public void rollEditLogAdmin() throws IOException {
+    (failoverHandler.new MutableFSCaller<Boolean>() {
+      public Boolean call(int r) throws IOException {
+        namenode.rollEditLogAdmin();
         return true;
       }
     }).callFS();
@@ -1063,6 +1124,44 @@ public class FailoverClientProtocol implements ClientProtocol {
     return (failoverHandler.new ImmutableFSCaller<LocatedBlockWithFileName>() {
       public LocatedBlockWithFileName call() throws IOException {
         return namenode.getBlockInfo(blockId);
+      }
+    }).callFS();
+  }
+
+  @Override
+  public void updatePipeline(final String clientName, final Block oldBlock, 
+      final Block newBlock, final DatanodeID[] newNodes) throws IOException {
+    
+    (failoverHandler.new MutableFSCaller<Boolean>() {
+      @Override
+      public Boolean call(int retry) throws IOException {
+        namenode.updatePipeline(clientName, oldBlock, newBlock, newNodes);
+        return true;
+      }
+    }).callFS();
+  }
+
+  @Override
+  public long nextGenerationStamp(final Block block, final boolean fromNN)
+      throws IOException {
+    return (failoverHandler.new ImmutableFSCaller<Long>() {
+      public Long call() throws IOException {
+        return namenode.nextGenerationStamp(block, fromNN);
+      }
+    }).callFS();
+  }
+
+  @Override
+  public void commitBlockSynchronization(final Block block,
+      final long newgenerationstamp, final long newlength,
+      final boolean closeFile, final boolean deleteblock,
+      final DatanodeID[] newtargets) throws IOException {
+    (failoverHandler.new MutableFSCaller<Boolean>() {
+      @Override
+      public Boolean call(int retry) throws IOException {
+        namenode.commitBlockSynchronization(block, newgenerationstamp,
+            newlength, closeFile, deleteblock, newtargets);
+        return true;
       }
     }).callFS();
   }

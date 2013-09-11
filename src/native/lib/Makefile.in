@@ -210,7 +210,7 @@ sysconfdir = @sysconfdir@
 target_alias = @target_alias@
 
 # Add .lo files in $(SUBDIRS) to construct libhadoop.so
-# Do not include this directory "lib" itself in the resursive search
+# Do not include this directory "lib" itself in the recursive search
 MYSUBDIRS = $(addprefix ../,$(SUBDIRS))
 NEWSUBDIRS = (filter-out "../lib", $(MYSUBDIRS))
 HADOOP_OBJS = $(foreach path,$(NEWSUBDIRS),$(wildcard $(path)/*.lo))
@@ -230,7 +230,7 @@ libhadoop_la_SOURCES = $(srcdir)/../src/org/apache/hadoop/io/nativeio/file_descr
                        $(srcdir)/../src/org/apache/hadoop/util/bulk_crc32.c
 
 libhadoop_la_LDFLAGS = -version-info 1:0:0
-libhadoop_la_LIBADD = $(HADOOP_OBJS) -ldl -ljvm
+libhadoop_la_LIBADD = $(HADOOP_OBJS) -ldl -ljvm -lrt
 all: all-am
 
 .SUFFIXES:

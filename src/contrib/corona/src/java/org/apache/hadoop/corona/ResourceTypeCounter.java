@@ -1,0 +1,57 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.apache.hadoop.corona;
+
+import java.util.EnumMap;
+import java.util.Map;
+
+/**
+ * Helps to count the resource type requests
+ */
+public class ResourceTypeCounter {
+  /** Internal map of types to counts */
+  private final Map<ResourceType, Integer> typeToCountMap =
+      new EnumMap<ResourceType, Integer>(ResourceType.class);
+
+  /**
+   * Increment the count for a given resource type
+   * @param resourceType Resource type to increment the count of
+   */
+  public void incr(ResourceType resourceType) {
+    Integer current = typeToCountMap.get(resourceType);
+    if (current == null) {
+      typeToCountMap.put(resourceType, new Integer(1));
+    } else {
+      typeToCountMap.put(resourceType, current + 1);
+    }
+  }
+
+  /**
+   * Return the count of the ResourceType
+   * @param resourceType
+   * @return Count of the resource type
+   */
+  public Integer getCount(ResourceType resourceType) {
+    Integer count = typeToCountMap.get(resourceType);
+    if (count == null) {
+      return 0;
+    } else {
+      return count;
+    }
+  }
+}

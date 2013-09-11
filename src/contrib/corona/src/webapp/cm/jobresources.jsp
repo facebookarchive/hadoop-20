@@ -8,6 +8,7 @@
   import="org.apache.hadoop.corona.*"
   import="org.apache.hadoop.util.ServletUtil"
   import="org.apache.hadoop.util.StringUtils"
+  import="java.text.SimpleDateFormat"
 %>
 
 <%!
@@ -35,6 +36,7 @@
 <hr>
 
 <%
+  DateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss");
   if (mySession == null) {
     out.print("<b>Session not found.</b><br>\n");
     return;
@@ -51,11 +53,12 @@
     out.print("<center>");
     out.print("<table border=2 cellpadding=\"5\" cellspacing=\"2\">");
     out.print("<tr><td align=\"center\">Grant Id</td><td>Address</td>" +
-              "<td>Type</td></tr>");
+              "<td>Type</td><td>Granted Time</td></tr>");
     for (GrantReport report : grantReportList) {
       out.print("<tr><td>" + report.getGrantId() + "</td><td>" +
       	        report.getAddress() + "</td><td>" +
-                report.getType() + "</td>");
+                report.getType() + "</td><td>" +
+                dateFormat.format(report.getGrantedTime()) + "</td>");
     }
     out.print("</table>");
     out.print("</center>");

@@ -88,6 +88,7 @@ public enum RaidState {
     public static final ThreadLocalDateFormat dateFormat =
       new ThreadLocalDateFormat("yyyy-MM-dd");
     private List<String> excludePatterns = new ArrayList<String>();
+    private List<FileStatus> lfs = null;
 
     public Checker(Collection<PolicyInfo> allInfos, Configuration conf)
         throws IOException {
@@ -109,6 +110,11 @@ public enum RaidState {
         }
       }
     }
+    
+    public RaidState check(PolicyInfo info, FileStatus file, long now,
+        boolean skipParityCheck) throws IOException {
+      return check(info, file, now, skipParityCheck, null);
+    }
 
     /**
      * Check the state of a raid source file against a policy
@@ -117,11 +123,13 @@ public enum RaidState {
      * @param now The system millisecond time
      * @param skipParityCheck Skip checking the existence of parity. Checking
      *                        parity is very time-consuming for HAR parity file
+     * @param lfs The list of FileStatus of files under the directory, only used
+     *        by directory raid.
      * @return The state of the raid file
      * @throws IOException
      */
     public RaidState check(PolicyInfo info, FileStatus file, long now,
-        boolean skipParityCheck) throws IOException {
+        boolean skipParityCheck, List<FileStatus> lfs) throws IOException {
       ExpandedPolicy matched = null;
       long mtime = -1;
       String uriPath = file.getPath().toUri().getPath();
@@ -134,40 +142,50 @@ public enum RaidState {
           Math.abs(file.getModificationTime() - now) < ONE_DAY_MSEC) {
         mtime = file.getModificationTime();
       }
+      boolean hasNotRaidedButShouldPolicy = false; 
       for (ExpandedPolicy policy : sortedExpendedPolicy) {
         if (policy.parentPolicy == info) {
           matched = policy;
           break;
         }
-        if (policy.match(file, mtime, now)) {
+        RaidState rs = policy.match(file, mtime, now, conf, lfs);
+        if (rs == RaidState.RAIDED) {
           return NOT_RAIDED_OTHER_POLICY;
-        }
+        } else if (rs == RaidState.NOT_RAIDED_BUT_SHOULD) {
+          hasNotRaidedButShouldPolicy = true; 
+        } 
       }
       if (matched == null) {
         return NOT_RAIDED_NO_POLICY;
       }
-      if (now - mtime < matched.modTimePeriod) {
-        return NOT_RAIDED_TOO_NEW;
-      }
-      if (computeNumBlocks(file) <= TOO_SMALL_NOT_RAID_NUM_BLOCKS) {
-        return NOT_RAIDED_TOO_SMALL;
-      }
+
       // The preceding checks are more restrictive,
       // check for excluded just before parity check.
       if (shouldExclude(uriPath)) {
         return NOT_RAIDED_NO_POLICY;
       }
-      if (file.getReplication() == matched.targetReplication) {
-        if (skipParityCheck || parityExists(file, matched.code)) {
-          return RAIDED;
-        }
+      
+      if (file.isDir() != matched.codec.isDirRaid) {
+        return NOT_RAIDED_NO_POLICY;
       }
-      return NOT_RAIDED_BUT_SHOULD;
-    }
 
-    private boolean parityExists(FileStatus src, ErasureCodeType code)
-    throws IOException {
-      return ParityFilePair.getParityFile(code, src.getPath(), conf) != null;
+      long blockNum = matched.codec.isDirRaid?
+          DirectoryStripeReader.getBlockNum(lfs):
+          computeNumBlocks(file);
+
+      if (blockNum <= TOO_SMALL_NOT_RAID_NUM_BLOCKS) {
+        return NOT_RAIDED_TOO_SMALL;
+      }
+      
+      RaidState finalState = matched.getBasicState(file, mtime, now,
+          skipParityCheck, conf, lfs);
+      if (finalState == RaidState.RAIDED) {
+        return finalState;
+      } else if (hasNotRaidedButShouldPolicy) {
+        return RaidState.NOT_RAIDED_OTHER_POLICY;
+      } else {
+        return finalState;
+      }
     }
 
     private static int computeNumBlocks(FileStatus status) {

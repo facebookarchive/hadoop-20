@@ -30,10 +30,12 @@ import org.apache.commons.logging.Log;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.balancer.Balancer;
-import org.apache.hadoop.hdfs.util.DataTransferThrottler;
+import org.apache.hadoop.hdfs.server.datanode.metrics.DatanodeThreadLivenessReporter;
+import org.apache.hadoop.hdfs.server.datanode.metrics.DatanodeThreadLivenessReporter.BackgroundThread;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.util.Daemon;
+import org.apache.hadoop.util.DataTransferThrottler;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -131,29 +133,26 @@ class DataXceiverServer implements Runnable, FSConstants {
   public void run() {
     while (datanode.shouldRun) {
       try {
-        Socket s = ss.accept();
-        s.setTcpNoDelay(true);
-        s.setSoTimeout(datanode.socketTimeout*5);
-        
-        // Log right after accepting an connection
-        String remoteAddress = s.getRemoteSocketAddress().toString();
-        String localAddress = s.getLocalSocketAddress().toString();
-        if (ClientTraceLog.isInfoEnabled()) {
-          ClientTraceLog.info("Accepted new connection: src " + remoteAddress + " dest "
-            + localAddress + " XceiverCount: " + datanode.getXceiverCount());
-        }
+        datanode
+            .updateAndReportThreadLiveness(BackgroundThread.DATA_XCEIVER_SERVER);
 
+        ss.setSoTimeout(1000);
+        InjectionHandler.processEvent(
+            InjectionEvent.DATAXEIVER_SERVER_PRE_ACCEPT);
+        Socket s = ss.accept();
+        
         new Daemon(datanode.threadGroup, 
             new DataXceiver(s, datanode, this)).start();
         InjectionHandler.processEvent(
             InjectionEvent.AVATARXEIVER_RUNTIME_FAILURE);
+        
       } catch (SocketTimeoutException ignored) {
         // wake up to see if should continue to run
       } catch (IOException ie) {
         LOG.warn(datanode.getDatanodeInfo() + ":DataXceiveServer IO error", ie);
       } catch (Throwable te) {
-        LOG.error(datanode.getDatanodeInfo() + ":DataXceiveServer exiting", te); 
         datanode.shouldRun = false;
+        LOG.error(datanode.getDatanodeInfo() + ":DataXceiveServer exiting", te); 
       }
     }
     try {

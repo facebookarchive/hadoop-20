@@ -4,6 +4,9 @@
   <defaultMinSharePreemptionTimeout>120</defaultMinSharePreemptionTimeout>
   <defaultMaxTotalInitedTasks>25000</defaultMaxTotalInitedTasks>
   <systemPools>sla</systemPools>
+  <pool name="default">
+    <maxTotalInitedTasks>10</maxTotalInitedTasks>
+  </pool>
   <pool name="soft">
     <minMaps>2</minMaps>
     <minReduces>3</minReduces>

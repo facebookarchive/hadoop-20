@@ -1,7 +1,6 @@
 package org.apache.hadoop.hdfs;
 
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
@@ -10,7 +9,6 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.tools.FastCopy;
 
 import org.junit.AfterClass;
-import static org.junit.Assert.*;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -28,38 +26,6 @@ public class TestFastCopyCleanShutdown {
   private static long MAX_FILE_SIZE = MAX_BLOCKS * BLOCK_SIZE;
   private static Set<Thread> threadsBefore;
 
-  // A list of threads that might hang around (maybe due to a JVM bug).
-  private static final String[] excludedThreads = { "SunPKCS11" };
-
-  private static boolean isExcludedThread(Thread th) {
-    for (String badThread : excludedThreads) {
-      if (th.getName().contains(badThread)) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private static void checkRemainingThreads(Set<Thread> old) throws Exception {
-    Thread.sleep(15000);
-
-    Set<Thread> threads = Thread.getAllStackTraces().keySet();
-    threads.removeAll(old);
-    if (threads.size() != 0) {
-      System.out.println("Following threads are not clean up:");
-      Iterator<Thread> it = threads.iterator();
-      while (it.hasNext()) {
-        Thread th = it.next();
-        if (isExcludedThread(th)) {
-          it.remove();
-          continue;
-        }
-        System.out.println("Thread: " + th.getName());
-      }
-    }
-    assertTrue("This is not a clean shutdown", threads.size() == 0);
-  }
-
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     threadsBefore = new HashSet<Thread>(Thread.getAllStackTraces()
@@ -75,7 +41,7 @@ public class TestFastCopyCleanShutdown {
   public static void tearDownAfterClass() throws Exception {
     fs.close();
     cluster.shutdown();
-    checkRemainingThreads(threadsBefore);
+    DFSTestThreadUtil.checkRemainingThreads(threadsBefore);
   }
   
   @Test

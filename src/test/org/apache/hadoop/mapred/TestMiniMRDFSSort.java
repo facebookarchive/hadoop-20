@@ -42,8 +42,10 @@ import org.apache.hadoop.examples.Sort;
  */
 public class TestMiniMRDFSSort extends TestCase {
   // Input/Output paths for sort
-  private static final Path SORT_INPUT_PATH = new Path("/sort/input");
-  private static final Path SORT_OUTPUT_PATH = new Path("/sort/output");
+  private static final String base_dir = System.getProperty("test.build.data",
+      "build/test/data");
+  private static final Path SORT_INPUT_PATH = new Path(base_dir + "/sort/input");
+  private static final Path SORT_OUTPUT_PATH = new Path(base_dir + "/sort/output");
 
   // Knobs to control randomwriter; and hence sort
   private static final int NUM_HADOOP_SLAVES = 3;

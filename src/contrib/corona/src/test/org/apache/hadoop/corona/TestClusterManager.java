@@ -15,6 +15,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.mapred.ResourceTracker;
 import org.apache.hadoop.net.Node;
+import org.apache.hadoop.net.TopologyCache;
 import org.apache.thrift.TException;
 
 public class TestClusterManager extends TestCase {
@@ -62,7 +63,7 @@ public class TestClusterManager extends TestCase {
                                      new InetAddress(TstUtils.getNodeHost(i),
                                                      TstUtils.getNodePort(i)),
                                      TstUtils.std_spec);
-      nodes[i].setUsed(TstUtils.free_spec);
+      nodes[i].setFree(TstUtils.std_spec);
       nodes[i].setResourceInfos(resourceInfos);
     }
 
@@ -75,6 +76,8 @@ public class TestClusterManager extends TestCase {
       sessionInfos[i] = new SessionInfo(new InetAddress(sessionHost, getSessionPort(i)),
                                         "s_" + i, "hadoop");
       sessionInfos[i].setPriority(SessionPriority.NORMAL);
+      sessionInfos[i].setPoolInfoStrings(
+          PoolInfo.createPoolInfoStrings(PoolGroupManager.DEFAULT_POOL_INFO));
     }
   }
 
@@ -84,6 +87,8 @@ public class TestClusterManager extends TestCase {
         cm.nodeHeartbeat(nodes[i]);
       } catch (DisallowedNode e) {
         throw new TException(e);
+      } catch (SafeModeException e) {
+        LOG.info("Cluster Manager is in Safe Mode");
       }
     }
   }
@@ -134,7 +139,7 @@ public class TestClusterManager extends TestCase {
       addAllNodes();
 
       // create a request for a map slot
-      handles[0] = cm.sessionStart(sessionInfos[0]).handle;
+      handles[0] = TstUtils.startSession(cm, sessionInfos[0]);
       sessions[0] = cm.getSessionManager().getSession(handles[0]);
       cm.requestResource(handles[0], TstUtils.createRequests(1, 1, 0));
       reliableSleep(1000);
@@ -157,7 +162,7 @@ public class TestClusterManager extends TestCase {
 
     try {
       for (int i=0; i<numSessions; i++) {
-        handles[i] = cm.sessionStart(sessionInfos[i]).handle;
+        handles[i] = TstUtils.startSession(cm, sessionInfos[i]);
         sessions[i] = cm.getSessionManager().getSession(handles[i]);
         reliableSleep(500);
       }
@@ -179,30 +184,37 @@ public class TestClusterManager extends TestCase {
       // add the nodes after the requests to make sure that this is handled well by CM
       addAllNodes();
 
-      reliableSleep(100);
+      reliableSleep(1000);
       int [] origDistribution = distribution;
       distribution = new int [] {0, 250, 150, 150, 150};
       for (int i=0; i<numSessions; i++) {
-        synchronized(sessions[i]) {
-          assertEquals(sessions[i].getPendingRequestCount(), distribution[i]);
+        Session s = sessions[i];
+        synchronized(s) {
+          assertEquals(
+            "Pending request count does not match for " + s.getHandle(),
+            s.getPendingRequestCount(), distribution[i]);
 
-          assertEquals((sessions[i].getPendingRequestForType(ResourceType.MAP).size() +
-                        sessions[i].getPendingRequestForType(ResourceType.REDUCE).size()),
-                       distribution[i]);
-          assertEquals(sessions[i].getGrantedRequestForType(ResourceType.MAP).size() +
-                       sessions[i].getGrantedRequestForType(ResourceType.REDUCE).size(),
-                       origDistribution[i] - distribution[i]);
+          assertEquals(
+            "Pending request count does not match for " + s.getHandle(),
+            s.getPendingRequestForType(ResourceType.MAP).size() +
+              s.getPendingRequestForType(ResourceType.REDUCE).size(),
+            distribution[i]);
+          assertEquals(
+            "Granted request count does not match for " + s.getHandle(),
+            s.getGrantedRequestForType(ResourceType.MAP).size() +
+              s.getGrantedRequestForType(ResourceType.REDUCE).size(),
+            origDistribution[i] - distribution[i]);
         }
       }
 
       LOG.info("\tVerified Session#1 allocation");
 
       cm.sessionEnd(handles[0], SessionStatus.SUCCESSFUL);
-      reliableSleep(1000);
+      reliableSleep(10000);
       distribution = new int [] {0, 0, 0, 0, 100};
       for (int i=1; i<numSessions; i++) {
         synchronized(sessions[i]) {
-          assertEquals(sessions[i].getPendingRequestCount(), distribution[i]);
+          assertEquals(sessions[i].getSessionId(), distribution[i], sessions[i].getPendingRequestCount());
           assertEquals(sessions[i].getGrantedRequestForType(ResourceType.MAP).size() +
                        sessions[i].getGrantedRequestForType(ResourceType.REDUCE).size(),
                        origDistribution[i] - distribution[i]);
@@ -223,7 +235,7 @@ public class TestClusterManager extends TestCase {
       LOG.info("\tVerified Session#2 and Session#3 allocation after Session#1 release");
 
       cm.releaseResource(handles[1], createIdList(0, 199));
-      reliableSleep(1000);
+      reliableSleep(10000);
       distribution = new int [] {0, 0, 0, 0, 0};
       for (int i=0; i<numSessions; i++) {
         synchronized(sessions[i]) {
@@ -281,7 +293,7 @@ public class TestClusterManager extends TestCase {
       addAllNodes();
 
       for (int i=0; i<numSessions; i++) {
-        handles[i] = cm.sessionStart(sessionInfos[i]).handle;
+        handles[i] = TstUtils.startSession(cm, sessionInfos[i]);
         sessions[i] = cm.getSessionManager().getSession(handles[i]);
         reliableSleep(500);
       }
@@ -364,7 +376,7 @@ public class TestClusterManager extends TestCase {
       addSomeNodes(nodeCount);
 
       int i=0;
-      handles[i] = cm.sessionStart(sessionInfos[i]).handle;
+      handles[i] = TstUtils.startSession(cm, sessionInfos[i]);
       sessions[i] = cm.getSessionManager().getSession(handles[i]);
       reliableSleep(50);
 
@@ -392,7 +404,7 @@ public class TestClusterManager extends TestCase {
 
 
       i=1;
-      handles[i] = cm.sessionStart(sessionInfos[i]).handle;
+      handles[i] = TstUtils.startSession(cm, sessionInfos[i]);
       sessions[i] = cm.getSessionManager().getSession(handles[i]);
       reliableSleep(50);
 
@@ -427,7 +439,7 @@ public class TestClusterManager extends TestCase {
     addSomeNodes(nodeCount);
 
     int i=0;
-    handles[i] = cm.sessionStart(sessionInfos[i]).handle;
+    handles[i] = TstUtils.startSession(cm, sessionInfos[i]);
     sessions[i] = cm.getSessionManager().getSession(handles[i]);
 
     CoronaConf coronaConf = new CoronaConf(conf);

@@ -30,7 +30,8 @@ public interface TaskStateChangeListener {
    * @param state the new state of the task
    * @param tip the task
    * @param taskid the attempt that changed the state of the task
+   * @param host the host where the task ran.
    */
   void taskStateChange(TaskStatus.State state, TaskInProgress tip,
-      TaskAttemptID taskid);
+      TaskAttemptID taskid, String host);
 }

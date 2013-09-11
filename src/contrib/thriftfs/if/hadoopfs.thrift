@@ -52,6 +52,24 @@ struct BlockLocation {
   4: i64 length                  /* length of data */
 }
 
+/* hdfs block object */
+struct TBlock {
+  1:i64 blockId,
+  2:i64 numBytes,
+  3:i64 generationStamp
+}
+
+struct TDatanodeID {
+  1:string name       // host:port for datanode
+}
+
+struct TLocatedBlock {
+  1: TBlock block,                 /* hdfs block */
+  2: i32 namespaceId,              /* namespace id */
+  3: i32 dataTransferVersion,      /* datanode protocol */
+  4: list<TDatanodeID> location    /* replica locations */
+}
+
 exception MalformedInputException {
   1: string message
 }
@@ -124,4 +142,69 @@ service ThriftHadoopFileSystem
 
   // get the locations of the blocks of this file
   list<BlockLocation> getFileBlockLocations(1:Pathname path, 2:i64 start, 3:i64 length) throws (1:ThriftIOException ouch),
+
+  // hardlink
+  bool hardLink(1:Pathname src, 2:Pathname dest)
+                throws (1:ThriftIOException ouch),
+
+  // concat, restricted is true if all blocks sizes should be same
+  void concat(1:Pathname target, 2:list<Pathname> srcs, 3:bool restricted)
+                throws (1:ThriftIOException ouch),
+
+  // Report bad block
+  void reportBadBlocks(1:list<TLocatedBlock> blocks)  // bad blocks
+                       throws (1:ThriftIOException ouch),
+
+  /**
+   * The following methods are typically used by native C++ hdfs client and
+   * are not used by hdfs applications themselves
+   */
+
+  // get data transfer version
+  i32 getDataTransferProtocolVersion() throws (1:ThriftIOException ouch),
+
+  // renew lease
+  void renewLease(1:string clientName) throws (1:ThriftIOException ouch),
+
+  // recover lease
+  void recoverLease(1:Pathname path, 2:string clientName) 
+                    throws (1:ThriftIOException ouch),
+
+  // recover lease and close file
+  void closeRecoverLease(1:Pathname path, 2:string clientName, 
+                         3:bool discardLastBlock) 
+                         throws (1:ThriftIOException ouch),
+
+  // The client can give up on a block by calling abandonBlock().
+  // Any partial writes to the block will be discarded.
+  void abandonBlock(1:TBlock block, 2:Pathname pathname, 3:string clientName) 
+                    throws (1:ThriftIOException ouch),
+
+
+  // Any partial writes may be recovered and the lease will be relinquished
+  void abandonFile(1:Pathname pathname, 2:string clientName) 
+                   throws (1:ThriftIOException ouch),
+
+  // Add new block to a file
+  TLocatedBlock addBlock(1:Pathname pathname,               // filename
+                         2:string clientName,               // client identifier
+                         3:i64 startOffset,                 // offset in file
+                         4:TBlock lastBlock,                // previously alocated
+                         5:list<TDatanodeID> excludedNodes,  // do not use these
+                         6:list<TDatanodeID> favouredNodes)  // prefer these
+                         throws (1:ThriftIOException ouch),
+
+  // Add the first block for a file
+  TLocatedBlock addFirstBlock(1:Pathname pathname,           // filename
+                         2:string clientName,                // client identifier
+                         3:list<TDatanodeID> excludedNodes,  // do not use these
+                         4:list<TDatanodeID> favouredNodes)  // prefer these
+                         throws (1:ThriftIOException ouch),
+
+  // Complete writing to a new file
+  bool complete(1:Pathname pathname,           // filename
+                2:string clientName,           // client identifier
+                3:i64 fileLen,                 // length of file
+                4:TBlock lastBlock)            // previously alocated last block
+                throws (1:ThriftIOException ouch),
 }

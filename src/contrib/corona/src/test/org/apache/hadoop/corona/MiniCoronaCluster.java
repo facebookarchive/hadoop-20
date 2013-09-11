@@ -21,11 +21,15 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.http.NettyMapOutputHttpServer;
 import org.apache.hadoop.mapred.CoronaJobTracker;
 import org.apache.hadoop.mapred.CoronaTaskTracker;
 import org.apache.hadoop.mapred.JobClient;
@@ -117,7 +121,11 @@ public class MiniCoronaCluster {
     this.conf.set(CoronaConf.CPU_TO_RESOURCE_PARTITIONING, TstUtils.std_cpu_to_resource_partitioning);
     this.clusterManagerPort = startClusterManager(this.conf);
     this.conf.set(CoronaConf.PROXY_JOB_TRACKER_ADDRESS, "localhost:0");
-    pjt = ProxyJobTracker.startProxyTracker(conf);
+    // if there is any problem with dependencies, please implement
+    // getFreePort() in MiniCoronaCluster
+    this.conf.set(CoronaConf.PROXY_JOB_TRACKER_THRIFT_ADDRESS, "localhost:"
+        + MiniDFSCluster.getFreePort());
+    pjt = ProxyJobTracker.startProxyTracker(new CoronaConf(conf));
     this.proxyJobTrackerPort = pjt.getRpcPort();
     configureJobConf(conf, builder.namenode, clusterManagerPort,
       proxyJobTrackerPort, builder.ugi);
@@ -151,6 +159,11 @@ public class MiniCoronaCluster {
     }
     if (host != null) {
       NetUtils.addStaticResolution(host, "localhost");
+      try {
+        InetAddress addr = InetAddress.getByName(host);
+        NetUtils.addStaticResolution(addr.getHostAddress(),"localhost");
+      } catch (UnknownHostException e) {
+      }
     }
     TaskTrackerRunner taskTracker;
     taskTracker = new TaskTrackerRunner(idx, numDir, host, conf);
@@ -235,6 +248,7 @@ public class MiniCoronaCluster {
       }
       conf.set("mapred.task.tracker.http.address", "0.0.0.0:0");
       conf.set("mapred.task.tracker.report.address", "localhost:0");
+      conf.setInt(NettyMapOutputHttpServer.MAXIMUM_THREAD_POOL_SIZE, 10);
       File localDirBase =
         new File(conf.get("mapred.local.dir")).getAbsoluteFile();
       localDirBase.mkdirs();
@@ -316,6 +330,18 @@ public class MiniCoronaCluster {
       File configDir = new File("build", "minimr");
       File siteFile = new File(configDir, "mapred-site.xml");
       siteFile.delete();
+    }
+    try {
+      pjt.shutdown();
+      pjt.join();
+    } catch (Exception e) {
+      LOG.error("Error during PJT shutdown", e);
+    }
+    try {
+      clusterManagerServer.stopRunning();
+      clusterManagerServer.join();
+    } catch (Exception e) {
+      LOG.error("Error during CM shutdown", e);
     }
   }
 

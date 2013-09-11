@@ -37,7 +37,8 @@ import org.apache.hadoop.fs.ContentSummary;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import static org.apache.hadoop.hdfs.server.namenode.TestListCorruptFileBlocks.
   countPaths;
@@ -64,7 +65,8 @@ public class TestAvatarAPI {
   /**
    * Set up MiniAvatarCluster.
    */
-  public void setUp(boolean federation) throws Exception {
+  public void setUp(boolean federation, String name) throws Exception {
+    LOG.info("------------------- test: " + name + " START ----------------");
     conf = new Configuration();
     // populate repl queues on standby (in safe mode)
     conf.setFloat("dfs.namenode.replqueue.threshold-pct", 0f);
@@ -151,14 +153,14 @@ public class TestAvatarAPI {
   
   @Test
   public void testPrimaryShutdownFailure() throws Exception {
-    setUp(false);
+    setUp(false, "testPrimaryShutdownFailure");
     InjectionHandler.set(new TestAvatarAPIHandler());
     LOG.info("DAFS testPrimary");
     try {
       cluster.killPrimary();
       fail("Shutting down the node should fail");
     } catch (IOException e) {
-      assertTrue(e.toString().contains("number of required edit streams"));
+      assertTrue(e.toString().contains("Number of required edit streams"));
     }
     InjectionHandler.clear();
   }
@@ -168,7 +170,7 @@ public class TestAvatarAPI {
    */
   @Test
   public void testPrimary() throws Exception {
-    setUp(false);
+    setUp(false, "testPrimary");
     LOG.info("DAFS testPrimary");
     cluster.killStandby();
     checkPrimary();
@@ -179,7 +181,7 @@ public class TestAvatarAPI {
    */
   @Test
   public void testStandby() throws Exception {
-    setUp(false);
+    setUp(false, "testStandby");
     LOG.info("DAFS testStandby");
     long lastTxId = getLastTxId();
     cluster.killPrimary(false);
@@ -193,7 +195,7 @@ public class TestAvatarAPI {
    */
   @Test
   public void testFailOver() throws Exception {
-    setUp(false);
+    setUp(false, "testFailOver");
     LOG.info("DAFS testFailOver");
     long lastTxId = getLastTxId();
     cluster.killPrimary();
@@ -215,7 +217,7 @@ public class TestAvatarAPI {
   
   @Test
   public void testStandbyWithFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testStandbyWithFederation");
     LOG.info("DAFS testStandby");
     long lastTxId = getLastTxId();
     cluster.killPrimary(0, false);
@@ -226,7 +228,7 @@ public class TestAvatarAPI {
   
   @Test
   public void testPrimaryWithFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testPrimaryWithFederation");
     LOG.info("DAFS testPrimary");
     cluster.killStandby(0);
     checkPrimary();
@@ -234,7 +236,7 @@ public class TestAvatarAPI {
   
   @Test
   public void testFailOverWithFederation() throws Exception {
-    setUp(true);
+    setUp(true, "testFailoverWithFederation");
     LOG.info("DAFS testFailOver");
     long lastTxId = getLastTxId();
     cluster.killPrimary(0);
@@ -263,6 +265,7 @@ public class TestAvatarAPI {
   public void shutDown() throws Exception {
     dafs.close();
     cluster.shutDown();
+    InjectionHandler.clear();
   }
 
   @AfterClass
@@ -271,12 +274,13 @@ public class TestAvatarAPI {
   }
   
   private static class TestAvatarAPIHandler extends InjectionHandler {
+
     @Override
-    public boolean _falseCondition(InjectionEvent event, Object... args) {
+    public boolean _trueCondition(InjectionEventI event, Object... args) {
       if (event == InjectionEvent.AVATARNODE_CHECKEDITSTREAMS) {
-        return true;
+        return false;
       }
-      return false;
+      return true;
     }
   }
 }

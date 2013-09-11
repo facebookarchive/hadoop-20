@@ -45,6 +45,9 @@ public class DatanodeProtocols implements DatanodeProtocol {
   public final static int DNA_CLEARPRIMARY = -2;
   // A no-op command.
   public final static int DNA_RETRY = -3;
+  // Instruct datanodes to prepare for failover
+  public final static int DNA_PREPAREFAILOVER = -4;
+  
   public static final Log LOG = LogFactory.getLog(DatanodeProtocols.class.getName());
 
   DatanodeProtocol node[];

@@ -38,6 +38,7 @@ import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.ListIterator;
 import java.util.Map;
@@ -191,7 +192,9 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    * Name of the file that holds all json configurations.
    */ 
   public static final String MATERIALIZEDJSON = "config.materialized_JSON";
-    
+
+  private final JSONObject jsonObject;
+
   static{	  
     //print deprecation warning if hadoop-site.xml is found in classpath
     ClassLoader cL = Thread.currentThread().getContextClassLoader();
@@ -218,28 +221,49 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
       classLoader = Configuration.class.getClassLoader();
     }
   }
+
+  public Configuration(JSONObject jsonObject) throws JSONException {
+    this(false, jsonObject);
+  }
 	
   /** A new configuration. */
   public Configuration() {
     this(true);
   }
 
-  /** A new configuration where the behavior of reading from the default 
+  /**
+   * A new configuration where the behavior of reading from the default
    * resources can be turned off.
    * 
-   * If the parameter {@code loadDefaults} is false, the new instance
-   * will not load resources from the default files. 
-   * @param loadDefaults specifies whether to load from the default files
+   * If the parameter {@code loadDefaults} is false, the new instance will not
+   * load resources from the default files.
+   *
+   * @param loadDefaults
+   *          specifies whether to load from the default files
    */
   public Configuration(boolean loadDefaults) {
+    this(loadDefaults, null);
+  }
+
+  /**
+   * A new configuration where the behavior of reading from the default
+   * resources can be turned off.
+   *
+   * If the parameter {@code loadDefaults} is false, the new instance will not
+   * load resources from the default files.
+   *
+   * @param loadDefaults
+   *          specifies whether to load from the default files
+   * @param jsonObject
+   *          a json object to load
+   */
+  public Configuration(boolean loadDefaults, JSONObject jsonObject) {
     this.loadDefaults = loadDefaults;
-    if (LOG.isDebugEnabled()) {
-      LOG.debug(StringUtils.stringifyException(new IOException("config()")));
-    }
     updatingResource = new HashMap<String, String>();
     synchronized(Configuration.class) {
       REGISTRY.put(this, null);
     }
+    this.jsonObject = jsonObject;
   }
   
   /** 
@@ -271,6 +295,7 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
     synchronized(Configuration.class) {
       REGISTRY.put(this, null);
     }
+    this.jsonObject = other.jsonObject;
   }
   
   /**
@@ -281,6 +306,20 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
   public static synchronized void addDefaultResource(String name) {
     if(!defaultResources.contains(name)) {
       defaultResources.add(name);
+      for(Configuration conf : REGISTRY.keySet()) { 
+        if(conf.loadDefaults) {
+          conf.reloadConfiguration();
+        }
+      }
+    }
+  }
+  
+  /**
+   * Remove default resource
+   */
+  public static synchronized void removeDefaultResource(String name) {
+    if(defaultResources.contains(name)) {
+      defaultResources.remove(name);
       for(Configuration conf : REGISTRY.keySet()) { 
         if(conf.loadDefaults) {
           conf.reloadConfiguration();
@@ -605,12 +644,20 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    *         or <code>defaultValue</code>. 
    */
   public boolean getBoolean(String name, boolean defaultValue) {
-    String valueString = get(name);
-    if ("true".equals(valueString))
-      return true;
-    else if ("false".equals(valueString))
+    String valueString = get(name); 
+    if (valueString == null) {
+      return defaultValue;
+    }
+    valueString = valueString.toLowerCase();
+    
+    if ("true".equals(valueString)) {
+      return true;  
+    } else if ("false".equals(valueString)) {
       return false;
-    else return defaultValue;
+    }
+    
+    throw new IllegalArgumentException("Invalid value of boolean conf option " + name + ": " +
+        valueString);
   }
 
   /** 
@@ -1064,6 +1111,30 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
     return result.entrySet().iterator();
   }
 
+  /**
+   * Loads an entire json configuration object which would mostly contain many
+   * sub-sections like "core-site.xml" and "hdfs-site.xml"
+   *
+   * @param json
+   *          the json object to load
+   * @throws JSONException
+   *           on error
+   */
+  private void loadEntireJsonObject(JSONObject json) throws JSONException {
+    Iterator<?> it = json.keys();
+    while (it.hasNext()) {
+      // This key is something like core-site.xml or hdfs-site.xml
+      Object obj = it.next();
+      if (!(obj instanceof String)) {
+        LOG.warn("Object not instance of string : " + obj + " skipping");
+        continue;
+      }
+      String key = (String) obj;
+      JSONObject partition = json.getJSONObject(key);
+      loadJsonResource(partition, properties, key);
+    }
+  }
+
   private void loadResources(Properties properties,
                              ArrayList resources,
                              boolean quiet) {
@@ -1080,6 +1151,14 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
     
     for (Object resource : resources) {
       loadResource(properties, resource, quiet);
+    }
+
+    try {
+    	if (jsonObject != null) {
+    		this.loadEntireJsonObject(jsonObject);
+    	}
+    } catch (Exception e) {
+      LOG.info("Could not load json object : " + jsonObject + ", exception: " + e.getMessage());
     }
   }
 
@@ -1284,23 +1363,22 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
   }
   
   /**
-   * Given a xml config file specified by a path, return the
-   * corresponding json object if it exists.
+   * Given a xml config file specified by a path, return the corresponding json
+   * object if it exists.
    */ 
-  private JSONObject getJsonConfig(Path name) throws IOException,
-                                                     JSONException {
+  private JSONObject getJsonConfig(Path name)
+      throws IOException, JSONException {
     String pathString = name.toUri().getPath();
-    if (pathString.endsWith(".xml")) {
-      String xml = new Path(pathString).getName();
-      File jsonFile = new File(pathString.replace(xml, MATERIALIZEDJSON))
-                          .getAbsoluteFile();
-      if (jsonFile.exists()) {
-        InputStream in = new BufferedInputStream(new FileInputStream(jsonFile));
-        if (in != null) {
-          JSONObject json = instantiateJsonObject(in);
-          if (json.has(xmlToThrift(xml))) {
-            return json.getJSONObject(xmlToThrift(xml));
-          } 
+    String xml = new Path(pathString).getName();
+    File jsonFile = new File(pathString.replace(xml, MATERIALIZEDJSON))
+        .getAbsoluteFile();
+    if (jsonFile.exists()) {
+      InputStream in = new BufferedInputStream(new FileInputStream(jsonFile));
+      if (in != null) {
+        JSONObject json = instantiateJsonObject(in);
+        // Try to load the xml entity inside the json blob.
+        if (json.has(xmlToThrift(xml))) {
+          return json.getJSONObject(xmlToThrift(xml));
         }
       }
     }
@@ -1334,9 +1412,14 @@ public class Configuration implements Iterable<Map.Entry<String,String>>,
    */  
   private void loadJsonResource(JSONObject json, Properties properties, Object name)
                                 throws JSONException {
-    Iterator<String> keys = json.keys();
+    Iterator<?> keys = json.keys();
     while (keys.hasNext()) {
-      String key = keys.next();
+      Object obj = keys.next();
+      if (!(obj instanceof String)) {
+        LOG.warn("Object not instance of string : " + obj + " skipping");
+        continue;
+      }
+      String key = (String) obj;
       // can't have . in thrift fields so we represent . with _
       String keyUnderscoresToDots = key.replace("_", ".");  
       // actual _ are represented as __ in thrift schema

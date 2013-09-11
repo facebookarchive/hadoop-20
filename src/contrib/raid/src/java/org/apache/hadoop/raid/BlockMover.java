@@ -28,6 +28,8 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.ReplaceBlockHeader;
+import org.apache.hadoop.hdfs.protocol.VersionAndOpcode;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.Text;
@@ -49,6 +51,14 @@ class BlockMover {
   final Thread clusterUpdater;
   ExecutorService executor;
   final int dataTransferProtocolVersion;
+  final int chooseNodeMaxRetryTimes;
+  // this is for test only.
+  final boolean treatNodesOnDifferentRack;
+  
+  final static String RAID_CHOOSE_NODE_RETRY_TIMES_KEY = "raid.block.mover.choose.node.retry";
+  final static int RAID_CHOOSE_NODE_RETRY_TIMES_DEFAULT = 100;
+  
+  final static String RAID_TEST_TREAT_NODES_ON_DEFAULT_RACK_KEY = "raid.test.treat.nodes.on.different.rack";
   
 
   BlockMover(int numMovingThreads, int maxQueueSize,
@@ -78,6 +88,8 @@ class BlockMover {
     this.conf = conf;
     this.alwaysSubmitPriorityLevel = alwaysSubmitPriorityLevel;
     this.dataTransferProtocolVersion = RaidUtils.getDataTransferProtocolVersion(conf);
+    this.chooseNodeMaxRetryTimes = conf.getInt(RAID_CHOOSE_NODE_RETRY_TIMES_KEY, RAID_CHOOSE_NODE_RETRY_TIMES_DEFAULT);
+    this.treatNodesOnDifferentRack = conf.getBoolean(RAID_TEST_TREAT_NODES_ON_DEFAULT_RACK_KEY, false);
   }
 
   public void start() {
@@ -94,12 +106,20 @@ class BlockMover {
   public int getQueueSize() {
     return movingQueue.size();
   }
+  
+  public boolean isOnSameRack(DatanodeInfo n1, DatanodeInfo n2) {
+    if (treatNodesOnDifferentRack) {
+      // this is for test only
+      return false;
+    }
+    return cluster.isOnSameRack(n1, n2);
+  }
 
-  public void move(LocatedBlock block, DatanodeInfo node,
+  public void move(LocatedBlock block, DatanodeInfo node, DatanodeInfo target,
       Set<DatanodeInfo> excludedNodes, int priority,
       int dataTransferProtocolVersion, int namespaceId) {
     BlockMoveAction action = new BlockMoveAction(
-        block, node, excludedNodes, priority,
+        block, node, target, excludedNodes, priority,
         dataTransferProtocolVersion, namespaceId);
     if (LOG.isDebugEnabled()) {
       LOG.debug("Bad block placement: " + action);
@@ -139,6 +159,19 @@ class BlockMover {
       return a1.createTime > a2.createTime ? 1 : -1;
     }
   }
+  
+  /**
+   * explicitly choose the target nodes. 
+   * @throws IOException
+   */
+  public DatanodeInfo chooseTargetNodes(Set<DatanodeInfo> excludedNodes) 
+      throws IOException {
+    DatanodeInfo target = cluster.getNodeOnDifferentRack(excludedNodes);
+    if (target == null) {
+      throw new IOException ("Error choose datanode");
+    }
+    return target;
+  }
 
   /**
    * Create one more replication of the block
@@ -159,6 +192,17 @@ class BlockMover {
         int priority,
         int dataTransferProtocol,
         int namespaceId) {
+     this(block, source, null, excludedNodes, priority, 
+         dataTransferProtocol, namespaceId); 
+    }
+    
+    BlockMoveAction(LocatedBlock block,
+        DatanodeInfo source,
+        DatanodeInfo target,
+        Set<DatanodeInfo> excludedNodes,
+        int priority,
+        int dataTransferProtocol,
+        int namespaceId) {
       this.block = block;
       this.excludedNodes = excludedNodes;
       for (DatanodeInfo d : block.getLocations()) {
@@ -166,6 +210,7 @@ class BlockMover {
         excludedNodes.add(d);
       }
       this.source = source;
+      this.target = target;
       this.createTime = System.currentTimeMillis();
       this.priority = priority;
       this.dataTransferProtocolVersion = dataTransferProtocol;
@@ -177,9 +222,11 @@ class BlockMover {
      * @throws IOException
      */
     void chooseNodes() throws IOException {
-      target = cluster.getRandomNode(excludedNodes);
       if (target == null) {
-        throw new IOException("Error choose datanode");
+        target = cluster.getNodeOnDifferentRack(excludedNodes);
+        if (target == null) {
+          throw new IOException("Error choose datanode");
+        }
       }
       for (DatanodeInfo n : block.getLocations()) {
         if (cluster.isOnSameRack(target, n)) {
@@ -226,7 +273,7 @@ class BlockMover {
               " from "+ source.getName() +
               " to " + target.getName() +
               " through " + proxySource.getName() + " succeed.");
-      } catch (IOException e) {
+      } catch (Exception e) {
         LOG.warn("Error moving block " + block.getBlock().getBlockId() +
             " from " + source.getName() + " to " +
             target.getName() + " through " + proxySource.getName(), e);
@@ -258,6 +305,12 @@ class BlockMover {
       ret.append("priority:");
       ret.append(priority);
       ret.append("\t");
+      ret.append("source:");
+      ret.append(source);
+      ret.append("\t");
+      ret.append("target:");
+      ret.append(target);
+      ret.append("\t");
       ret.append("createTime:");
       ret.append(createTime);
       ret.append("\t");
@@ -270,15 +323,12 @@ class BlockMover {
      * Send a block replace request to the output stream
      */
     private void sendRequest(DataOutputStream out) throws IOException {
-      out.writeShort(dataTransferProtocolVersion);
-      out.writeByte(DataTransferProtocol.OP_REPLACE_BLOCK);
-      if (dataTransferProtocolVersion >= DataTransferProtocol.FEDERATION_VERSION) {
-        out.writeInt(namespaceId);
-      }   
-      out.writeLong(block.getBlock().getBlockId());
-      out.writeLong(block.getBlock().getGenerationStamp());
-      Text.writeString(out, source.getStorageID());
-      proxySource.write(out);
+      ReplaceBlockHeader header = new ReplaceBlockHeader(new VersionAndOpcode(
+          dataTransferProtocolVersion, DataTransferProtocol.OP_REPLACE_BLOCK));
+      header.set(namespaceId, block.getBlock().getBlockId(), block.getBlock()
+          .getGenerationStamp(), source.getStorageID(), proxySource);
+      header.writeVersionAndOpCode(out);
+      header.write(out);
       out.flush();
     }
 
@@ -334,6 +384,7 @@ class BlockMover {
     public void stop() {
       running = false;
     }
+    
     public synchronized DatanodeInfo getRandomNode(Set<DatanodeInfo> excluded) {
       if (liveNodes == null || liveNodes.length == 0) {
         return null;
@@ -348,6 +399,44 @@ class BlockMover {
         }
       }
     }
+    
+    /**
+     * Choose a node on different rack
+     */
+    public synchronized DatanodeInfo getNodeOnDifferentRack(
+                                      Set<DatanodeInfo> excluded) {
+      if (liveNodes == null || liveNodes.length == 0) {
+        return null;
+      }
+      if (liveNodes.length <= excluded.size()) {
+        return liveNodes[rand.nextInt(liveNodes.length)];
+      }
+      int retry = 0;
+      for (;;) {
+        retry ++;
+        DatanodeInfo target = liveNodes[rand.nextInt(liveNodes.length)];
+        if (!excluded.contains(target)) {
+          if (retry >= chooseNodeMaxRetryTimes) {
+            return target;
+          }
+          if (topology.getNumOfRacks() <= 1) {
+            return target;
+          } else {
+            boolean sameRack = false;
+            for (DatanodeInfo node : excluded) {
+              if (isOnSameRack(node, target)) {
+                sameRack = true;
+                break;
+              }
+            }
+            if (!sameRack) {
+              return target;
+            }
+          }
+        }
+      }
+    }
+    
     public synchronized boolean isOnSameRack(DatanodeInfo n1, DatanodeInfo n2) {
       return topology.isOnSameRack(n1, n2);
     }

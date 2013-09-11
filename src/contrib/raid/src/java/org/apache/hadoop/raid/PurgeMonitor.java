@@ -20,6 +20,7 @@ package org.apache.hadoop.raid;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
@@ -33,6 +34,9 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
+import org.apache.hadoop.raid.LogUtils.LOGRESULTS;
+import org.apache.hadoop.raid.LogUtils.LOGTYPES;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 
 /**
@@ -40,6 +44,9 @@ import org.apache.hadoop.raid.protocol.PolicyInfo;
  */
 public class PurgeMonitor implements Runnable {
   public static final Log LOG = LogFactory.getLog(PurgeMonitor.class);
+  public static final long PURGE_MONITOR_SLEEP_TIME_DEFAULT = 10000L;
+  public static final String PURGE_MONITOR_SLEEP_TIME_KEY =
+      "hdfs.raid.purge.monitor.sleep";
 
   volatile boolean running = true;
 
@@ -47,17 +54,27 @@ public class PurgeMonitor implements Runnable {
   private PlacementMonitor placementMonitor;
   private int directoryTraversalThreads;
   private boolean directoryTraversalShuffle;
+  private long purgeMonitorSleepTime = PURGE_MONITOR_SLEEP_TIME_DEFAULT;
 
   AtomicLong entriesProcessed;
+  private final RaidNode raidNode;
+  private final static List<FileStatus> modifiedSource = 
+      new ArrayList<FileStatus>();
 
-  public PurgeMonitor(Configuration conf, PlacementMonitor placementMonitor) {
+  public PurgeMonitor(Configuration conf, 
+                      PlacementMonitor placementMonitor,
+                      final RaidNode raidNode) {
     this.conf = conf;
     this.placementMonitor = placementMonitor;
     this.directoryTraversalShuffle =
         conf.getBoolean(RaidNode.RAID_DIRECTORYTRAVERSAL_SHUFFLE, true);
     this.directoryTraversalThreads =
         conf.getInt(RaidNode.RAID_DIRECTORYTRAVERSAL_THREADS, 4);
+    this.purgeMonitorSleepTime = 
+        conf.getLong(PURGE_MONITOR_SLEEP_TIME_KEY,
+            PURGE_MONITOR_SLEEP_TIME_DEFAULT);
     this.entriesProcessed = new AtomicLong(0);
+    this.raidNode = raidNode;
   }
 
   /**
@@ -84,12 +101,7 @@ public class PurgeMonitor implements Runnable {
         DirectoryTraversal.directoryRetriever(Arrays.asList(root), fs,
             directoryTraversalThreads, directoryTraversalShuffle);
     String prefix = root.toUri().getPath();
-    List<FileStatus> startPaths = new LinkedList<FileStatus>();
-    try {
-      startPaths.add(fs.getFileStatus(root));
-    } catch (FileNotFoundException e) {
-      return;
-    }
+    
     FileStatus dir;
     while ((dir = traversal.next()) != DirectoryTraversal.FINISH_TOKEN) {
       Path dirPath = dir.getPath();
@@ -113,13 +125,28 @@ public class PurgeMonitor implements Runnable {
   void doPurge() throws IOException, InterruptedException {
     entriesProcessed.set(0);
     while (running) {
-      Thread.sleep(10 * 1000L);
+      Thread.sleep(purgeMonitorSleepTime);
 
       placementMonitor.startCheckingFiles();
       try {
-        for (ErasureCodeType code:
-              new ErasureCodeType[]{ErasureCodeType.RS, ErasureCodeType.XOR}) {
-          purgeCode(code);
+        for (Codec c : Codec.getCodecs()) {
+          modifiedSource.clear();
+          purgeCode(c);
+          // re-generate the parity files for modified sources.
+          if (modifiedSource.size() > 0) {
+            LOG.info("re-generate parity files");
+            PolicyInfo info = raidNode.determinePolicy(c);
+            // check if we should raid the files/directories.
+            for (Iterator<FileStatus> it = modifiedSource.iterator(); 
+                    it.hasNext();) {
+              FileStatus stat = it.next();
+              if (!RaidNode.shouldRaid(conf, 
+                  stat.getPath().getFileSystem(conf), stat, c)) {
+                it.remove();
+              }
+            }
+            raidNode.raidFiles(info, modifiedSource);
+          }
         }
       } finally {
         placementMonitor.clearAndReport();
@@ -127,10 +154,11 @@ public class PurgeMonitor implements Runnable {
     }
   }
 
-  void purgeCode(ErasureCodeType code) throws IOException {
-    Path parityPath = RaidNode.getDestinationPath(code, conf);
+  void purgeCode(Codec codec) throws IOException {
+    Path parityPath = new Path(codec.parityDirectory);
     FileSystem parityFs = parityPath.getFileSystem(conf);
 
+    PolicyInfo policy = raidNode == null ? null: raidNode.determinePolicy(codec);
     // One pass to purge directories that dont exists in the src.
     // This is cheaper than looking at parities.
     purgeDirectories(parityFs, parityPath);
@@ -149,7 +177,7 @@ public class PurgeMonitor implements Runnable {
         "Purge File ",
         Collections.singletonList(parityPath),
         parityFs,
-        new PurgeParityFileFilter(conf, code, srcFs, parityFs,
+        new PurgeParityFileFilter(conf, codec, policy, srcFs, parityFs,
           parityPath.toUri().getPath(), placementMonitor, entriesProcessed),
         directoryTraversalThreads,
         directoryTraversalShuffle);
@@ -159,24 +187,27 @@ public class PurgeMonitor implements Runnable {
       performDelete(parityFs, obsolete.getPath(), false);
     }
 
-    DirectoryTraversal obsoleteParityHarRetriever =
-      new DirectoryTraversal(
-        "Purge HAR ",
-        Collections.singletonList(parityPath),
-        parityFs,
-        new PurgeHarFilter(conf, code, srcFs, parityFs,
-          parityPath.toUri().getPath(), placementMonitor, entriesProcessed),
-        directoryTraversalThreads,
-        directoryTraversalShuffle);
-    while ((obsolete = obsoleteParityHarRetriever.next()) !=
-              DirectoryTraversal.FINISH_TOKEN) {
-      performDelete(parityFs, obsolete.getPath(), true);
+    if (!codec.isDirRaid) {
+      DirectoryTraversal obsoleteParityHarRetriever =
+        new DirectoryTraversal(
+          "Purge HAR ",
+          Collections.singletonList(parityPath),
+          parityFs,
+          new PurgeHarFilter(conf, codec, policy, srcFs, parityFs,
+             parityPath.toUri().getPath(), placementMonitor, entriesProcessed),
+          directoryTraversalThreads,
+          directoryTraversalShuffle);
+      while ((obsolete = obsoleteParityHarRetriever.next()) !=
+                DirectoryTraversal.FINISH_TOKEN) {
+        performDelete(parityFs, obsolete.getPath(), true);
+      }
     }
   }
 
   static void performDelete(FileSystem fs, Path p, boolean recursive)
       throws IOException {
-    boolean success = fs.delete(p, recursive);
+    DistributedFileSystem dfs = RaidUtils.convertToDFS(fs);
+    boolean success = dfs.delete(p, recursive);
     if (success) {
       LOG.info("Purging " + p + ", recursive=" + recursive);
       RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).entriesPurged.inc();
@@ -187,7 +218,8 @@ public class PurgeMonitor implements Runnable {
 
   static class PurgeHarFilter implements DirectoryTraversal.Filter {
     Configuration conf;
-    ErasureCodeType code;
+    Codec codec;
+    PolicyInfo policy;
     FileSystem srcFs;
     FileSystem parityFs;
     String parityPrefix;
@@ -196,14 +228,16 @@ public class PurgeMonitor implements Runnable {
 
     PurgeHarFilter(
         Configuration conf,
-        ErasureCodeType code,
+        Codec codec,
+        PolicyInfo policy,
         FileSystem srcFs,
         FileSystem parityFs,
         String parityPrefix,
         PlacementMonitor placementMonitor,
         AtomicLong counter) {
       this.conf = conf;
-      this.code = code;
+      this.codec = codec;
+      this.policy = policy;
       this.parityPrefix = parityPrefix;
       this.srcFs = srcFs;
       this.parityFs = parityFs;
@@ -219,8 +253,8 @@ public class PurgeMonitor implements Runnable {
           counter.incrementAndGet();
           try {
             float harUsedPercent =
-              usefulHar(code, srcFs, parityFs, f.getPath(), parityPrefix, conf,
-                placementMonitor);
+              usefulHar(codec, policy, srcFs, parityFs, f.getPath(), 
+                  parityPrefix, conf, placementMonitor);
             LOG.info("Useful percentage of " + pathStr + " " + harUsedPercent);
             // Delete the har if its usefulness reaches a threshold.
             if (harUsedPercent <= conf.getFloat("raid.har.usage.threshold", 0)) {
@@ -237,7 +271,8 @@ public class PurgeMonitor implements Runnable {
 
   static class PurgeParityFileFilter implements DirectoryTraversal.Filter {
     Configuration conf;
-    ErasureCodeType code;
+    Codec codec;
+    PolicyInfo policy;
     FileSystem srcFs;
     FileSystem parityFs;
     String parityPrefix;
@@ -246,14 +281,16 @@ public class PurgeMonitor implements Runnable {
 
     PurgeParityFileFilter(
         Configuration conf,
-        ErasureCodeType code,
+        Codec codec,
+        PolicyInfo policy,
         FileSystem srcFs,
         FileSystem parityFs,
         String parityPrefix,
         PlacementMonitor placementMonitor,
         AtomicLong counter) {
       this.conf = conf;
-      this.code = code;
+      this.codec = codec;
+      this.policy = policy;
       this.parityPrefix = parityPrefix;
       this.srcFs = srcFs;
       this.parityFs = parityFs;
@@ -288,16 +325,22 @@ public class PurgeMonitor implements Runnable {
 
       if (!shouldDelete) {
         try {
-          if (code == ErasureCodeType.XOR) {
-            ParityFilePair ppair = ParityFilePair.getParityFile(
-                ErasureCodeType.RS, srcPath, conf);
-            if (ppair != null) {
-              shouldDelete = true;
-            }
+          if (existsBetterParityFile(codec, srcStat, conf)) {
+            shouldDelete = true;
           }
+          
           if (!shouldDelete) {
+            if (srcStat.getModificationTime() != f.getModificationTime()
+                && codec.isDirRaid) {
+              modifiedSource.add(srcStat);
+              LogUtils.logEvent(srcFs, srcPath, LOGTYPES.MODIFICATION_TIME_CHANGE,
+                  LOGRESULTS.NONE, codec, null, null, codec.id);
+              // delete the parity file after we finish the re-generation.
+              return false;
+            }
+            
             ParityFilePair ppair =
-                ParityFilePair.getParityFile(code, srcPath, conf);
+                ParityFilePair.getParityFile(codec, srcStat, conf);
             if ( ppair == null ||
                  !parityFs.equals(ppair.getFileSystem()) ||
                  !pathStr.equals(ppair.getPath().toUri().getPath())) {
@@ -306,7 +349,7 @@ public class PurgeMonitor implements Runnable {
               // This parity file matches the source file.
               if (placementMonitor != null) {
                 placementMonitor.checkFile(srcFs, srcStat,
-                  ppair.getFileSystem(), ppair.getFileStatus(), code);
+                  ppair.getFileSystem(), ppair.getFileStatus(), codec, policy);
               }
             }
           }
@@ -318,12 +361,30 @@ public class PurgeMonitor implements Runnable {
     }
   }
 
+  /**
+   * Is there a parity file which has a codec with higher priority?
+   */
+  private static boolean existsBetterParityFile(
+      Codec codec, FileStatus srcStat, Configuration conf) throws IOException {
+    for (Codec c : Codec.getCodecs()) {
+      if (c.priority > codec.priority) {
+        ParityFilePair ppair = ParityFilePair.getParityFile(
+            c, srcStat, conf);
+        if (ppair != null) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   //
   // Returns the number of up-to-date files in the har as a percentage of the
   // total number of files in the har.
   //
   protected static float usefulHar(
-    ErasureCodeType code,
+    Codec codec,
+    PolicyInfo policy,
     FileSystem srcFs, FileSystem parityFs,
     Path harPath, String parityPrefix, Configuration conf,
     PlacementMonitor placementMonitor) throws IOException {
@@ -339,17 +400,19 @@ public class PurgeMonitor implements Runnable {
         continue;
       }
       String src = entry.fileName.substring(parityPrefix.length());
-      if (code == ErasureCodeType.XOR) {
-        ParityFilePair ppair = ParityFilePair.getParityFile(
-            ErasureCodeType.RS, new Path(src), conf);
-        if (ppair != null) {
-          // There is a valid RS parity file, so the XOR one is useless.
-          numUseless++;
-          continue;
-        }
+      Path srcPath = new Path(src);
+      FileStatus srcStatus = null;
+      try {
+        srcStatus = srcFs.getFileStatus(srcPath);
+      } catch (FileNotFoundException e) {
+        numUseless++;
+        continue;
+      }
+      if (existsBetterParityFile(codec, srcStatus, conf)) {
+        numUseless += 1;
+        continue;
       }
       try {
-        FileStatus srcStatus = srcFs.getFileStatus(new Path(src));
         if (srcStatus == null) {
           numUseless++;
         } else if (entry.mtime != srcStatus.getModificationTime()) {
@@ -360,7 +423,7 @@ public class PurgeMonitor implements Runnable {
             // Check placement.
             placementMonitor.checkFile(
               srcFs, srcStatus,
-              parityFs, harIndex.partFilePath(entry), entry, code);
+              parityFs, harIndex.partFilePath(entry), entry, codec, policy);
           }
           if (LOG.isDebugEnabled()) {
             LOG.debug("Useful file " + entry.fileName);

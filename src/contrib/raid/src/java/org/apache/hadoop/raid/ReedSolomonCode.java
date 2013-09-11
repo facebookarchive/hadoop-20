@@ -18,12 +18,12 @@
 
 package org.apache.hadoop.raid;
 
-import java.io.IOException;
+import java.util.Arrays;
 import java.util.Set;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
-public class ReedSolomonCode implements ErasureCode {
+public class ReedSolomonCode extends ErasureCode {
   public static final Log LOG = LogFactory.getLog(ReedSolomonCode.class);
 
   private int stripeSize;
@@ -45,11 +45,11 @@ public class ReedSolomonCode implements ErasureCode {
   }
 
   @Override
-  public void init(Codec codec) throws IOException {
+  public void init(Codec codec) {
+    init(codec.stripeLength, codec.parityLength);
     LOG.info("Initialized " + ReedSolomonCode.class +
              " stripeLength:" + codec.stripeLength +
              " parityLength:" + codec.parityLength);
-    init(codec.stripeLength, codec.parityLength);
   }
 
   private void init(int stripeSize, int paritySize) {
@@ -94,6 +94,34 @@ public class ReedSolomonCode implements ErasureCode {
       parity[i] = dataBuff[i];
     }
   }
+  
+  /**
+   * This function (actually, the GF.remainder() function) will modify
+   * the "inputs" parameter.
+   */
+  @Override
+  public void encodeBulk(byte[][] inputs, byte[][] outputs) {
+    final int stripeSize = stripeSize();
+    final int paritySize = paritySize();
+    assert (stripeSize == inputs.length);
+    assert (paritySize == outputs.length);
+    
+    for (int i = 0; i < outputs.length; i++) {
+      Arrays.fill(outputs[i], (byte)0);
+    }
+    
+    byte[][] data = new byte[stripeSize + paritySize][];
+
+    for (int i = 0; i < paritySize; i++) {
+      data[i] = outputs[i];
+    }
+    for (int i = 0; i < stripeSize; i++) {
+      data[i + paritySize] = inputs[i];
+    }
+    
+    // Compute the remainder
+    GF.remainder(data, generatingPolynomial);
+  }
 
   @Override
   public void decode(int[] data, int[] erasedLocation, int[] erasedValue) {
@@ -109,6 +137,58 @@ public class ReedSolomonCode implements ErasureCode {
       erasedValue[i] = GF.substitute(data, primitivePower[i]);
     }
     GF.solveVandermondeSystem(errSignature, erasedValue, erasedLocation.length);
+  }
+  
+  @Override
+  public void decodeBulk(byte[][] readBufs, byte[][] writeBufs, 
+                               int[] erasedLocation) {
+    decodeBulk(readBufs, writeBufs, erasedLocation, 0, readBufs[0].length);
+  }
+  
+  public byte[] decodeOneBlock(byte[][] readBufs, int dataLen, 
+      int[] erasedLocation, int decodeLocation) {
+    int numErasedLocation = erasedLocation.length; 
+    if (numErasedLocation == 0) {
+      return null;
+    }
+    int pos = -1;
+    for (int i = 0; i < numErasedLocation; i++) {
+      if (erasedLocation[i] == decodeLocation) {
+        pos = i;  
+        break;
+      }
+    }
+    if (pos == -1) {
+      LOG.error("Location " + decodeLocation + " is not in the erasedLocation");
+      return null; 
+    }
+    byte[][] tmpBufs = new byte[numErasedLocation][];
+    for (int i = 0; i < numErasedLocation; i++) {
+      tmpBufs[i] = new byte[dataLen];
+    }
+    decodeBulk(readBufs, tmpBufs, erasedLocation, 0, dataLen);
+    return Arrays.copyOf(tmpBufs[pos], dataLen);
+  }
+  
+  @Override
+  public void decodeBulk(byte[][] readBufs, byte[][] writeBufs, 
+      int[] erasedLocation, int dataStart, int dataLen) {
+    if (erasedLocation.length == 0) {
+      return;
+    }
+    
+    // cleanup the write buffer
+    for (int i = 0; i < writeBufs.length; i++) {
+      Arrays.fill(writeBufs[i], dataStart, dataStart + dataLen, (byte)0);
+    }
+
+    for (int i = 0; i < erasedLocation.length; i++) {
+      errSignature[i] = primitivePower[erasedLocation[i]];
+      GF.substitute(readBufs, writeBufs[i], primitivePower[i], 
+                    dataStart, dataLen);
+    }
+    GF.solveVandermondeSystem(errSignature, writeBufs, erasedLocation.length, 
+        dataStart, dataLen);
   }
 
   @Override

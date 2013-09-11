@@ -148,5 +148,14 @@ public class TestPath extends TestCase {
     assertEquals("foo://bar/baz", new Path("foo://bar/","/baz").toString()); 
   }
 
+  public void testDepth() {
+    assertEquals(0, new Path("/").depth());
+    assertEquals(1, new Path("/foo").depth());
+    assertEquals(1, new Path("/foo/").depth());
+    assertEquals(1, new Path("foo").depth());
+    assertEquals(1, new Path("foo/").depth());
+    assertEquals(2, new Path("foo/bar").depth());
+  }
+  
 
 }

@@ -24,6 +24,7 @@ import org.apache.hadoop.fs.OpenFileInfo;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hdfs.protocol.FSConstants.UpgradeAction;
 import org.apache.hadoop.hdfs.server.namenode.DatanodeDescriptor;
+import org.apache.hadoop.hdfs.server.protocol.BlockSynchronizationProtocol;
 import org.apache.hadoop.hdfs.server.common.UpgradeStatusReport;
 import org.apache.hadoop.ipc.VersionedProtocol;
 import org.apache.hadoop.security.AccessControlException;
@@ -37,7 +38,8 @@ import org.apache.hadoop.fs.FileStatus;
  * as well as open/close file streams, etc.
  *
  **********************************************************************/
-public interface ClientProtocol extends VersionedProtocol {
+public interface ClientProtocol extends VersionedProtocol,
+    BlockSynchronizationProtocol {
 
   public static final long OPTIMIZE_FILE_STATUS_VERSION = 42L;
   public static final long ITERATIVE_LISTING_VERSION = 43L;
@@ -195,6 +197,23 @@ public interface ClientProtocol extends VersionedProtocol {
    * @throws IOException if other errors occur.
    */
   public LocatedBlockWithMetaInfo appendAndFetchMetaInfo(String src, String clientName) throws IOException;
+  
+  /**
+   * Append to the end of the file. 
+   * @param src path of the file being created.
+   * @param clientName name of the current client.
+   * @return information about the last partial block if any.
+   * @throws AccessControlException if permission to append file is 
+   * denied by the system. As usually on the client side the exception will 
+   * be wrapped into {@link org.apache.hadoop.ipc.RemoteException}.
+   * Allows appending to an existing file if the server is
+   * configured with the parameter dfs.support.append set to true, otherwise
+   * Return the LocatedBlock with namespace id and old generation stamp.
+   * 
+   * throws an IOException.
+   * @throws IOException if other errors occur.
+   */
+  public LocatedBlockWithOldGS appendAndFetchOldGS(String src, String clientName) throws IOException;
   
   /**
    * Start lease recovery
@@ -512,6 +531,33 @@ public interface ClientProtocol extends VersionedProtocol {
   ///////////////////////////////////////
   // Namespace management
   ///////////////////////////////////////
+  
+  /** 
+   * Hard link the dst file to the src file 
+   *  
+   * @param src the src file  
+   * @param dst the dst file  
+   * @return true if successful, or false if the src file does not exists, or the src is a directory
+   * or the dst file has already exited, or dst file's parent directory does not exist  
+   * @throws IOException if the new name is invalid.  
+   * @throws QuotaExceededException if the hardlink would violate   
+   *                                any quota restriction 
+   */
+  public boolean hardLink(String src, String dst) throws IOException;
+
+  /**
+   * Computes the list of files hardlinked to the given file
+   *
+   * @param src
+   *          the file to look for
+   * @return a list of files that are hardlinked to the given file, return an
+   *         empty list if no files are found or the file has a reference count
+   *         of 1
+   * @throws IOException
+   *           if the given name is invalid
+   */
+  public String[] getHardLinkedFiles(String src) throws IOException;
+
   /**
    * Rename an item in the file system namespace.
    * 
@@ -763,6 +809,12 @@ public interface ClientProtocol extends VersionedProtocol {
   public void saveNamespace() throws IOException;
   
   /**
+   * Roll edit log manually.
+   * @throws IOException if the roll failed.
+   */
+  public void rollEditLogAdmin() throws IOException;
+  
+  /**
    * Save namespace image.
    * 
    * @param force not require safe mode if true
@@ -804,6 +856,11 @@ public interface ClientProtocol extends VersionedProtocol {
    * @throws IOException
    */
   public void metaSave(String filename) throws IOException;
+  
+  /**
+   * Enable/Disable Block Replication.
+   */
+  public void blockReplication(boolean isEnable) throws IOException;
 
   /**
    * @return Array of FileStatus objects referring to corrupted files.
@@ -887,6 +944,19 @@ public interface ClientProtocol extends VersionedProtocol {
    *              by this call.
    */
   public void setTimes(String src, long mtime, long atime) throws IOException;
+  
+  /**
+   * Update a pipeline for a block under construction
+   * 
+   * @param clientName   the name of the client
+   * @param oldBlock    the old block
+   * @param newBlock    the new block containing new generation stamp and length
+   * @param newNodes    datanodes in the pipeline
+   * @throws IOException  if any error happens
+   */
+  public void updatePipeline(String clientName, Block oldBlock, 
+        Block newBlock, DatanodeID[] newNodes) 
+      throws IOException;
 
   /**
    * Get the datanode's data transfer protocol version

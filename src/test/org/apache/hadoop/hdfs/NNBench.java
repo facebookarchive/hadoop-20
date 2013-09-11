@@ -19,7 +19,13 @@
 package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.List;
+import java.util.Random;
 import java.io.DataInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStreamReader;
@@ -40,6 +46,7 @@ import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.FileSystem;
 
 import org.apache.hadoop.io.Text;
@@ -99,6 +106,7 @@ public class NNBench extends Configured implements Tool {
   public static int bytesToWrite = 0; // default is 0
   public static long bytesPerChecksum = 1l; // default is 1
   public static long numberOfFiles = 1l; // default is 1
+  public static boolean hardlinks = false; // default is false;
   public static short replicationFactorPerFile = 1; // default is 1
   public static String baseDir = "/benchmarks/NNBench";  // default
   public static boolean readFileAfterOpen = false; // default is to not read
@@ -264,6 +272,9 @@ public class NNBench extends Configured implements Tool {
       } else if (args[i].equals("-numberOfFiles")) {
         checkArgs(i + 1, args.length);
         numberOfFiles = Long.parseLong(args[++i]);
+      } else if (args[i].equals("-hardlinks")) {
+        checkArgs(i + 1, args.length);
+        hardlinks = true;
       } else if (args[i].equals("-replicationFactorPerFile")) {
         checkArgs(i + 1, args.length);
         replicationFactorPerFile = Short.parseShort(args[++i]);
@@ -301,6 +312,7 @@ public class NNBench extends Configured implements Tool {
     config.setInt("test.nnbench.bytestowrite", bytesToWrite);
     config.setLong("test.nnbench.bytesperchecksum", bytesPerChecksum);
     config.setLong("test.nnbench.numberoffiles", numberOfFiles);
+    config.setBoolean("test.nnbench.hardlinks", hardlinks);
     config.setInt("test.nnbench.replicationfactor", 
             (int) replicationFactorPerFile);
     config.set("test.nnbench.basedir", baseDir);
@@ -335,6 +347,7 @@ public class NNBench extends Configured implements Tool {
     long totalTimeTPmS = 0l;
     long lateMaps = 0l;
     long numOfExceptions = 0l;
+    long hardlinkErrors = 0l;
     long successfulFileOps = 0l;
     
     long mapStartTimeTPmS = 0l;
@@ -359,6 +372,8 @@ public class NNBench extends Configured implements Tool {
         lateMaps = Long.parseLong(tokens.nextToken());
       } else if (attr.endsWith(":numOfExceptions")) {
         numOfExceptions = Long.parseLong(tokens.nextToken());
+      } else if (attr.endsWith(":hardlinkErrors")) {
+        hardlinkErrors = Long.parseLong(tokens.nextToken());
       } else if (attr.endsWith(":successfulFileOps")) {
         successfulFileOps = Long.parseLong(tokens.nextToken());
       } else if (attr.endsWith(":mapStartTimeTPmS")) {
@@ -441,6 +456,7 @@ public class NNBench extends Configured implements Tool {
     "",
     "        # maps that missed the barrier: " + lateMaps,
     "                          # exceptions: " + numOfExceptions,
+    "                    # hardlink errors : " + hardlinkErrors,
     "",
     resultTPSLine1,
     resultTPSLine2,
@@ -614,7 +630,9 @@ public class NNBench extends Configured implements Tool {
     FileSystem filesystem = null;
     private String hostName = null;
 
+    private Random random = new Random();
     long numberOfFiles = 1l;
+    boolean hardlinks = false;
     long blkSize = 1l;
     short replFactor = 1;
     int bytesToWrite = 0;
@@ -630,6 +648,8 @@ public class NNBench extends Configured implements Tool {
     long totalTimeAL1 = 0l;
     long totalTimeAL2 = 0l;
     long successfulFileOps = 0l;
+    long hardlinkErrors = 0l;
+    List<List<Path>> hardlinkList = new ArrayList<List<Path>>();
     
     /**
      * Constructor
@@ -690,6 +710,66 @@ public class NNBench extends Configured implements Tool {
       
       return retVal;
     }
+
+    private void createHardLinks(Path filePath) throws IOException {
+      if (hardlinks && random.nextBoolean()) {
+        List<Path> hardlinks = new ArrayList<Path>();
+        hardlinks.add(filePath);
+        int nlinks = 1 + random.nextInt(3);
+        for (int i = 0; i < nlinks; i++) {
+          Path target = new Path(filePath.toUri() + "hardlink" + i);
+          filesystem.hardLink(filePath, target);
+          if (random.nextBoolean()) {
+            // Delete directly from namenode, otherwise file will
+            // instead go to trash.
+            if (filesystem instanceof FilterFileSystem) {
+              ((DistributedFileSystem) (((FilterFileSystem) filesystem)
+                .getRawFileSystem())).dfs.namenode.delete(target
+              .toString());
+            } else {
+              ((DistributedFileSystem) filesystem).dfs.namenode
+                .delete(target.toString());
+            }
+          } else {
+            hardlinks.add(target);
+          }
+        }
+        hardlinkList.add(hardlinks);
+      }
+    }
+
+    private void verifyHardLinks() {
+      if (hardlinks) {
+        for (List<Path> paths : hardlinkList) {
+          try {
+            Path src = paths.get(0);
+            String[] actual = filesystem.getHardLinkedFiles(src);
+            Arrays.sort(actual);
+            String[] expected = new String[paths.size() - 1];
+            for (int i = 1; i < paths.size(); i++) {
+              expected[i-1] = paths.get(i).toString();
+            }
+            Arrays.sort(expected);
+            LOG.info("Actual hardlink files for " + src + " : ");
+            for (String s : actual) {
+              LOG.info(s);
+            }
+            LOG.info("Expected hardlink files for " + src + " : ");
+            for (String s : expected) {
+              LOG.info(s);
+            }
+            if (!Arrays.equals(expected, actual)) {
+              LOG.warn("Hardlinked files for : " + src + " do not match!");
+              hardlinkErrors++;
+            }
+          } catch (IOException e) {
+            LOG.info("Exception recorded in op: " +
+                "getHardLinkedFiles");
+            numOfExceptions++;
+          }
+        }
+      }
+    }
     
     /**
      * Map method
@@ -701,6 +781,7 @@ public class NNBench extends Configured implements Tool {
       Configuration conf = filesystem.getConf();
       
       numberOfFiles = conf.getLong("test.nnbench.numberoffiles", 1l);
+      hardlinks = conf.getBoolean("test.nnbench.hardlinks", false);
       blkSize = conf.getLong("test.nnbench.blocksize", 1l);
       replFactor = (short) (conf.getInt("test.nnbench.replicationfactor", 1));
       bytesToWrite = conf.getInt("test.nnbench.bytestowrite", 0);
@@ -714,6 +795,7 @@ public class NNBench extends Configured implements Tool {
       long endTimeTPms = 0l;
       
       numOfExceptions = 0;
+      hardlinkErrors = 0l;
       startTimeAL = 0l;
       totalTimeAL1 = 0l;
       totalTimeAL2 = 0l;
@@ -747,6 +829,8 @@ public class NNBench extends Configured implements Tool {
           new Text(String.valueOf(totalTimeAL2)));
       output.collect(new Text("l:numOfExceptions"), 
           new Text(String.valueOf(numOfExceptions)));
+      output.collect(new Text("l:hardlinkErrors"),
+          new Text(String.valueOf(hardlinkErrors)));
       output.collect(new Text("l:successfulFileOps"), 
           new Text(String.valueOf(successfulFileOps)));
       output.collect(new Text("l:totalTimeTPmS"), 
@@ -797,14 +881,17 @@ public class NNBench extends Configured implements Tool {
             successfulFileOps ++;
 
             reporter.setStatus("Finish "+ l + " files");
+            createHardLinks(filePath);
           } catch (IOException e) {
             LOG.info("Exception recorded in op: " +
-                    "Create/Write/Close");
+                    "Create/Write/Close/HardLink");
  
             numOfExceptions++;
           }
         }
       }
+      verifyHardLinks();
+
     }
     
     /**

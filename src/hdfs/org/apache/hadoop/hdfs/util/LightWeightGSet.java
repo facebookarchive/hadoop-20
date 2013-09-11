@@ -213,6 +213,24 @@ public class LightWeightGSet<K, E extends K> implements GSet<K, E> {
   public Iterator<E> iterator() {
     return new SetIterator();
   }
+  
+  /**
+   * Get iterator over a part of the blocks map.
+   * @param shardId index of the starting bucket
+   * @param numShards next bucket is obtained by index+=numShards
+   */
+  @Override
+  public Iterator<E> shardIterator(int shardId, int numShards) {
+    if (shardId >= entries.length) {
+      return null;
+    }
+    if (shardId >= numShards) {
+      throw new IllegalArgumentException(
+          "Shard id must be less than total shards, shardId: " + shardId
+              + ", numShards: " + numShards);
+    }
+    return new SetIterator(shardId, numShards);
+  }
 
   @Override
   public String toString() {
@@ -244,13 +262,27 @@ public class LightWeightGSet<K, E extends K> implements GSet<K, E> {
     /** The starting modification for fail-fast. */
     private final int startModification = modification;
     /** The current index of the entry array. */
-    private int index = -1;
+    private int index;
     /** The next element to return. */
-    private LinkedElement next = nextNonemptyEntry();
+    private LinkedElement next; 
+    
+    private final int jump;
+    
+    // by default we iterate bucket by bucket
+    public SetIterator() {
+      this(0, 1);
+    }
+    
+    // iterate starting from startBucket, every jump-th bucket
+    public SetIterator(int startBucket, int jump) {
+      this.jump = jump;
+      this.index = startBucket;
+      this.next = nextNonemptyEntry(0);
+    }
 
-    /** Find the next nonempty entry starting at (index + 1). */
-    private LinkedElement nextNonemptyEntry() {
-      for(index++; index < entries.length && entries[index] == null; index++);
+    /** Find the next nonempty entry starting at (index + shift). */
+    private LinkedElement nextNonemptyEntry(int shift) {
+      for (index += shift; index < entries.length && entries[index] == null; index += jump);
       return index < entries.length? entries[index]: null;
     }
 
@@ -270,7 +302,7 @@ public class LightWeightGSet<K, E extends K> implements GSet<K, E> {
 
       //find the next element
       final LinkedElement n = next.getNext();
-      next = n != null? n: nextNonemptyEntry();
+      next = n != null ? n : nextNonemptyEntry(jump);
 
       return e;
     }

@@ -72,12 +72,12 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
+import org.apache.hadoop.hdfs.protocol.ReplaceBlockHeader;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyDefault;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
-import org.apache.hadoop.hdfs.server.namenode.UnsupportedActionException;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.BlocksWithLocations.BlockWithLocations;
 import org.apache.hadoop.util.ReflectionUtils;
@@ -241,6 +241,7 @@ public class Balancer implements Tool {
   private NetworkTopology cluster = new NetworkTopology();
 
   private double avgRemaining = 0.0D;
+  private double adjustedOverUtilThreshold = -0.1D;
   final static private int MOVER_THREAD_POOL_SIZE = 1000;
   private static int moveThreads = MOVER_THREAD_POOL_SIZE;
   private ExecutorService moverExecutor = null;
@@ -384,13 +385,13 @@ public class Balancer implements Tool {
 
     /* Send a block replace request to the output stream*/
     private void sendRequest(DataOutputStream out) throws IOException {
-      out.writeShort(DataTransferProtocol.DATA_TRANSFER_VERSION);
-      out.writeByte(DataTransferProtocol.OP_REPLACE_BLOCK);
-      out.writeInt(namespaceId);
-      out.writeLong(block.getBlock().getBlockId());
-      out.writeLong(block.getBlock().getGenerationStamp());
-      Text.writeString(out, source.getStorageID());
-      proxySource.write(out);
+      /* Write the header */
+      ReplaceBlockHeader replaceBlockHeader = new ReplaceBlockHeader(
+          DataTransferProtocol.DATA_TRANSFER_VERSION, namespaceId,
+          block.getBlock().getBlockId(), block.getBlock().getGenerationStamp(),
+          source.getStorageID(), proxySource.getDatanode());
+      replaceBlockHeader.writeVersionAndOpCode(out);
+      replaceBlockHeader.write(out);
       out.flush();
     }
 
@@ -820,28 +821,32 @@ public class Balancer implements Tool {
     }
   }
 
-  /* Check that this Balancer is compatible with the Block Placement Policy
+  /*
+   * Check that this Balancer is compatible with the Block Placement Policy
    * used by the Namenode.
-   */
-  private void checkReplicationPolicyCompatibility(Configuration conf) throws UnsupportedActionException {
-    if (!(BlockPlacementPolicy.getInstance(conf, null, null, null, null, null) instanceof 
-        BlockPlacementPolicyDefault)) {
-      throw new UnsupportedActionException("Balancer without BlockPlacementPolicyDefault");
+   *
+   * In case it is not compatible, throw IllegalArgumentException
+   *
+   * */
+  private void checkReplicationPolicyCompatibility(Configuration conf) {
+    if (!(BlockPlacementPolicy.getInstance(conf, null, null, null, null, null)
+        instanceof BlockPlacementPolicyDefault)) {
+      throw new IllegalArgumentException("Configuration lacks BlockPlacementPolicyDefault");
     }
   }
-  
+
   /** Default constructor */
-  Balancer() throws UnsupportedActionException {
+  Balancer() {
   }
 
   /** Construct a balancer from the given configuration */
-  Balancer(Configuration conf) throws UnsupportedActionException {
+  Balancer(Configuration conf) {
     setConf(conf);
     checkReplicationPolicyCompatibility(conf);
   }
 
   /** Construct a balancer from the given configuration and threshold */
-  Balancer(Configuration conf, double threshold) throws UnsupportedActionException {
+  Balancer(Configuration conf, double threshold) {
     setConf(conf);
     checkReplicationPolicyCompatibility(conf);
     Balancer.threshold = threshold;
@@ -988,7 +993,12 @@ public class Balancer implements Tool {
       totalRemainingSpace += datanode.getRemaining();
     }
     avgRemaining = ((double)totalRemainingSpace)/totalCapacity*100;
-
+    adjustOverUtilizedThreshold();
+    
+    LOG.info("average remaining: " + avgRemaining
+        + " adjusted over utilized threshold: "
+        + this.adjustedOverUtilThreshold);
+    
     /*create network topology and all data node lists:
      * overloaded, above-average, below-average, and underloaded
      * we alternates the accessing of the given datanodes array either by
@@ -1010,8 +1020,9 @@ public class Balancer implements Tool {
           assert(isOverUtilized(datanodeS)) :
             datanodeS.getName()+ "is not an overUtilized node";
           this.overUtilizedDatanodes.add((Source)datanodeS);
-          overLoadedBytes += (long)((avgRemaining - threshold - 
-              datanodeS.remaining)*datanodeS.datanode.getCapacity()/100.0);
+          overLoadedBytes += (long) ((avgRemaining
+              - this.adjustedOverUtilThreshold - datanodeS.remaining)
+              * datanodeS.datanode.getCapacity() / 100.0);
         }
       } else {
         datanodeS = new BalancerDatanode(datanode, avgRemaining, threshold);
@@ -1456,17 +1467,37 @@ public class Balancer implements Tool {
       }
     }
   }
+  
+  private void adjustOverUtilizedThreshold() {
+    if (avgRemaining <= threshold + 1.0D && avgRemaining > 2.0D) {
+      // If average remaining is smaller than threshold plus 1% and it's smaller
+      // than 98%. We make all the nodes over 99% to be over utilized nodes.
+      // For example, if the threshold is 10% and average remaining is 10.5%,
+      // threshold will become 9.5% instead of 10.5%, so that all nodes more than
+      // 99% will become over utilized.
+      //
+      // This is to make sure that if cluster is highly used, still data are
+      // moved out of nodes higher than 99%.
+      //
+      adjustedOverUtilThreshold = avgRemaining - 1.0D;
+    } else {
+      adjustedOverUtilThreshold = threshold;
+    }
+  }
 
   /* Return true if the given datanode is overUtilized */
   private boolean isOverUtilized(BalancerDatanode datanode) {
-    return datanode.remaining < (avgRemaining-threshold);
+    if (adjustedOverUtilThreshold < 0) {
+      throw new IllegalStateException(
+          "Over utilized threshold is not initialized.");
+    }
+    return datanode.remaining < (avgRemaining - adjustedOverUtilThreshold);
   }
 
   /* Return true if the given datanode is above average utilized
    * but not overUtilized */
   private boolean isAboveAvgUtilized(BalancerDatanode datanode) {
-    return (datanode.remaining >= (avgRemaining-threshold))
-        && (datanode.remaining < avgRemaining);
+    return !isOverUtilized(datanode) && (datanode.remaining < avgRemaining);
   }
 
   /* Return true if the given datanode is underUtilized */

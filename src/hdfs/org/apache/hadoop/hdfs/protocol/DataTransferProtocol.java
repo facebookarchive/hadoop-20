@@ -34,12 +34,22 @@ public interface DataTransferProtocol {
    * This should change when serialization of DatanodeInfo, not just
    * when protocol changes. It is not very obvious. 
    *
-   * Version 23:
-   *        In the end of OP_READ_BLOCK stream, expect datanode to
-   *        send flag indicating whether the block is finalized and
-   *        its visible length.
+   * Version 30 :
+   *        Support bitset options for read.
    */
-  public static final int DATA_TRANSFER_VERSION = 23;
+  public static final int DATA_TRANSFER_VERSION = 30;
+
+  // the lowest version that has bitset options for read.
+  public static final int BITSETOPTIONS_READ_VERSION = 30;
+
+  // the lowest version that packet needs to include a version.
+  static final int PACKET_INCLUDE_VERSION_VERSION = 28;
+
+  // the lowest version that doesn't resend partial chunks.
+  public static final int NOT_RESEND_PARTIAL_CHUNK_VERSION = 29;
+  
+  // the lowest version that has bitset options.
+  public static final int BITSETOPTIONS_VERSION = 26;
 
   // the lowest version that added force sync field.
   static final int FORCESYNC_FIELD_VERSION = 20;
@@ -52,8 +62,17 @@ public interface DataTransferProtocol {
   
   //the lowest version that supports sending block length in the end of stream
   static final int SEND_DATA_LEN_VERSION = 23;
+  
+  // the lowest version that we will resue the connection for pread requests.
+  static final int READ_REUSE_CONNECTION_VERSION = 24;
 
   static final int BACKWARD_COMPATIBLE_VERSION = 23;
+
+  // the lowest version that supports new append block operation.
+  static final int APPEND_BLOCK_VERSION = 25;
+  
+  // the lowest version that supports the hdfs read path profiling
+  static final int READ_PROFILING_VERSION = 27;
 
   // Processed at datanode stream-handler
   public static final byte OP_WRITE_BLOCK = (byte) 80;
@@ -63,20 +82,25 @@ public interface DataTransferProtocol {
   public static final byte OP_COPY_BLOCK = (byte) 84;
   public static final byte OP_BLOCK_CHECKSUM = (byte) 85;
   public static final byte OP_READ_BLOCK_ACCELERATOR = (byte) 86;
+  public static final byte OP_BLOCK_CRC = (byte) 87;
+  public static final byte OP_APPEND_BLOCK = (byte) 88;
   
   public static final int OP_STATUS_SUCCESS = 0;  
   public static final int OP_STATUS_ERROR = 1;  
   public static final int OP_STATUS_ERROR_CHECKSUM = 2;  
   public static final int OP_STATUS_ERROR_INVALID = 3;  
   public static final int OP_STATUS_ERROR_EXISTS = 4;  
-  public static final int OP_STATUS_CHECKSUM_OK = 5;  
+  public static final int OP_STATUS_CHECKSUM_OK = 5;
+  
+  public static final int PACKET_VERSION_CHECKSUM_FIRST = 1;
+  public static final int PACKET_VERSION_CHECKSUM_INLINE = 2;
 
   public static final int CLIENT_HEARTBEAT_VERSION = 19;
 
   public static class PipelineAck {
     private long seqno;
     private short replies[];
-    final public static PipelineAck HEART_BEAT = new PipelineAck(-1, new short[0]);  
+    private PacketBlockReceiverProfileData profiles[];
     public final static long UNKOWN_SEQNO = -2;
 
     /** default constructor **/
@@ -88,9 +112,11 @@ public interface DataTransferProtocol {
      * @param seqno sequence number
      * @param replies an array of replies
      */
-    public PipelineAck(long seqno, short[] replies) {
+    public PipelineAck(long seqno, short[] replies,
+        PacketBlockReceiverProfileData[] profiles) {
       this.seqno = seqno;
       this.replies = replies;
+      this.profiles = profiles;
     }
 
     /**
@@ -116,6 +142,17 @@ public interface DataTransferProtocol {
     public short getReply(int i) {
       return replies[i];
     }
+    
+    public PacketBlockReceiverProfileData getProfile(int i) {
+      if (profiles == null) {
+        return null;
+      }
+      return profiles[i];
+    }
+    
+    public PacketBlockReceiverProfileData[] getProfiles() {
+      return profiles;
+    }
 
     /**
      * Check if this ack contains error status
@@ -130,10 +167,12 @@ public interface DataTransferProtocol {
       return true;
     }
 
-    public void readFields(DataInput in, int numRepliesExpected) throws IOException {
+    public void readFields(DataInput in, int numRepliesExpected,
+        boolean expectProfile) throws IOException {
       seqno = in.readLong();
       replies = new short[numRepliesExpected];
       int i=0;
+
       for (; i<numRepliesExpected; i++) {
         replies[i] = in.readShort();
         if (replies[i] != OP_STATUS_SUCCESS) {
@@ -143,7 +182,15 @@ public interface DataTransferProtocol {
       if (i < numRepliesExpected-1) {
         short[] newReplies = new short[i];
         System.arraycopy(replies, 0, newReplies, 0, i);
+      } else if (expectProfile) {
+        // doesn't expect profile information in failure case
+        profiles = new PacketBlockReceiverProfileData[numRepliesExpected];
+        for (int j = 0; j < numRepliesExpected; j++) {
+          profiles[j] = new PacketBlockReceiverProfileData();
+          profiles[j].readFields(in);
+        }
       }
+      
     }
 
     public void write(DataOutput out) throws IOException {
@@ -152,6 +199,11 @@ public interface DataTransferProtocol {
         out.writeShort(reply);
         if (reply != OP_STATUS_SUCCESS) {
           return;
+        }
+      }
+      if (profiles != null) {
+        for (PacketBlockReceiverProfileData profile : profiles) {
+          profile.write(out);
         }
       }
     }

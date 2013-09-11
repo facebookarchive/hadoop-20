@@ -23,6 +23,7 @@ import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -43,10 +44,69 @@ import org.apache.hadoop.util.Progressable;
  * file is sorted with hash code of the paths that it contains
  * and the master index contains pointers to the positions in
  * index for ranges of hashcodes.
+ * 
+ * More exactly, the data is stored as following.
+ * foo.har/  - directory in hdfs
+ *   |----   _masterindex 
+ *   |----   _index
+ *   |----   part-0
+ *   |----   part-1
+ *   |----   .....
+ *   -----   part-n
+ *   
+ * "_index" file has the number of lines equal to the number of files and directories in archive,
+ * including top-level root dir.
+ * Let @path be the relative path to item in archive.
+ *     example: if we have files A.txt and B/C.txt  in archive 
+ *     then the @paths would be: /A.txt and /B/C.txt.
+ * Relative path of the root dir in archive is "/".
+ * Each line consists of the following space separated fields.
+ * 1. encodedPath - path to the item URL-encoded as URLEncoder.encode(@path, "UTF-8")
+ * 2. type - type of item in archive. Equals to "dir" or "file"
+ * 3. partFileName - name of part file which stores the actual data of file
+ *        (for directories equals to "none")
+ * 4. offset - start byte of file  (0 for directories)
+ * 5. len - length in bytes of file (0 for directories)
+
+ * for files:
+ * 6. encodedProperty - URL-encoded property string of the file
+ * 
+ * property string consists of the following space separated fields
+ *    a. modification time
+ *    b. access time
+ *    c. permission as short
+ *    d. owner (URL-encoded)
+ *    e. group (URL-encoded)
+ *    
+ * for directories:
+ * 6. ecnodedChildName - URL-encoded name of child 1
+ * 7. encodedChildName - URL-encoded name of child 2
+ * 
+ * Field 3 for directories could contain encodedProperty instead of "none".
+ * The lines in "_index" are sorted by HarFileSystem.getHarHash(@path) key. 
+ * 
+ * "_masterindex".
+ * First line stores VERSION
+ * "_index" is divided to blocks, each containing 1000 lines (maybe except the last one)
+ * For each block there is a line in "_masterindex".
+ * The line consisted of the following space separated fields
+ * 1. startHash - @hash field of the first line in block  
+ * 2. endHash - @hash field of the last line in block
+ * 3. startPos - position (in bytes) of the beginning of the block
+ * 4. endPos - position (in bytes) of the end of the block
+ * 
+ * 
  */
 
 public class HarFileSystem extends FilterFileSystem {
   public static final int VERSION = 2;
+
+  /** name of the index file **/
+  public static final String INDEX_NAME = "_index";
+  
+  /** name of the master index file **/
+  public static final String MASTER_INDEX_NAME = "_masterindex";
+  
   // uri representation of this Har filesystem
   private URI uri;
   // the version of this har filesystem
@@ -111,8 +171,8 @@ public class HarFileSystem extends FilterFileSystem {
     this.harAuth = getHarAuth(this.underLyingURI);
     //check for the underlying fs containing
     // the index file
-    this.masterIndex = new Path(archivePath, "_masterindex");
-    this.archiveIndex = new Path(archivePath, "_index");
+    this.masterIndex = new Path(archivePath, HarFileSystem.MASTER_INDEX_NAME);
+    this.archiveIndex = new Path(archivePath, HarFileSystem.INDEX_NAME);
     if (!fs.exists(masterIndex) || !fs.exists(archiveIndex)) {
       throw new IOException("Invalid path for the Har Filesystem. " +
           "No index file in " + harPath);
@@ -208,10 +268,14 @@ public class HarFileSystem extends FilterFileSystem {
     return tmp;
   }
 
-  private String decodeFileName(String fname)
+  private String decodeFileName(String fname) throws UnsupportedEncodingException {
+    return decodeFileName(fname, version);
+  }
+  
+  static String decodeFileName(String fname, int archiveVersion)
     throws UnsupportedEncodingException {
 
-    if (version >= 2){
+    if (archiveVersion >= 2){
       return URLDecoder.decode(fname, "UTF-8");
     }
     return fname;
@@ -414,13 +478,13 @@ public class HarFileSystem extends FilterFileSystem {
   }
 
   /**
-   * the hash of the path p inside iniside
-   * the filesystem
-   * @param p the path in the harfilesystem
+   * the hash of the path p inside inside
+   * the archive
+   * @param p the path in the HarFileSystem
    * @return the hash code of the path.
    */
-  public static int getHarHash(Path p) {
-    return (p.toString().hashCode() & 0x7fffffff);
+  public static int getHarHash(String p) {
+    return (p.hashCode() & 0x7fffffff);
   }
 
   static class Store {
@@ -439,6 +503,14 @@ public class HarFileSystem extends FilterFileSystem {
     public int endHash;
   }
 
+  static public String decode(String string) throws UnsupportedEncodingException {
+    return URLDecoder.decode(string, "UTF-8");
+  }
+
+  static public String encode(String string) throws UnsupportedEncodingException {
+    return URLEncoder.encode(string, "UTF-8");
+  }
+  
   /**
    * Get filestatuses of all the children of a given directory. This just reads
    * through index file and reads line by line to get all statuses for children
@@ -486,7 +558,7 @@ public class HarFileSystem extends FilterFileSystem {
                     .getAccessTime(), new FsPermission(hstatus
                     .getPermission()), hstatus.getOwner(),
                 hstatus.getGroup(), makeRelative(this.uri.getPath(),
-                    new Path(hstatus.name)));
+                    new Path(hstatus.getName())));
             statuses.add(childStatus);
           }
           line.clear();
@@ -505,7 +577,7 @@ public class HarFileSystem extends FilterFileSystem {
   // filename in the index file.
   private String fileStatusInIndex(Path harPath) throws IOException {
     // read the index file
-    int hashCode = getHarHash(harPath);
+    int hashCode = getHarHash(harPath.toString());
     // get the master index to find the pos
     // in the index file
     FSDataInputStream in = fs.open(masterIndex);
@@ -566,107 +638,6 @@ public class HarFileSystem extends FilterFileSystem {
     return retStr;
   }
 
-  // a single line parser for hadoop archives status
-  // stored in a single line in the index files
-  // the format is of the form
-  // filename "dir"/"file" partFileName startIndex length
-  // <space seperated children>
-  private class HarStatus {
-    boolean isDir;
-    String name;
-    List<String> children;
-    String partName;
-    long startIndex;
-    long length;
-
-    long modification_time = 0;
-    long access_time = 0;
-    FsPermission permission = null;
-    String owner = null;
-    String group = null;
-
-    public HarStatus(String harString) throws UnsupportedEncodingException {
-      this(harString,null);
-    }
-
-    public HarStatus(String harString, FileStatus defaultFS)
-              throws UnsupportedEncodingException {
-      String[] splits = harString.split(" ");
-      this.name = decodeFileName(splits[0]);
-      this.isDir = "dir".equals(splits[1]) ? true: false;
-      // this is equal to "none" if its a directory
-      this.partName = splits[2];
-      this.startIndex = Long.parseLong(splits[3]);
-      this.length = Long.parseLong(splits[4]);
-
-      String[] newsplits = null;
-
-      if (isDir) {
-        if (!this.partName.equals("none")){
-          newsplits = URLDecoder.decode(this.partName).split(" ");
-        }
-        children = new ArrayList<String>();
-        for (int i = 5; i < splits.length; i++) {
-          children.add(decodeFileName(splits[i]));
-        }
-      } else if (splits.length >= 6) {
-        newsplits = URLDecoder.decode(splits[5],"UTF-8").split(" ");
-      }
-
-      if (newsplits != null && newsplits.length >= 5) {
-        modification_time = Long.parseLong(newsplits[0]);
-        access_time = Long.parseLong(newsplits[1]);
-        permission = new FsPermission(Short.parseShort(newsplits[2]));
-        owner = URLDecoder.decode(newsplits[3],"UTF-8");
-        group = URLDecoder.decode(newsplits[4],"UTF-8");
-      } else if (defaultFS != null) {
-        modification_time = defaultFS.getModificationTime();
-        access_time = defaultFS.getAccessTime();
-        permission = new FsPermission(defaultFS.getPermission());
-        owner = defaultFS.getOwner();
-        group = defaultFS.getGroup();
-      }
-    }
-    public boolean isDir() {
-      return isDir;
-    }
-
-    public String getName() {
-      return name;
-    }
-
-    public List<String> getChildren() {
-      return children;
-    }
-    public String getFileName() {
-      return name;
-    }
-    public String getPartName() {
-      return partName;
-    }
-    public long getStartIndex() {
-      return startIndex;
-    }
-    public long getLength() {
-      return length;
-    }
-    public long getModificationTime() {
-      return modification_time;
-    }
-    public long getAccessTime() {
-      return access_time;
-    }
-    public FsPermission getPermission() {
-      return permission;
-    }
-    public String getOwner() {
-      return owner;
-    }
-    public String getGroup() {
-      return group;
-    }
-  }
-
   /**
    * return the filestatus of files in har archive.
    * The permission returned are that of the archive
@@ -686,7 +657,7 @@ public class HarFileSystem extends FilterFileSystem {
         new FsPermission(
         hstatus.getPermission()), hstatus.getOwner(),
         hstatus.getGroup(),
-            makeRelative(this.uri.getPath(), new Path(hstatus.name)));
+            makeRelative(this.uri.getPath(), new Path(hstatus.getName())));
   }
   
   private HarStatus getFileHarStatus(Path f, FileStatus underlying) throws IOException {
@@ -699,7 +670,7 @@ public class HarFileSystem extends FilterFileSystem {
     if (readStr == null) {
       throw new FileNotFoundException(f + ": not found in " + archivePath);
     }
-    return new HarStatus(readStr, underlying);
+    return new HarStatus(readStr, underlying, version);
   }
 
   /**
@@ -785,7 +756,7 @@ public class HarFileSystem extends FilterFileSystem {
     if (readStr == null) {
       throw new FileNotFoundException("File " + f + " not found in " + archivePath);
     }
-    HarStatus hstatus = new HarStatus(readStr,archiveStatus);
+    HarStatus hstatus = new HarStatus(readStr,archiveStatus, version);
     if (!hstatus.isDir()) {
         statuses.add(new FileStatus(hstatus.getLength(),
             hstatus.isDir(),
@@ -793,9 +764,9 @@ public class HarFileSystem extends FilterFileSystem {
             hstatus.getModificationTime(), hstatus.getAccessTime(),
             new FsPermission(hstatus.getPermission()),
             hstatus.getOwner(), hstatus.getGroup(),
-            makeRelative(this.uri.getPath(), new Path(hstatus.name))));
+            makeRelative(this.uri.getPath(), new Path(hstatus.getName()))));
     } else {
-      fileStatusesInIndex(hstatus, statuses, hstatus.children, archiveStatus);
+      fileStatusesInIndex(hstatus, statuses, hstatus.getChildren(), archiveStatus);
     }
     return statuses.toArray(new FileStatus[statuses.size()]);
   }
@@ -877,7 +848,7 @@ public class HarFileSystem extends FilterFileSystem {
    * Hadoop archives input stream. This input stream fakes EOF
    * since archive files are part of bigger part files.
    */
-  private static class HarFSDataInputStream extends FSDataInputStream {
+  public static class HarFSDataInputStream extends FSDataInputStream {
     /**
      * Create an input stream that fakes all the reads/positions/seeking.
      */

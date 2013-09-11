@@ -35,6 +35,10 @@ class SafeModeMonitor implements Runnable {
   private static final Log LOG = LogFactory.getLog(SafeModeMonitor.class);
 
   public SafeModeMonitor(FSNamesystem namesystem, SafeModeInfo safeMode) {
+    if (namesystem == null || safeMode == null) {
+      throw new IllegalArgumentException("Arguments are null - namesystem: "
+          + namesystem + ", safemode: " + safeMode);
+    }
     this.namesystem = namesystem;
     this.safeMode = safeMode;
   }
@@ -48,11 +52,16 @@ class SafeModeMonitor implements Runnable {
   }
 
   private void runMonitor() {
-    while (namesystem.isRunning() &&
-        (safeMode != null && !safeMode.canLeave())) {
+    while (true) {
       try {
+        if ((!namesystem.isRunning()) || (safeMode == null)
+            || (safeMode.canLeave())) {
+          LOG.info("SafeModeMonitor exiting");
+          break;
+        }
         Thread.sleep(recheckInterval);
-      } catch (InterruptedException ie) {
+      } catch (Exception t) {
+        LOG.info("SafeModeMonitor caught exception", t);
       }
     }
     // if we stopped namenode while still in safemode, then exit here
@@ -68,6 +77,6 @@ class SafeModeMonitor implements Runnable {
       String msg = "SafeModeMonitor may not run during distributed upgrade.";
       assert false : msg;
       throw new RuntimeException(msg, es);
-    }
+    } 
   }
 }

@@ -24,7 +24,7 @@ package org.apache.hadoop.hdfs.protocol;
  * as a Block[] we can send it as a long[].
  *
  */
-public class BlockListAsLongs {
+public final class BlockListAsLongs {
   /**
    * A block as 3 longs
    *   block-id and block length and generation stamp
@@ -98,7 +98,11 @@ public class BlockListAsLongs {
     return blockList.length/LONGS_PER_BLOCK;
   }
   
-  
+  public void getBlock(Block b, int index) {
+    int bindex = index2BlockId(index);
+    b.set(blockList[bindex], blockList[bindex+1], blockList[bindex+2]);
+  }
+   
   /**
    * The block-id of the indexTh block
    * @param index - the block whose block-id is desired

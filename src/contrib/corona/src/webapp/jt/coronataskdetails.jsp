@@ -11,9 +11,7 @@
   import="org.apache.hadoop.util.*"
 %>
 <%!static SimpleDateFormat dateFormat = new SimpleDateFormat(
-      "d-MMM-yyyy HH:mm:ss");
-
-  private static final String PRIVATE_ACTIONS_KEY = "webinterface.private.actions";
+      "yyyy/MM/dd HH:mm:ss");
 
   private String detailsUrl = null;
   private String jobUrl = null;
@@ -63,42 +61,40 @@
     statsUrl = tracker.getProxyUrl("coronataskstats.jsp");
     hasProxy = (detailsUrl.indexOf('?') != -1);
 
-    boolean privateActions = JSPUtil.conf.getBoolean(PRIVATE_ACTIONS_KEY, false);
-    if (privateActions) {
-      String action = request.getParameter("action");
-      if (action != null) {
-        if (action.equalsIgnoreCase("confirm")) {
-          String subAction = request.getParameter("subaction");
-          if (subAction == null)
-            subAction = "fail-task";
-          printConfirm(out, jobId.toString(), tipid, taskid, subAction);
-          return;
+    String action = request.getParameter("action");
+    if (action != null) {
+      if (action.equalsIgnoreCase("confirm")) {
+        String subAction = request.getParameter("subaction");
+        if (subAction == null)
+          subAction = "fail-task";
+        printConfirm(out, jobId.toString(), tipid, taskid, subAction);
+        return;
+      }
+      else if (action.equalsIgnoreCase("kill-task") 
+          && request.getMethod().equalsIgnoreCase("POST")) {
+        tracker.killTaskFromWebUI(taskidObj, false);
+        //redirect again so that refreshing the page will not attempt to rekill the task
+        response.sendRedirect(getProxyUrl(detailsUrl, "subaction=kill-task"
+                                          + "&tipid=" + tipid));
+      }
+      else if (action.equalsIgnoreCase("fail-task")
+          && request.getMethod().equalsIgnoreCase("POST")) {
+        tracker.killTaskFromWebUI(taskidObj, true);
+        response.sendRedirect(getProxyUrl(detailsUrl, "subaction=fail-task"
+                                          + "&tipid=" + tipid));
+      }
+      else if (action.equalsIgnoreCase("speculative-task")
+          && request.getMethod().equalsIgnoreCase("POST")) {
+        if (tip != null) {
+          tip.setSpeculativeForced(true);
         }
-        else if (action.equalsIgnoreCase("kill-task") 
-            && request.getMethod().equalsIgnoreCase("POST")) {
-          tracker.killTask(taskidObj, false);
-          //redirect again so that refreshing the page will not attempt to rekill the task
-          response.sendRedirect(getProxyUrl(detailsUrl, "subaction=kill-task"
-                                            + "&tipid=" + tipid));
-        }
-        else if (action.equalsIgnoreCase("fail-task")
-            && request.getMethod().equalsIgnoreCase("POST")) {
-          tracker.killTask(taskidObj, true);
-          response.sendRedirect(getProxyUrl(detailsUrl, "subaction=fail-task"
-                                            + "&tipid=" + tipid));
-        }
-        else if (action.equalsIgnoreCase("speculative-task")
-            && request.getMethod().equalsIgnoreCase("POST")) {
-          if (tip != null) {
-            tip.setSpeculativeForced(true);
-          }
-          response.sendRedirect(getProxyUrl(detailsUrl,
-                                            "subaction=speculative-task"
-                                            + "&tipid=" + tipid
-                                            + "&here=yes"));
-        }
+        response.sendRedirect(getProxyUrl(detailsUrl,
+                                          "subaction=speculative-task"
+                                          + "&tipid=" + tipid
+                                          + "&here=yes"));
       }
     }
+
     TaskStatus[] ts = null;
     if (tip != null) { 
       ts = tip.getTaskStatuses();
@@ -256,8 +252,7 @@
           + "&tipid=" + tipid + "&taskid=" + status.getTaskID()) + "\">"
           + ((status.getCounters() != null) ? status.getCounters().size() : 0) + "</a></td>");
         out.print("<td>");
-        if (privateActions
-          && status.getRunState() == TaskStatus.State.RUNNING) {
+        if (status.getRunState() == TaskStatus.State.RUNNING) {
           out.print("<a href=\"" + getProxyUrl(detailsUrl, "action=confirm"
               + "&subaction=kill-task" + "&jobid=" + jobId + "&tipid="
               + tipid + "&taskid=" + status.getTaskID()) + "\" > Kill </a>");
@@ -272,9 +267,14 @@
           } else {
             out.print("<br>Speculative");
           }
-        }
-        else
+        } else if (status.getRunState() == TaskStatus.State.SUCCEEDED) {
+          // Allow failing succeeded tasks.
+          out.print("<a href=\"" + getProxyUrl(detailsUrl, "action=confirm"
+              + "&subaction=fail-task" + "&jobid=" + jobId + "&tipid="
+              + tipid + "&taskid=" + status.getTaskID()) + "\" > Fail </a>");
+        } else {
           out.print("<pre>&nbsp;</pre>");
+        }
         out.println("</td></tr>");
       }
   %>

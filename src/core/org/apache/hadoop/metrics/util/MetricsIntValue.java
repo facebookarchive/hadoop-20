@@ -61,7 +61,10 @@ public class MetricsIntValue extends MetricsBase {
     this(nam, registry, NO_DESCRIPTION);
   }
   
-  
+  public synchronized void inc(int deltaValue) {
+    value += deltaValue;
+    changed = true;
+  }
   
   /**
    * Set the value

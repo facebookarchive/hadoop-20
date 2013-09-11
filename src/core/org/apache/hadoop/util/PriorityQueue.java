@@ -17,15 +17,17 @@
 
 package org.apache.hadoop.util;
 
+import org.mortbay.log.Log;
+
 
 /** A PriorityQueue maintains a partial ordering of its elements such that the
   least element can always be found in constant time.  Put()'s and pop()'s
   require log(size) time. */
 public abstract class PriorityQueue<T> {
-  private T[] heap;
-  private int size;
+  protected T[] heap;
+  protected int size;
   private int maxSize;
-
+  
   /** Determines the ordering of objects in this priority queue.  Subclasses
       must define this one method. */
   protected abstract boolean lessThan(Object a, Object b);
@@ -38,7 +40,7 @@ public abstract class PriorityQueue<T> {
     heap = (T[]) new Object[heapSize];
     this.maxSize = maxSize;
   }
-
+  
   /**
    * Adds an Object to a PriorityQueue in log(size) time.
    * If one tries to add more objects than maxSize from initialize
@@ -82,11 +84,11 @@ public abstract class PriorityQueue<T> {
       time. */
   public final T pop() {
     if (size > 0) {
-      T result = heap[1];			  // save first value
-      heap[1] = heap[size];			  // move last to first
-      heap[size] = null;			  // permit GC of objects
+      T result = heap[1];              // save first value
+      heap[1] = heap[size];              // move last to first
+      heap[size] = null;              // permit GC of objects
       size--;
-      downHeap();				  // adjust heap
+      downHeap();                     // adjust heap
       return result;
     } else
       return null;
@@ -116,35 +118,51 @@ public abstract class PriorityQueue<T> {
     size = 0;
   }
 
-  private final void upHeap() {
-    int i = size;
-    T node = heap[i];			  // save bottom node
+  // push upHeap from index i
+  protected final void upHeap(int i) {
+    T node = heap[i];                 // save bottom node
     int j = i >>> 1;
     while (j > 0 && lessThan(node, heap[j])) {
-      heap[i] = heap[j];			  // shift parents down
+      heap[i] = heap[j];              // shift parents down
       i = j;
       j = j >>> 1;
     }
-    heap[i] = node;				  // install saved node
+    heap[i] = node;                  // install saved node
   }
-
-  private final void downHeap() {
+  
+  protected final void upHeap() {
+    upHeap(size);
+  }
+  
+  protected void downHeap() {
     int i = 1;
-    T node = heap[i];			  // save top node
-    int j = i << 1;				  // find smaller child
+    T node = heap[i];                // save top node
+    int j = i << 1;                  // find smaller child
     int k = j + 1;
     if (k <= size && lessThan(heap[k], heap[j])) {
       j = k;
     }
     while (j <= size && lessThan(heap[j], node)) {
-      heap[i] = heap[j];			  // shift up child
+      heap[i] = heap[j];             // shift up child
       i = j;
       j = i << 1;
       k = j + 1;
       if (k <= size && lessThan(heap[k], heap[j])) {
-	j = k;
+        j = k;
       }
     }
-    heap[i] = node;				  // install saved node
+    heap[i] = node;                  // install saved node
+  }
+ 
+  /**
+   * A simple and naive serialization method for testing.
+   */
+  public String toString() {
+    StringBuilder sb = new StringBuilder();
+    for (int i = 1; i <= size; i++) {
+      sb.append(heap[i].toString());
+      sb.append(",");
+    }
+    return sb.toString();
   }
 }

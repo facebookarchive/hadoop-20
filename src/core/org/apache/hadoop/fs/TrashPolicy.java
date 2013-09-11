@@ -74,7 +74,7 @@ public abstract class TrashPolicy extends Configured {
   /**
    * Get the current working directory of the Trash Policy
    */
-  public abstract Path getCurrentTrashDir();
+  public abstract Path getCurrentTrashDir() throws IOException;
 
   /** 
    * Return a {@link Runnable} that periodically empties the trash of all

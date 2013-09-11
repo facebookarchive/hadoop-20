@@ -23,7 +23,7 @@ import org.apache.hadoop.fs.*;
 import org.apache.hadoop.fs.permission.*;
 import org.apache.hadoop.conf.*;
 import org.apache.hadoop.hdfs.DFSClient;
-import org.apache.hadoop.hdfs.DFSClient.DFSInputStream;
+import org.apache.hadoop.hdfs.DFSInputStream;
 import org.apache.hadoop.hdfs.protocol.*;
 import org.apache.hadoop.hdfs.server.common.Storage.*;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
@@ -261,7 +261,7 @@ public class WaitingRoom {
         FSDataInputStream in = dfs.open(path);
 
         // Load in snapshot image
-        fsImage.loadFSImage(path.toString(), in);
+        fsImage.loadFSImage(new File(path.toString()), in);
 
         // Filter block reference map with files in snapshot
         filterMapWithInode(namesystem.dir.rootDir);

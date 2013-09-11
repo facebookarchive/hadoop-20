@@ -20,24 +20,27 @@ package org.apache.hadoop.fs;
 
 import java.io.IOException;
 import java.net.URI;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
-
-import junit.framework.TestCase;
+import java.util.List;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FsShell;
-import org.apache.hadoop.fs.FSDataInputStream;
-import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapred.*;
 import org.apache.hadoop.tools.HadoopArchives;
+import org.apache.hadoop.util.LineReader;
 import org.apache.hadoop.util.ToolRunner;
-import org.mortbay.log.Log;
+import org.junit.AfterClass;
+import org.junit.BeforeClass;
+import org.junit.Test;
+
+import static org.junit.Assert.*;
 
 /**
  * test the har file system
@@ -45,45 +48,38 @@ import org.mortbay.log.Log;
  * run fs commands
  * and then run a map reduce job
  */
-public class TestHarFileSystem extends TestCase {
-  private Path inputPath, inputrelPath;
-  private MiniDFSCluster dfscluster;
-  private MiniMRCluster mapred;
-  private FileSystem fs;
-  private Path filea, fileb, filec, filed;
-  private Path archivePath;
+public class TestHarFileSystem {
+  static private Path inputPath, inputrelPath;
+  static private MiniDFSCluster dfscluster;
+  static private MiniMRCluster mapred;
+  static private FileSystem fs;
+  static private Path filea, fileb, filec, filed;
+  static private Path archivePath;
   
-  protected void setUp() throws Exception {
-    super.setUp();
+  @BeforeClass
+  static public void setUp() throws Exception {
     dfscluster = new MiniDFSCluster(new Configuration(), 2, true, null);
     fs = dfscluster.getFileSystem();
     mapred = new MiniMRCluster(2, fs.getUri().toString(), 1);
     inputPath = new Path(fs.getHomeDirectory(), "test"); 
     inputrelPath = new Path(fs.getHomeDirectory().toUri().
         getPath().substring(1), "test");
-    filea = new Path(inputPath,"a");
-    fileb = new Path(inputPath,"b");
-    filec = new Path(inputPath,"c c");
+    filea = new Path(inputPath, "a");
+    fileb = new Path(inputPath, "b");
+    filec = new Path(inputPath, "c c");
     filed = new Path(inputPath, "d%d");
     // check for har containing escape worthy 
     // characters in there names
     archivePath = new Path(fs.getHomeDirectory(), "tmp");
     fs.mkdirs(inputPath);
-    FSDataOutputStream out = fs.create(filea); 
-    out.write("a".getBytes());
-    out.close();
-    out = fs.create(fileb);
-    out.write("b".getBytes());
-    out.close();
-    out = fs.create(filec);
-    out.write("c".getBytes());
-    out.close();
-    out = fs.create(filed);
-    out.write("d".getBytes());
-    out.close();
+    CopyFilesBase.createFileWithContent(fs, filea, "a".getBytes());
+    CopyFilesBase.createFileWithContent(fs, fileb, "b".getBytes());
+    CopyFilesBase.createFileWithContent(fs, filec, "c".getBytes());
+    CopyFilesBase.createFileWithContent(fs, filed, "d".getBytes());
   }
   
-  protected void tearDown() throws Exception {
+  @AfterClass
+  static public void tearDown() throws Exception {
     try {
       if (mapred != null) {
         mapred.shutdown();
@@ -94,7 +90,6 @@ public class TestHarFileSystem extends TestCase {
     } catch(Exception e) {
       System.err.println(e);
     }
-    super.tearDown();
   }
   
   static class TextMapperReducer implements Mapper<LongWritable, Text, Text, Text>, 
@@ -121,29 +116,16 @@ public class TestHarFileSystem extends TestCase {
   }
 
   /* check bytes in the har output files */
-  private void  checkBytes(Path harPath, Configuration conf) throws IOException {
+  private void checkBytes(Path harPath, Configuration conf) throws IOException {
     Path harFilea = new Path(harPath, "a");
     Path harFileb = new Path(harPath, "b");
     Path harFilec = new Path(harPath, "c c");
     Path harFiled = new Path(harPath, "d%d");
     FileSystem harFs = harFilea.getFileSystem(conf);
-    FSDataInputStream fin = harFs.open(harFilea);
-    byte[] b = new byte[4];
-    int readBytes = fin.read(b);
-    fin.close();
-    assertTrue("strings are equal ", (b[0] == "a".getBytes()[0]));
-    fin = harFs.open(harFileb);
-    fin.read(b);
-    fin.close();
-    assertTrue("strings are equal ", (b[0] == "b".getBytes()[0]));
-    fin = harFs.open(harFilec);
-    fin.read(b);
-    fin.close();
-    assertTrue("strings are equal ", (b[0] == "c".getBytes()[0]));
-    fin = harFs.open(harFiled);
-    fin.read(b);
-    fin.close();
-    assertTrue("strings are equal ", (b[0] == "d".getBytes()[0]));
+    assertTrue(CopyFilesBase.checkContentOfFile(harFs, harFilea, "a".getBytes()));
+    assertTrue(CopyFilesBase.checkContentOfFile(harFs, harFileb, "b".getBytes()));
+    assertTrue(CopyFilesBase.checkContentOfFile(harFs, harFilec, "c".getBytes()));
+    assertTrue(CopyFilesBase.checkContentOfFile(harFs, harFiled, "d".getBytes()));
   }
 
   /**
@@ -157,6 +139,7 @@ public class TestHarFileSystem extends TestCase {
   }
  
   // test archives with a -p option
+  @Test
   public void testRelativeArchives() throws Exception {
     fs.delete(archivePath, true);
     Configuration conf = mapred.createJobConf();
@@ -206,11 +189,10 @@ public class TestHarFileSystem extends TestCase {
       args[3] = fs.getHomeDirectory().toString();
       args[4] = "test";
       args[5] = archivePath.toString();
-      Log.info("aqui ant");
       conf.setInt("har.block.size", 512);
       conf.setInt("har.partfile.size", 1);
       int ret = ToolRunner.run(har, args);
-      Log.info("aqui depois");
+
       assertTrue("failed test", ret == 0);
       Path finalPath = new Path(archivePath, "foo.har");
       Path fsPath = new Path(inputPath.toUri().getPath());
@@ -237,6 +219,7 @@ public class TestHarFileSystem extends TestCase {
     }
   }
 
+  @Test
   public void testArchivesWithMapred() throws Exception {
     //one minor check
     // check to see if fs.har.impl.disable.cache is set 
@@ -278,8 +261,9 @@ public class TestHarFileSystem extends TestCase {
     args[4] = inputrelPath.toString();
     args[5] = archivePath.toString();
     ret = ToolRunner.run(har, args);
-    //checl for the existenece of the archive
+    //check for the existence of the archive
     assertTrue(ret == 0);
+
     ///try running it again. it should not 
     // override the directory
     ret = ToolRunner.run(har, args);
@@ -296,9 +280,9 @@ public class TestHarFileSystem extends TestCase {
     assertTrue(fs.exists(new Path(finalPath, "_masterindex")));
     assertTrue(!fs.exists(new Path(finalPath, "_logs")));
     //creation tested
+
     //check if the archive is same
     // do ls and cat on all the files
-    
     FsShell shell = new FsShell(conf);
     args = new String[2];
     args[0] = "-ls";
@@ -306,31 +290,11 @@ public class TestHarFileSystem extends TestCase {
     ret = ToolRunner.run(shell, args);
     // ls should work.
     assertTrue((ret == 0));
-    //now check for contents of filea
-    // fileb and filec
-    Path harFilea = new Path(harPath, "a");
-    Path harFileb = new Path(harPath, "b");
-    Path harFilec = new Path(harPath, "c c");
-    Path harFiled = new Path(harPath, "d%d");
-    FileSystem harFs = harFilea.getFileSystem(conf);
-    FSDataInputStream fin = harFs.open(harFilea);
-    byte[] b = new byte[4];
-    int readBytes = fin.read(b);
-    assertTrue("Empty read.", readBytes > 0);
-    fin.close();
-    assertTrue("strings are equal ", (b[0] == "a".getBytes()[0]));
-    fin = harFs.open(harFileb);
-    readBytes = fin.read(b);
-    assertTrue("Empty read.", readBytes > 0);
-    fin.close();
-    assertTrue("strings are equal ", (b[0] == "b".getBytes()[0]));
-    fin = harFs.open(harFilec);
-    readBytes = fin.read(b);
-    assertTrue("Empty read.", readBytes > 0);
-    fin.close();
-    assertTrue("strings are equal ", (b[0] == "c".getBytes()[0]));
-    // ok all files match 
-    // run a map reduce job
+    
+    //now check for contents of all files
+    checkBytes(harPath, conf);
+
+    // now check running a map reduce job
     Path outdir = new Path(fs.getHomeDirectory(), "mapout"); 
     JobConf jobconf = mapred.createJobConf();
     FileInputFormat.addInputPath(jobconf, harPath);
@@ -346,19 +310,13 @@ public class TestHarFileSystem extends TestCase {
     args[1] = outdir.toString();
     ret = ToolRunner.run(shell, args);
     
+    // check the result of map reduce job
     FileStatus[] status = fs.globStatus(new Path(outdir, "part*"));
     Path reduceFile = status[0].getPath();
-    FSDataInputStream reduceIn = fs.open(reduceFile);
-    b = new byte[8];
-    readBytes = reduceIn.read(b);
-    assertTrue("Should read 8 bytes.", readBytes == 8);
-    //assuming all the 8 bytes were read.
-    Text readTxt = new Text(b);
-    assertTrue("a\nb\nc\nd\n".equals(readTxt.toString()));
-    assertTrue("number of bytes left should be -1", reduceIn.read(b) == -1);
-    reduceIn.close();
+    CopyFilesBase.checkContentOfFile(fs, reduceFile, "a\nb\nc\nd\n".getBytes());
   }
 
+  @Test
   public void testSpaces() throws Exception {
      fs.delete(archivePath, true);
      Configuration conf = mapred.createJobConf();
@@ -384,6 +342,7 @@ public class TestHarFileSystem extends TestCase {
   /**
    * Test how block location offsets and lengths are fixed.
    */
+  @Test
   public void testFixBlockLocations() {
     // do some tests where start == 0
     {
@@ -457,6 +416,169 @@ public class TestHarFileSystem extends TestCase {
       assertEquals(b[1].getOffset(), 128);
       assertEquals(b[1].getLength(), 384);
     }
-
   }
+  
+  @Test
+  public void testLsOnTopArchiveDirectory() throws Exception {
+    fs.delete(archivePath, true);
+    Configuration conf = mapred.createJobConf();
+    HadoopArchives har = new HadoopArchives(conf);
+    String[] args = {
+        "-archiveName",  
+        "foobar.har",
+        "-p",
+        inputPath.toString(),
+        filea.getName(),
+        fileb.getName(),
+        filec.getName(),
+        filed.getName(),
+        archivePath.toString()
+    };
+    int ret = ToolRunner.run(har, args);
+    assertTrue("failed test", ret == 0);
+    Path finalPath = new Path(archivePath, "foobar.har");
+    // make it a har path
+    Path harPath = new Path("har://" + finalPath.toUri().getPath());
+    FileSystem harFs = harPath.getFileSystem(conf);
+    FileStatus[] statuses = harFs.listStatus(finalPath);
+    
+    String[] fileNames = new String[statuses.length];
+    for (int i = 0; i < statuses.length; ++i) {
+       fileNames[i] = statuses[i].getPath().getName();
+    }
+    Arrays.sort(fileNames); // sort array to be sure about order
+    String[] expected = {"a", "b", "c c", "d%d"};
+    assertArrayEquals(expected, fileNames);
+  }
+
+  @Test
+  public void testAppend() throws Exception {
+    fs.delete(archivePath, true);
+    Configuration conf = mapred.createJobConf();
+    Path finalPath = new Path(archivePath, "foobar.har");
+    {
+      HadoopArchives har = new HadoopArchives(conf);
+      // create archive
+      String[] args = {
+          "-archiveName",
+          finalPath.getName(),
+          "-p",
+          inputPath.toString(),
+          filea.getName(),
+          fileb.getName(),
+          archivePath.toString()
+      };
+      int ret = ToolRunner.run(har, args);
+      assertTrue("failed test", ret == 0);
+    }
+    {
+      HadoopArchives har = new HadoopArchives(conf);
+      // append to archive
+      String[] args = {
+          "-append",
+          finalPath.getName(),
+          "-p",
+          inputPath.toString(),
+          filec.getName(),
+          filed.getName(),
+          archivePath.toString()
+      };
+      int ret = ToolRunner.run(har, args);
+      assertTrue("failed test", ret == 0);
+    }
+    {
+      // check results
+      Path harPath = new Path("har://" + finalPath.toUri().getPath());
+      checkBytes(harPath, conf);
+      
+      // check the items in _index file
+      String[] actual = extractItemNamesFromIndex(new Path(finalPath, "_index")).toArray(new String[0]);
+      String[] expected = {"/", "/a", "/b", "/c c", "/d%d"};
+      assertArrayEquals(actual, expected);
+    }
+  }
+  
+  @Test
+  public void testAppendFromArchive() throws Exception {
+    fs.delete(archivePath, true);
+    Configuration conf = mapred.createJobConf();
+    Path archive = new Path(archivePath, "foo.har");
+    Path archive2 = new Path(archivePath, "foo2.har");
+    
+    Path dirPath = new Path(inputPath, "dir");
+    Path filee = new Path(dirPath, "e");
+    fs.mkdirs(dirPath);
+    CopyFilesBase.createFileWithContent(fs, filee, "e".getBytes());
+    {
+      HadoopArchives har = new HadoopArchives(conf);
+      // create full archive
+      String[] args = {
+          "-archiveName",
+          archive2.getName(),
+          "-p", inputPath.toString(),
+          filea.getName(),
+          fileb.getName(),
+          filec.getName(),
+          filed.getName(),
+          "dir/e",
+          archivePath.toString()
+      };
+      int ret = ToolRunner.run(har, args);
+      assertTrue("failed test", ret == 0);
+    }
+    {
+      HadoopArchives har = new HadoopArchives(conf);
+      // create archive without a, b, e
+      String[] args = {
+          "-archiveName",
+          archive.getName(),
+          "-p", inputPath.toString(),
+          filec.getName(),
+          filed.getName(),
+          archivePath.toString()
+      };
+      int ret = ToolRunner.run(har, args);
+      assertTrue("failed test", ret == 0);
+    }
+    {
+      HadoopArchives har = new HadoopArchives(conf);
+      // append to archive 
+      String[] args = {
+          "-appendFromArchive",
+          archive2.toString(),
+          "/a",
+          "/b",
+          "/dir/e",
+          archive.toString()
+      };
+      int ret = ToolRunner.run(har, args);
+      assertTrue("failed test", ret == 0);
+    }
+    {
+      // check results
+      Path harPath = new Path("har://" + archive.toUri().getPath());
+      checkBytes(harPath, conf);
+      
+      // check the items in _index file
+      String[] actual = extractItemNamesFromIndex(new Path(archive, "_index")).toArray(new String[0]);
+      String[] expected = {"/", "/a", "/b", "/c c", "/d%d", "/dir", "/dir/e"};
+      assertArrayEquals(actual, expected);
+    }
+  }
+  
+  private List<String> extractItemNamesFromIndex(Path pathToIndex) throws IOException {
+    FileStatus fileStatus = fs.getFileStatus(pathToIndex);
+    FSDataInputStream inputStream = fs.open(pathToIndex);
+    LineReader lineReader = new LineReader(inputStream, new Configuration());
+    long totalRead = 0;
+    List<String> result = new ArrayList<String>();
+    while (totalRead < fileStatus.getLen()) {
+      Text line = new Text();
+      totalRead += lineReader.readLine(line);
+      HarStatus harStauts = new HarStatus(line.toString());
+      result.add(harStauts.getName());
+    }
+    return result;
+  }
+  
 }

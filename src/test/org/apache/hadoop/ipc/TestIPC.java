@@ -31,12 +31,15 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketTimeoutException;
 
-import junit.framework.TestCase;
-
 import org.apache.hadoop.conf.Configuration;
+import org.junit.Ignore;
+import org.junit.Test;
+import static org.junit.Assert.*;
+
+
 
 /** Unit tests for IPC. */
-public class TestIPC extends TestCase {
+public class TestIPC {
   public static final Log LOG =
     LogFactory.getLog(TestIPC.class);
   
@@ -46,8 +49,8 @@ public class TestIPC extends TestCase {
   
   static {
     Client.setPingInterval(conf, PING_INTERVAL);
+    conf.setInt(Server.IPC_SERVER_RPC_READ_THREADS_KEY, 3);
   }
-  public TestIPC(String name) { super(name); }
 
   private static final Random RANDOM = new Random();
 
@@ -79,28 +82,45 @@ public class TestIPC extends TestCase {
     private Client client;
     private InetSocketAddress server;
     private int count;
+    private int repeatCount;
     private boolean failed;
+    // We use socketTime as a hacky way to get separate sockets to the same address
+    private int lowSocketTimeout;
+    private int highSocketTimeout;
 
-    public SerialCaller(Client client, InetSocketAddress server, int count) {
+    public SerialCaller(Client client, InetSocketAddress server, int count, int repeatCount,
+        int lowSocketTimeout, int highSocketTimeout) {
       this.client = client;
       this.server = server;
       this.count = count;
+      this.repeatCount = repeatCount;
+      this.lowSocketTimeout = lowSocketTimeout;
+      this.highSocketTimeout = highSocketTimeout;
     }
 
     public void run() {
       for (int i = 0; i < count; i++) {
-        try {
-          LongWritable param = new LongWritable(RANDOM.nextLong());
-          LongWritable value =
-            (LongWritable)client.call(param, server, null, null, 0);
-          if (!param.equals(value)) {
-            LOG.fatal("Call failed!");
+        int socketTimeout;
+        if (lowSocketTimeout == highSocketTimeout) {
+          socketTimeout = lowSocketTimeout;
+        } else {
+          socketTimeout = lowSocketTimeout
+              + RANDOM.nextInt(highSocketTimeout - lowSocketTimeout);
+        }
+        for (int j = 0; j < repeatCount; j++) {
+          try {
+            LongWritable param = new LongWritable(RANDOM.nextLong());
+            LongWritable value = (LongWritable) client.call(param, server,
+                null, null, socketTimeout, false);
+            if (!param.equals(value)) {
+              LOG.fatal("Call failed!");
+              failed = true;
+              break;
+            }
+          } catch (Exception e) {
+            LOG.fatal("Caught: " + StringUtils.stringifyException(e));
             failed = true;
-            break;
           }
-        } catch (Exception e) {
-          LOG.fatal("Caught: " + StringUtils.stringifyException(e));
-          failed = true;
         }
       }
     }
@@ -141,14 +161,46 @@ public class TestIPC extends TestCase {
     }
   }
 
+  @Test
   public void testSerial() throws Exception {
-    testSerial(3, false, 2, 5, 100);
-    testSerial(3, true, 2, 5, 10);
+    testSerial(3, false, 2, 5, 100, 1, 0, 0);
+    testSerial(3, true, 2, 5, 10, 1, 0, 0);
   }
 
-  public void testSerial(int handlerCount, boolean handlerSleep, 
-                         int clientCount, int callerCount, int callCount)
-    throws Exception {
+  /**
+   * This is a simple benchmark which makes some traffic to both of IPC Server's
+   * listener and reader threads' so we can measure performance improvement of
+   * IPC's socket accept/read mechanism.
+   * 
+   * We create 32 clients all connecting to the same IPC server with 3 request
+   * reader threads. Every client sends 1024 requests using one connection and
+   * then moves on to a next one. In that way, both accept thread and reader
+   * threads get consistent loads.
+   * 
+   * The approach we use for a clients to move on to separate connections is by
+   * changing the socket timeout. Our IPC client will create a different
+   * connection if the socket timeout setting is different.
+   * 
+   * @throws Exception
+   */
+  @Ignore
+  @Test
+  public void testSerialBenchmark1() throws Exception {
+    conf.setInt("ipc.client.connection.maxidletime", 1);
+
+    long startTime = System.currentTimeMillis();
+    testSerial(32, false, 8, 32, 32, 1024, 60000, 60000 + 8);
+    long endTime = System.currentTimeMillis();
+    System.out.println("============== Benchmark Took: "
+        + (endTime - startTime) + " ms ===================");
+
+    conf.setInt("ipc.client.connection.maxidletime", 10000);
+
+  }
+
+  public void testSerial(int handlerCount, boolean handlerSleep,
+      int clientCount, int callerCount, int callCount, int repeatCount,
+      int lowSocketTimeout, int highSocketTimeout) throws Exception {
     Server server = new TestServer(handlerCount, handlerSleep);
     InetSocketAddress addr = NetUtils.getConnectAddress(server);
     server.start();
@@ -160,7 +212,8 @@ public class TestIPC extends TestCase {
     
     SerialCaller[] callers = new SerialCaller[callerCount];
     for (int i = 0; i < callerCount; i++) {
-      callers[i] = new SerialCaller(clients[i%clientCount], addr, callCount);
+      callers[i] = new SerialCaller(clients[i % clientCount], addr, callCount,
+          repeatCount, lowSocketTimeout, highSocketTimeout);
       callers[i].start();
     }
     for (int i = 0; i < callerCount; i++) {
@@ -173,6 +226,7 @@ public class TestIPC extends TestCase {
     server.stop();
   }
 	
+  @Test
   public void testParallel() throws Exception {
     testParallel(10, false, 2, 4, 2, 4, 100);
   }
@@ -215,13 +269,14 @@ public class TestIPC extends TestCase {
     }
   }
 	
+  @Test
   public void testStandAloneClient() throws Exception {
     testParallel(10, false, 2, 4, 2, 4, 100);
     Client client = new Client(LongWritable.class, conf);
     InetSocketAddress address = new InetSocketAddress("127.0.0.1", 10);
     try {
       client.call(new LongWritable(RANDOM.nextLong()),
-              address, null, null, 0);
+              address, null, null, 0, false);
       fail("Expected an exception to have been thrown");
     } catch (IOException e) {
       String message = e.getMessage();
@@ -252,6 +307,7 @@ public class TestIPC extends TestCase {
     }
   }
 
+  @Test
   public void testErrorClient() throws Exception {
     // start server
     Server server = new TestServer(1, false);
@@ -262,7 +318,7 @@ public class TestIPC extends TestCase {
     Client client = new Client(LongErrorWritable.class, conf);
     try {
       client.call(new LongErrorWritable(RANDOM.nextLong()),
-          addr, null, null, 0);
+          addr, null, null, 0, false);
       fail("Expected an exception to have been thrown");
     } catch (IOException e) {
       // check error
@@ -272,6 +328,7 @@ public class TestIPC extends TestCase {
     }
   }
 
+  @Test
   public void testIpcTimeout() throws Exception {
     // start server
     Server server = new TestServer(1, true);
@@ -283,22 +340,26 @@ public class TestIPC extends TestCase {
     // set timeout to be less than MIN_SLEEP_TIME
     try {
       client.call(new LongWritable(RANDOM.nextLong()),
-              addr, null, null, MIN_SLEEP_TIME/2);
+              addr, null, null, MIN_SLEEP_TIME/2, false);
       fail("Expected an exception to have been thrown");
     } catch (SocketTimeoutException e) {
       LOG.info("Get a SocketTimeoutException ", e);
     }
     // set timeout to be bigger than 3*ping interval
     client.call(new LongWritable(RANDOM.nextLong()),
-        addr, null, null, 3*PING_INTERVAL+MIN_SLEEP_TIME);
+        addr, null, null, 3*PING_INTERVAL+MIN_SLEEP_TIME, false);
   }
 
 	public static void main(String[] args) throws Exception {
 
     //new TestIPC("test").testSerial(5, false, 2, 10, 1000);
 
-    new TestIPC("test").testParallel(10, false, 2, 4, 2, 4, 1000);
-
+	  if (args.length >= 1 && args[0].equals("benchmark")) {
+	    System.out.println("args: " + args[0]);
+	    new TestIPC().testSerialBenchmark1();
+	  } else {
+	    new TestIPC().testParallel(10, false, 2, 4, 2, 4, 1000);
+	  }
   }
 
 }

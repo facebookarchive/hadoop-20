@@ -18,6 +18,8 @@
 package org.apache.hadoop.hdfs.server.datanode;
 
 public interface ReplicaBeingWritten {
+  public void setBytesReceived(long length);
   public void setBytesOnDisk(long length);
   public void setBytesAcked(long length);
+  public void updateBlockCrc(long offset, int length, int crc);
 }

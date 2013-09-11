@@ -12,16 +12,20 @@ import org.apache.hadoop.io.Writable;
 public class FileStatusExtended extends FileStatus implements Writable {
   private Block[] blocks;
   private String leaseHolder;
+  // HardLink id of -1 denotes the file is not hardlinked.
+  private long hardlinkId;
   
   public FileStatusExtended() {}
 
-  public FileStatusExtended(FileStatus stat, Block[] blocks, String leaseHolder) {
+  public FileStatusExtended(FileStatus stat, Block[] blocks,
+      String leaseHolder, long hardlinkId) {
     super(stat.getLen(), stat.isDir(), stat.getReplication(),
         stat.getBlockSize(), stat.getModificationTime(), stat.getAccessTime(),
         stat.getPermission(), stat.getOwner(), stat.getGroup(), 
         stat.getPath());
     this.blocks = blocks;
     this.leaseHolder = (leaseHolder == null) ? "" : leaseHolder;
+    this.hardlinkId = hardlinkId;
   }
   
   public Block[] getBlocks() {
@@ -40,6 +44,7 @@ public class FileStatusExtended extends FileStatus implements Writable {
       blocks[i].write(out);
     }
     out.writeUTF(leaseHolder);
+    out.writeLong(hardlinkId);
   }
 
   public void readFields(DataInput in) throws IOException {
@@ -51,6 +56,7 @@ public class FileStatusExtended extends FileStatus implements Writable {
       blocks[i].readFields(in);
     }
     leaseHolder = in.readUTF();
+    hardlinkId = in.readLong();
   }
 
   @Override
@@ -60,7 +66,8 @@ public class FileStatusExtended extends FileStatus implements Writable {
     if (getClass() != obj.getClass())
       return false;
     FileStatusExtended other = (FileStatusExtended) obj;
-    if (!leaseHolder.equals(other.leaseHolder))
+    if (!leaseHolder.equals(other.leaseHolder)
+        || hardlinkId != other.hardlinkId)
       return false;
     boolean closedFile = leaseHolder.isEmpty();
     if (!super.compareFull(obj, closedFile)) {
@@ -109,6 +116,7 @@ public class FileStatusExtended extends FileStatus implements Writable {
   @Override
   public String toString() {
     return "FileStatusExtended [blocks=" + Arrays.toString(blocks)
-        + ", leaseHolder=" + leaseHolder + "] " + super.toString();
+        + ", leaseHolder=" + leaseHolder + ", hardlinkId =" + hardlinkId + "]"
+        + super.toString();
   }
 }

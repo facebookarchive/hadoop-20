@@ -93,7 +93,13 @@ public class TextInputFormat extends FileInputFormat<LongWritable, Text>
       // ignore the end pos and read the whole file.
       return new EmptyRecordReader();
     }
-    
-    return new LineRecordReader(job, (FileSplit) genericSplit);
+
+    String delimiter = job.get("textinputformat.record.delimiter");
+    byte[] recordDelimiterBytes = null;
+    if (null != delimiter) {
+      recordDelimiterBytes = delimiter.getBytes();
+    }
+    return new LineRecordReader(job, (FileSplit) genericSplit,
+      recordDelimiterBytes);
   }
 }

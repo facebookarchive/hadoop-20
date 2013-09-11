@@ -20,10 +20,14 @@ package org.apache.hadoop.hdfs;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
 import java.io.PrintWriter;
+import java.io.RandomAccessFile;
+import java.nio.channels.FileChannel;
 import java.security.Permission;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -42,16 +46,25 @@ import org.apache.hadoop.fs.FSInputChecker;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FsShell;
+import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.RawLocalFileSystem;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.shell.Count;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.datanode.BlockInlineChecksumReader;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.FSDataset;
-import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
+import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+import org.apache.hadoop.hdfs.server.namenode.INode;
+import org.apache.hadoop.hdfs.server.namenode.INodeFile;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.util.DataTransferThrottler;
+import org.apache.hadoop.util.InjectionEventCore;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
 
@@ -59,6 +72,7 @@ import org.apache.hadoop.util.ToolRunner;
  * This class tests commands from DFSShell.
  */
 public class TestDFSShell extends TestCase {
+  private MiniDFSCluster cluster;
   static final String TEST_ROOT_DIR =
     new Path(System.getProperty("test.build.data","/tmp"))
     .toString().replace(' ', '+');
@@ -76,10 +90,21 @@ public class TestDFSShell extends TestCase {
     assertTrue(fs.exists(f));
     return f;
   }
-
+  
   static Path writeFileContents(FileSystem fs, Path f, String data)
     throws IOException {
+    return writeFileContents(fs, f, data, 0L);
+  }
+  
+  static Path writeFileContents(FileSystem fs, Path f, String data,
+      long offset)
+    throws IOException {
     DataOutputStream out = fs.create(f);
+    if (offset > 0) {
+      // write some trash
+      byte[] trash = new byte[(int)offset];
+      out.write(trash);
+    }
     out.writeUTF(data);
     out.close();
     assertTrue(fs.exists(f));
@@ -108,14 +133,74 @@ public class TestDFSShell extends TestCase {
     assertTrue(f.isFile());
     return f;
   }
-
+  
   static void show(String s) {
     System.out.println(Thread.currentThread().getStackTrace()[2] + " " + s);
+  }
+  
+  public void testCopyToLocalWithStartingOffset() throws Exception {
+    Configuration conf = new Configuration();
+    cluster = new MiniDFSCluster(conf, 2, true, null);
+    FileSystem fs = cluster.getFileSystem();
+    FileSystem localFs = FileSystem.getLocal(conf);
+    FsShell shell = new FsShell();
+    shell.setConf(conf);
+    String good = "good content";
+    try {
+      Path directory = new Path("/dir");
+      Path srcFile = new Path("/dir/file");
+      Path destFile = new Path(TEST_ROOT_DIR, "file");
+      assertTrue(fs.mkdirs(directory));
+      assertTrue(fs.exists(directory));
+      
+      for (int offset : new int[]{0, 1}) {
+        // clear files
+        fs.delete(srcFile, true);
+        localFs.delete(destFile, true);
+        writeFileContents(fs, srcFile, good, offset);
+        String[] args = {"-copyToLocal",
+            "-start", Integer.toString(offset),
+            srcFile.toUri().getPath(),
+            TEST_ROOT_DIR};
+        assertEquals(0, shell.run(args));
+        assertTrue(localFs.exists(destFile));
+        assertEquals("We should get " + good, good,
+            readFileContents(localFs, destFile));
+        if (offset > 0) {
+          show("Test normal read");
+          localFs.delete(destFile, true);
+          args = new String[]{"-copyToLocal",
+              srcFile.toUri().getPath(),
+              TEST_ROOT_DIR};
+          assertEquals(0, shell.run(args));
+          assertTrue(localFs.exists(destFile));
+          assertNotSame("We should not get " + good, good,
+              readFileContents(localFs, destFile));
+          show("Test negative offset read");
+          localFs.delete(destFile, true);
+          args = new String[]{"-copyToLocal",
+              "-start",
+              Long.toString(offset - fs.getFileStatus(srcFile).getLen()),
+              srcFile.toUri().getPath(),
+              TEST_ROOT_DIR};
+          assertEquals(0, shell.run(args));
+          assertTrue(localFs.exists(destFile));
+          assertEquals("We should get " + good, good,
+              readFileContents(localFs, destFile));
+        } 
+      }
+    } finally {
+      try {
+        fs.close();
+      } catch (Exception e) {
+      }
+      cluster.shutdown();
+    }
   }
 
   public void testZeroSizeFile() throws IOException {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs = cluster.getFileSystem();
     assertTrue("Not a HDFS: "+fs.getUri(),
                fs instanceof DistributedFileSystem);
@@ -134,7 +219,7 @@ public class TestDFSShell extends TestCase {
       final Path root = mkdir(dfs, new Path("/test/zeroSizeFile"));
       final Path remotef = new Path(root, "dst");
       show("copy local " + f1 + " to remote " + remotef);
-      dfs.copyFromLocalFile(false, false, new Path(f1.getPath()), remotef);
+      dfs.copyFromLocalFile(false, false, false, new Path(f1.getPath()), remotef);
 
       //getBlockSize() should not throw exception
       show("Block size = " + dfs.getFileStatus(remotef).getBlockSize());
@@ -142,7 +227,7 @@ public class TestDFSShell extends TestCase {
       //copy back
       final File f2 = new File(TEST_ROOT_DIR, "f2");
       assertTrue(!f2.exists());
-      dfs.copyToLocalFile(remotef, new Path(f2.getPath()));
+      dfs.copyToLocalFile(false, false, remotef, new Path(f2.getPath()));
       assertTrue(f2.exists());
       assertTrue(f2.isFile());
       assertEquals(0L, f2.length());
@@ -157,7 +242,7 @@ public class TestDFSShell extends TestCase {
 
   public void testRmdir() throws IOException {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs = cluster.getFileSystem();
     assertTrue("Not a HDFS: " + fs.getUri(),
         fs instanceof DistributedFileSystem);
@@ -206,7 +291,7 @@ public class TestDFSShell extends TestCase {
 
   public void testRecrusiveRm() throws IOException {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs = cluster.getFileSystem();
     assertTrue("Not a HDFS: " + fs.getUri(), 
         fs instanceof DistributedFileSystem);
@@ -231,7 +316,7 @@ public class TestDFSShell extends TestCase {
 
   public void testHeadTail() throws Exception {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = null;
+    cluster = null;
     PrintStream psBackup = null;
     try {
       cluster = new MiniDFSCluster(conf, 2, true, null);
@@ -314,7 +399,7 @@ public class TestDFSShell extends TestCase {
 
   public void testDu() throws IOException {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs = cluster.getFileSystem();
     assertTrue("Not a HDFS: "+fs.getUri(),
                 fs instanceof DistributedFileSystem);
@@ -361,9 +446,10 @@ public class TestDFSShell extends TestCase {
     }
 
   }
-  public void testPut() throws IOException {
+
+  public void testPut() throws Exception {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs = cluster.getFileSystem();
     assertTrue("Not a HDFS: "+fs.getUri(),
                fs instanceof DistributedFileSystem);
@@ -385,7 +471,8 @@ public class TestDFSShell extends TestCase {
         public void run() {
           try {
             show("copy local " + f2 + " to remote " + dst);
-            dfs.copyFromLocalFile(false, false, new Path(f2.getPath()), dst);
+            dfs.copyFromLocalFile(false, false, false,
+                new Path(f2.getPath()), dst);
           } catch (IOException ioe) {
             show("good " + StringUtils.stringifyException(ioe));
             return;
@@ -418,7 +505,7 @@ public class TestDFSShell extends TestCase {
         }
       });
       show("copy local " + f1 + " to remote " + dst);
-      dfs.copyFromLocalFile(false, false, new Path(f1.getPath()), dst);
+      dfs.copyFromLocalFile(false, false, false, new Path(f1.getPath()), dst);
       show("done");
 
       try {copy2ndFileThread.join();} catch (InterruptedException e) { }
@@ -429,7 +516,7 @@ public class TestDFSShell extends TestCase {
       Path[] srcs = new Path[2];
       srcs[0] = new Path(f1.getPath());
       srcs[1] = new Path(f2.getPath());
-      dfs.copyFromLocalFile(false, false, srcs, destmultiple);
+      dfs.copyFromLocalFile(false, false, false, srcs, destmultiple);
       srcs[0] = new Path(destmultiple,"f1");
       srcs[1] = new Path(destmultiple,"f2");
       assertTrue(dfs.exists(srcs[0]));
@@ -449,6 +536,80 @@ public class TestDFSShell extends TestCase {
 
       f1.delete();
       f2.delete();
+      
+      // Verify that validation option works
+      FsShell shell = new FsShell();
+      shell.setConf(conf);
+      File src = new File(TEST_ROOT_DIR, "f1");
+      Path dstFile = new Path(root, "f1");
+      try {
+        src = createLocalFile(src);
+        String[] args = {"-put", "-validate", src.toString(), dstFile.toString()};
+        assertEquals(0, shell.run(args));
+        dfs.delete(dstFile, true);
+
+        // run it again with injected error
+        InjectionHandler.set(new TestHandler());
+        assertEquals(-1, shell.run(args));
+      } finally {
+        InjectionHandler.clear();
+        dfs.delete(dstFile, true);
+        src.delete();
+      }
+
+      // Verify that rate option works in put and get
+      // [-put [-validate] [-rate <bandwidth>] <localsrc> ... <dst>]
+      // [-get [-rate <bandwidth>] [-crc] <src> <localdst>]
+      FileSystem localFs = FileSystem.getLocal(conf);
+      Path srcFile = new Path("/tmp/srcFile");
+      Path destFile = new Path(TEST_ROOT_DIR, "destFile");
+      localFs.delete(srcFile, true);
+      fs.delete(destFile, true);
+      
+      Random random = new Random(1);
+      final long seed = random.nextLong();
+      random.setSeed(seed);
+      
+      // generate random data
+      final byte[] data = new byte[1024 * 10];
+      random.nextBytes(data);
+      String str = new String(data);
+      writeFileContents(localFs, srcFile, str);
+
+      try {
+        // [-put [-validate] [-rate <bandwidth>] <localsrc> ... <dst>]
+        // file put size is 10 times of rate
+        // throttler will guarantee the put bandwidth <= expectedPutBandwidth
+        long expectedPutBandwidth = 1024L;
+        long start = System.currentTimeMillis();
+        String[] putArgs =
+        {"-put", "-rate", "1024", srcFile.toString(), destFile.toString()};
+        assertEquals(0, shell.run(putArgs));
+        long end = System.currentTimeMillis();
+        long actualPutBandwidth =
+          fs.getFileStatus(destFile).getLen() * 1000 / (end - start);
+        assertTrue(actualPutBandwidth <= expectedPutBandwidth);
+
+        // [-get [-rate <bandwidth>] [-crc] <src> <localdst>]
+        // file get size is 10 times of rate
+        // throttler will guarantee the get bandwidth <= expectedGetBandwidth
+        long expectedGetBandwidth = 2048L;
+        start = System.currentTimeMillis();
+        String[] getArgs =
+        {"-get", "-rate", "2048", destFile.toString(), TEST_ROOT_DIR};
+        assertEquals(0, shell.run(getArgs));
+        end = System.currentTimeMillis();
+        File localFile = new File(TEST_ROOT_DIR, "destFile");
+        long actualGetBandwidth =
+          localFile.length() * 1000 / (end - start);
+        assertTrue(actualGetBandwidth <= expectedGetBandwidth);
+
+        localFile.delete();
+      } finally {
+        fs.delete(destFile, true);
+        localFs.delete(srcFile, true);
+      }
+
     } finally {
       try {dfs.close();} catch (Exception e) {}
       cluster.shutdown();
@@ -461,7 +622,7 @@ public class TestDFSShell extends TestCase {
     Configuration conf = new Configuration();
     conf.set("fs.trash.interval", "1"); // enable trash interval
 
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs = cluster.getFileSystem();
     assertTrue("Not a HDFS: " + fs.getUri(),
                fs instanceof DistributedFileSystem);
@@ -635,7 +796,7 @@ public class TestDFSShell extends TestCase {
   /** check command error outputs and exit statuses. */
   public void testErrOutPut() throws Exception {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = null;
+    cluster = null;
     PrintStream bak = null;
     try {
       cluster = new MiniDFSCluster(conf, 2, true, null);
@@ -781,7 +942,8 @@ public class TestDFSShell extends TestCase {
     Configuration dstConf = new Configuration();
     MiniDFSCluster srcCluster =  null;
     MiniDFSCluster dstCluster = null;
-    String bak = System.getProperty("test.build.data");
+    String bak = "/tmp/sdong";
+//    String bak = System.getProperty("test.build.data");
     try{
       srcCluster = new MiniDFSCluster(srcConf, 2, true, null);
       File nameDir = new File(new File(bak), "dfs_tmp_uri/");
@@ -840,10 +1002,12 @@ public class TestDFSShell extends TestCase {
       Path parent = new Path("/tmp");
       Path root = new Path("/");
       TestDFSShell.writeFile(dstFs, path);
+      FileStatus oldStatus = dstFs.getFileStatus(path);
       runCmd(shell, "-chgrp", "-R", "herbivores", dstFs.getUri().toString() +"/*");
-      confirmOwner(null, "herbivores", dstFs, parent, path);
+      confirmOwner(null, "herbivores", oldStatus, dstFs, parent, path);
+      oldStatus = dstFs.getFileStatus(root);
       runCmd(shell, "-chown", "-R", ":reptiles", dstFs.getUri().toString() + "/");
-      confirmOwner(null, "reptiles", dstFs, root, parent, path);
+      confirmOwner(null, "reptiles", oldStatus, dstFs, root, parent, path);
       //check if default hdfs:/// works
       argv[0] = "-cat";
       argv[1] = "hdfs:///furi";
@@ -868,9 +1032,87 @@ public class TestDFSShell extends TestCase {
     }
   }
 
+  public void testHardLink() throws Exception {
+    Configuration conf = new Configuration();
+    cluster = null;
+    FileSystem fs = null;
+    try {
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      fs = cluster.getFileSystem();
+      String topDir = "/testHardLink";
+      DFSTestUtil util = new DFSTestUtil(topDir, 10, 1, 1024);
+      util.createFiles(fs, topDir);
+      String[] fileNames = util.getFileNames(topDir);
+
+      FsShell shell = new FsShell(conf);
+
+      String dir = "/somedirectoryforhardlinktesting";
+      fs.mkdirs(new Path(dir));
+
+
+      String[] cmd = { "-hardlink", fileNames[0], fileNames[0] + "hardlink" };
+      assertEquals(0, ToolRunner.run(shell, cmd));
+
+      String[] cmd0 = { "-hardlink", fileNames[0], fileNames[0] + "hardlink1" };
+      assertEquals(0, ToolRunner.run(shell, cmd0));
+
+      String[] getFilesCmd = { "-showlinks", fileNames[0] };
+      assertEquals(0, ToolRunner.run(shell, getFilesCmd));
+
+      String[] getFilesCmd1 = { "-showlinks", "/nonexistentfile" };
+      assertEquals(-1, ToolRunner.run(shell, getFilesCmd1));
+
+      String[] getFilesCmd2 = { "-showlinks" };
+      assertEquals(-1, ToolRunner.run(shell, getFilesCmd2));
+
+      String[] getFilesCmd3 = { "-showlinks", dir };
+      assertEquals(-1, ToolRunner.run(shell, getFilesCmd3));
+
+      String[] getFilesCmd4 = { "-showlinks", fileNames[0], fileNames[1],
+          fileNames[0] + "hardlink" };
+      assertEquals(0, ToolRunner.run(shell, getFilesCmd4));
+
+      FileStatusExtended stat1 = cluster.getNameNode().namesystem
+          .getFileInfoExtended(fileNames[0]);
+      FileStatusExtended stat2 = cluster.getNameNode().namesystem
+          .getFileInfoExtended(fileNames[0] + "hardlink");
+      assertTrue(Arrays.equals(stat1.getBlocks(), stat2.getBlocks()));
+      assertEquals(stat1.getAccessTime(), stat2.getAccessTime());
+      assertEquals(stat1.getBlockSize(), stat2.getBlockSize());
+      assertEquals(stat1.getGroup(), stat2.getGroup());
+      assertEquals(stat1.getLen(), stat2.getLen());
+      assertEquals(stat1.getModificationTime(), stat2.getModificationTime());
+      assertEquals(stat1.getOwner(), stat2.getOwner());
+      assertEquals(stat1.getReplication(), stat2.getReplication());
+
+      String[] cmd1 = { "-hardlink", fileNames[0], fileNames[1] };
+      assertEquals(-1, ToolRunner.run(shell, cmd1));
+
+      String[] cmd2 = { "-hardlink", fileNames[0], dir};
+      assertEquals(-1, ToolRunner.run(shell, cmd2));
+
+      String[] cmd3 = { "-hardlink", fileNames[0], null };
+      assertEquals(-1, ToolRunner.run(shell, cmd3));
+
+      String[] cmd4 = { "-hardlink", fileNames[0], fileNames[1], fileNames[2] };
+      assertEquals(-1, ToolRunner.run(shell, cmd4));
+
+      String[] cmd5 = { "-hardlink", fileNames[0] };
+      assertEquals(-1, ToolRunner.run(shell, cmd5));
+    } finally {
+      if (cluster != null) {
+        cluster.shutdown();
+      }
+      if (fs != null) {
+        fs.close();
+      }
+    }
+
+  }
+
   public void testText() throws Exception {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = null;
+    cluster = null;
     PrintStream bak = null;
     try {
       cluster = new MiniDFSCluster(conf, 2, true, null);
@@ -912,13 +1154,13 @@ public class TestDFSShell extends TestCase {
     }
   }
 
-  public void testCopyToLocal() throws IOException {
+  public void testCopyToLocal() throws Exception {
     Configuration conf = new Configuration();
     /* This tests some properties of ChecksumFileSystem as well.
      * Make sure that we create ChecksumDFS */
     conf.set("fs.hdfs.impl",
              "org.apache.hadoop.hdfs.ChecksumDistributedFileSystem");
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs = cluster.getFileSystem();
     assertTrue("Not a HDFS: "+fs.getUri(),
                fs instanceof ChecksumDistributedFileSystem);
@@ -980,12 +1222,65 @@ public class TestDFSShell extends TestCase {
         File f6 = new File(TEST_ROOT_DIR, "nosuchfile");
         assertTrue(!f6.exists());
       }
+      
+      // Verify that validation option works
+      Path src = new Path(root, "f1");
+      File f1 = new File(TEST_ROOT_DIR, "f1");
+      try {
+        writeFile(fs, src);
+        String[] args = {"-copyToLocal", "-validate", src.toString(), TEST_ROOT_DIR};
+        assertEquals(0, shell.run(args));
+        f1.delete();
+
+        // run it again with injected error
+        InjectionHandler.set(new TestHandler());
+        assertEquals(-1, shell.run(args));
+      } finally {
+        InjectionHandler.clear();
+        fs.delete(src, true);
+        f1.delete();
+      }
     } finally {
       try {
         dfs.close();
       } catch (Exception e) {
       }
       cluster.shutdown();
+    }
+  }
+
+  class TestHandler extends org.apache.hadoop.util.InjectionHandler {
+    @Override
+    public void _processEventIO(InjectionEventI event, Object... args) 
+    throws IOException {
+      if (event != InjectionEventCore.FILE_TRUNCATION) {
+        return;
+      }
+      // arg0 is the file system and arg1 is the file to be truncated
+      assertEquals(2, args.length);
+      if (args[0] instanceof LocalFileSystem || 
+          args[0] instanceof RawLocalFileSystem ) {
+        // truncate the local file
+        RandomAccessFile raFile = new RandomAccessFile((File)args[1], "rw");
+        try {
+          FileChannel channel = raFile.getChannel();
+          long filesize = channel.size();
+          assertFalse(0 == filesize);
+          channel.truncate(filesize-1);
+        } finally {
+          raFile.close();
+        }
+      } else { // HDFS: decrement last block size
+        assertTrue(args[0] instanceof DistributedFileSystem);
+        String file = ((Path) args[1]).toUri().getPath();
+        FSNamesystem namesystem = cluster.getNameNode().getNamesystem();
+        
+        INode [] trgINodes =  namesystem.dir.getExistingPathINodes(file);
+        INodeFile trgInode = (INodeFile) trgINodes[trgINodes.length-1];
+        int numBlocks = trgInode.getBlocks().length;
+        Block lastBlock = trgInode.getBlocks()[numBlocks-1];
+        lastBlock.setNumBytes(lastBlock.getNumBytes()-1);
+      }
     }
   }
 
@@ -1124,14 +1419,19 @@ public class TestDFSShell extends TestCase {
     }
   }
 
-  private void confirmOwner(String owner, String group,
+  private void confirmOwner(String owner, String group, FileStatus oldStatus,
                             FileSystem fs, Path... paths) throws IOException {
     for(Path path : paths) {
+      FileStatus newStatus= fs.getFileStatus(path);
       if (owner != null) {
-        assertEquals(owner, fs.getFileStatus(path).getOwner());
+        assertEquals(owner, newStatus.getOwner());
+      } else {
+        assertEquals(oldStatus.getOwner(), newStatus.getOwner()); // should not change
       }
       if (group != null) {
-        assertEquals(group, fs.getFileStatus(path).getGroup());
+        assertEquals(group, newStatus.getGroup());
+      } else {
+        assertEquals(oldStatus.getGroup(), newStatus.getGroup()); // should not change
       }
     }
   }
@@ -1147,56 +1447,69 @@ public class TestDFSShell extends TestCase {
     conf.set("dfs.permissions", "true");
 
     //test chmod on DFS
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
-    fs = cluster.getFileSystem();
-    testChmod(conf, fs, "/tmp/chmodTest");
+    cluster = new MiniDFSCluster(conf, 2, true, null);
+    
+    try {
+      fs = cluster.getFileSystem();
+      testChmod(conf, fs, "/tmp/chmodTest");
 
-    // test chown and chgrp on DFS:
+      // test chown and chgrp on DFS:
 
-    FsShell shell = new FsShell();
-    shell.setConf(conf);
-    fs = cluster.getFileSystem();
+      FsShell shell = new FsShell();
+      shell.setConf(conf);
+      fs = cluster.getFileSystem();
 
-    /* For dfs, I am the super user and I can change ower of any file to
-     * anything. "-R" option is already tested by chmod test above.
-     */
+      /*
+       * For dfs, I am the super user and I can change ower of any file to
+       * anything. "-R" option is already tested by chmod test above.
+       */
 
-    String file = "/tmp/chownTest";
-    Path path = new Path(file);
-    Path parent = new Path("/tmp");
-    Path root = new Path("/");
-    TestDFSShell.writeFile(fs, path);
+      String file = "/tmp/chownTest";
+      Path path = new Path(file);
+      Path parent = new Path("/tmp");
+      Path root = new Path("/");
+      TestDFSShell.writeFile(fs, path);
 
-    runCmd(shell, "-chgrp", "-R", "herbivores", "/*", "unknownFile*");
-    confirmOwner(null, "herbivores", fs, parent, path);
+      FileStatus oldStatus = fs.getFileStatus(path);
+      runCmd(shell, "-chgrp", "-R", "herbivores", "/*", "unknownFile*");
+      confirmOwner(null, "herbivores", oldStatus, fs, parent, path);
 
-    runCmd(shell, "-chgrp", "mammals", file);
-    confirmOwner(null, "mammals", fs, path);
+      oldStatus = fs.getFileStatus(path);
+      runCmd(shell, "-chgrp", "mammals", file);
+      confirmOwner(null, "mammals", oldStatus, fs, path);
 
-    runCmd(shell, "-chown", "-R", ":reptiles", "/");
-    confirmOwner(null, "reptiles", fs, root, parent, path);
+      oldStatus = fs.getFileStatus(path);
+      runCmd(shell, "-chown", "-R", ":reptiles", "/");
+      confirmOwner(null, "reptiles", oldStatus, fs, root, parent, path);
 
-    runCmd(shell, "-chown", "python:", "/nonExistentFile", file);
-    confirmOwner("python", "reptiles", fs, path);
+      oldStatus = fs.getFileStatus(path);
+      runCmd(shell, "-chown", "python:", "/nonExistentFile", file);
+      confirmOwner("python", "reptiles", oldStatus, fs, path);
 
-    runCmd(shell, "-chown", "-R", "hadoop:toys", "unknownFile", "/");
-    confirmOwner("hadoop", "toys", fs, root, parent, path);
+      oldStatus = fs.getFileStatus(path);
+      runCmd(shell, "-chown", "-R", "hadoop:toys", "unknownFile", "/");
+      confirmOwner("hadoop", "toys", oldStatus, fs, root, parent, path);
 
-    // Test different characters in names
+      // Test different characters in names
+      oldStatus = fs.getFileStatus(path);
+      runCmd(shell, "-chown", "hdfs.user", file);
+      confirmOwner("hdfs.user", null, oldStatus, fs, path);
 
-    runCmd(shell, "-chown", "hdfs.user", file);
-    confirmOwner("hdfs.user", null, fs, path);
+      oldStatus = fs.getFileStatus(path);
+      runCmd(shell, "-chown", "_Hdfs.User-10:_hadoop.users--", file);
+      confirmOwner("_Hdfs.User-10", "_hadoop.users--", oldStatus, fs, path);
 
-    runCmd(shell, "-chown", "_Hdfs.User-10:_hadoop.users--", file);
-    confirmOwner("_Hdfs.User-10", "_hadoop.users--", fs, path);
+      oldStatus = fs.getFileStatus(path);
+      runCmd(shell, "-chown", "hdfs/hadoop-core@apache.org:asf-projects", file);
+      confirmOwner("hdfs/hadoop-core@apache.org", "asf-projects", oldStatus, fs, path);
 
-    runCmd(shell, "-chown", "hdfs/hadoop-core@apache.org:asf-projects", file);
-    confirmOwner("hdfs/hadoop-core@apache.org", "asf-projects", fs, path);
+      oldStatus = fs.getFileStatus(path);
+      runCmd(shell, "-chgrp", "hadoop-core@apache.org/100", file);
+      confirmOwner(null, "hadoop-core@apache.org/100", oldStatus, fs, path);
 
-    runCmd(shell, "-chgrp", "hadoop-core@apache.org/100", file);
-    confirmOwner(null, "hadoop-core@apache.org/100", fs, path);
-
-    cluster.shutdown();
+    } finally {
+      cluster.shutdown();
+    }
   }
 
   // If target == null, perform fuzzy check for current time to prevent problems
@@ -1223,7 +1536,7 @@ public class TestDFSShell extends TestCase {
   public void testTouch() throws IOException, ParseException {
     Configuration conf = new Configuration();
     conf.set("dfs.access.time.precision", "100");
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs = cluster.getFileSystem();
     assertTrue("Not a HDFS: " + fs.getUri(),
                fs instanceof DistributedFileSystem);
@@ -1262,7 +1575,7 @@ public class TestDFSShell extends TestCase {
       // Verify that touch sets current time by default
       runCmd(shell, "-touch", "" + file1);
       assertTimesCorrect("-touch didn't set current time", fs, file1, null, null);
-
+      
       // Verify that "-c" works correctly
       Path file2 = new Path("/tmp/file2.txt");
       int exitCode = runCmd(shell, "-touch", "-c", "" + file2);
@@ -1293,9 +1606,72 @@ public class TestDFSShell extends TestCase {
       assertTimesCorrect("Option -m didn't work", fs, file2, oldFile2Atime, d1);
       runCmd(shell, "-touch", "-a", "--date", date2, "" + file2);
       assertTimesCorrect("Option -a didn't work", fs, file2, d2, d1);
+      runCmd(shell, "-touch", "-au", Long.toString(d1.getTime()), "" + file2);
+      assertTimesCorrect("Option -a and -u didn't work", fs, file2, d1, d1);
+      runCmd(shell, "-touch", "-amu", Long.toString(d2.getTime()), "" + file2);
+      assertTimesCorrect("Option -a, -m and -u didn't work", fs, file2, d2, d2);
+
+      // Verify that touch "-m" could set directory time correctly
+      // empty directory
+      String date3 = "2003-03-03 03:03:03";
+      String date4 = "2002-04-04 04:04:04";
+      Date d3 = df.parse(date3);
+      Date d4 = df.parse(date4);
+      Path dir = new Path("/tmp/testDir");
+      fs.mkdirs(dir);
+      Date dirCreateTime = new Date(fs.getFileStatus(dir).getModificationTime());
+      runCmd(shell, "-touch", "-a", "--date", date1, "" + dir);
+      assertTimesCorrect("Option -a didn't work with empty directory", fs, dir, d1, dirCreateTime);
+      runCmd(shell, "-touch", "-m", "--date", date2, "" + dir);
+      assertTimesCorrect("Option -m didn't work with empty directory", fs, dir, d1, d2);
+
+      // non-empty directory
+      Path testFile = new Path("/tmp/testDir/testFile");
+      runCmd(shell, "-touchz", "" + testFile);
+      runCmd(shell, "-touch", "-a", "--date", date3, "" + dir);
+      Date fileCreateTime = new Date(fs.getFileStatus(dir).getModificationTime());
+      assertTimesCorrect("Option -a didn't work with non-empty directory", fs, dir, d3, fileCreateTime);
+      runCmd(shell, "-touch", "-m", "--date", date4, "" + dir);
+      assertTimesCorrect("Option -m didn't work with non-empty directory", fs, dir, d3, d4);
+
     } finally {
       try {
         fs.close();
+      } catch (Exception e) {
+      }
+      cluster.shutdown();
+    }
+  }
+
+  // Test touch on the default/non-default nameservice in a federated cluster
+  public void testTouchFederation() throws IOException, ParseException {
+    Configuration conf = new Configuration();
+    int numNamenodes = 2;
+    int numDatanodes = 2;
+    cluster = new MiniDFSCluster(conf, numDatanodes, true, null, numNamenodes);
+    cluster.waitActive();
+
+    // f1, f2 are non-default nameservice
+    FileSystem fs1 = cluster.getFileSystem(0);
+    FileSystem fs2 = cluster.getFileSystem(1);
+    // f3 is the default nameservice
+    FileSystem fs3 = FileSystem.get(conf);
+    FsShell shell = new FsShell();
+    shell.setConf(conf);
+
+    try {
+      Path file1 = new Path(fs1.getUri() + "/tmp/federateFile1.txt");
+      Path file2 = new Path(fs2.getUri() + "/tmp/federateFile2.txt");
+      Path file3 = new Path("/tmp/federateFile3.txt");
+      runCmd(shell, "-touch", "" + file1, "" + file2, "" + file3);
+      assertTrue("Touch didn't create a file!", fs1.exists(file1));
+      assertTrue("Touch didn't create a file!", fs2.exists(file2));
+      assertTrue("Touch didn't create a file!", fs3.exists(file3));
+    } finally {
+      try {
+        fs1.close();
+        fs2.close();
+        fs3.close();
       } catch (Exception e) {
       }
       cluster.shutdown();
@@ -1311,7 +1687,7 @@ public class TestDFSShell extends TestCase {
      * Make sure that we create ChecksumDFS */
     conf.set("fs.hdfs.impl",
              "org.apache.hadoop.hdfs.ChecksumDistributedFileSystem");
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     FileSystem fs = cluster.getFileSystem();
     assertTrue("Not a HDFS: "+fs.getUri(),
             fs instanceof ChecksumDistributedFileSystem);
@@ -1564,13 +1940,15 @@ public class TestDFSShell extends TestCase {
 
   static void corrupt(List<File> files) throws IOException {
     for(File f : files) {
-      StringBuilder content = new StringBuilder(DFSTestUtil.readFile(f));
-      char c = content.charAt(0);
-      content.setCharAt(0, ++c);
-      PrintWriter out = new PrintWriter(f);
-      out.print(content);
-      out.flush();
-      out.close();
+      byte[] buffer = new byte[(int) f.length()];
+      FileInputStream fis = new FileInputStream(f);
+      fis.read(buffer, 0, buffer.length);
+      fis.close();
+      buffer[BlockInlineChecksumReader.getHeaderSize()]++;
+      
+      FileOutputStream fos = new FileOutputStream(f);
+      fos.write(buffer, 0, buffer.length);
+      fos.close();
     }
   }
 
@@ -1582,12 +1960,12 @@ public class TestDFSShell extends TestCase {
     UnixUserGroupInformation tmpUGI = new UnixUserGroupInformation("tmpname",
         new String[] {
         "mygroup"});
-    MiniDFSCluster dfs = null;
+    cluster = null;
     PrintStream bak = null;
     try {
       Configuration conf = new Configuration();
-      dfs = new MiniDFSCluster(conf, 2, true, null);
-      FileSystem fs = dfs.getFileSystem();
+      cluster = new MiniDFSCluster(conf, 2, true, null);
+      FileSystem fs = cluster.getFileSystem();
       Path p = new Path("/foo");
       fs.mkdirs(p);
       fs.setPermission(p, new FsPermission((short)0700));
@@ -1610,8 +1988,8 @@ public class TestDFSShell extends TestCase {
       if (bak != null) {
         System.setErr(bak);
       }
-      if (dfs != null) {
-        dfs.shutdown();
+      if (cluster != null) {
+        cluster.shutdown();
       }
     }
   }
@@ -1619,7 +1997,7 @@ public class TestDFSShell extends TestCase {
   public void testGet() throws IOException {
     DFSTestUtil.setLogLevel2All(FSInputChecker.LOG);
     final Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     DistributedFileSystem dfs = (DistributedFileSystem)cluster.getFileSystem();
 
     try {
@@ -1677,14 +2055,14 @@ public class TestDFSShell extends TestCase {
 
   public void testLsr() throws Exception {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(conf, 2, true, null);
+    cluster = new MiniDFSCluster(conf, 2, true, null);
     DistributedFileSystem dfs = (DistributedFileSystem)cluster.getFileSystem();
 
     try {
       final String root = createTree(dfs, "lsr");
       dfs.mkdirs(new Path(root, "zzz"));
 
-      runLsr(new FsShell(conf), root, 0);
+      runLsCmd(new FsShell(conf), root, 0, "-lsr", null);
 
       final Path sub = new Path(root, "sub");
       dfs.setPermission(sub, new FsPermission((short)0));
@@ -1695,14 +2073,14 @@ public class TestDFSShell extends TestCase {
           tmpusername, new String[] {tmpusername});
       UnixUserGroupInformation.saveToConf(conf,
             UnixUserGroupInformation.UGI_PROPERTY_NAME, tmpUGI);
-      String results = runLsr(new FsShell(conf), root, -1);
+      String results = runLsCmd(new FsShell(conf), root, -1, "-lsr", null);
       assertTrue(results.contains("zzz"));
     } finally {
       cluster.shutdown();
     }
   }
-  private static String runLsr(final FsShell shell, String root, int returnvalue
-      ) throws Exception {
+  private static String runLsCmd(final FsShell shell, String root,
+      int returnvalue, String cmd, String argument) throws Exception {
     System.out.println("root=" + root + ", returnvalue=" + returnvalue);
     final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     final PrintStream out = new PrintStream(bytes);
@@ -1712,7 +2090,11 @@ public class TestDFSShell extends TestCase {
     System.setErr(out);
     final String results;
     try {
-      assertEquals(returnvalue, shell.run(new String[]{"-lsr", root}));
+      if (argument != null) {
+        assertEquals(returnvalue, shell.run(new String[]{cmd, argument, root}));
+      } else {
+        assertEquals(returnvalue, shell.run(new String[]{cmd, root}));
+      }
       results = bytes.toString();
     } finally {
       IOUtils.closeStream(out);
@@ -1721,5 +2103,20 @@ public class TestDFSShell extends TestCase {
     }
     System.out.println("results:\n" + results);
     return results;
+  }
+  
+  public void testLsd() throws Exception {
+    Configuration conf = new Configuration();
+    cluster = new MiniDFSCluster(conf, 2, true, null);
+    DistributedFileSystem dfs = (DistributedFileSystem)cluster.getFileSystem();
+
+    try {
+      final String root = createTree(dfs, "lsd");
+      dfs.mkdirs(new Path(root, "testDir"));
+      String results = runLsCmd(new FsShell(conf), root + "/testDir", 0, "-ls", "-d");
+      assertTrue(results.contains("testDir"));
+    } finally {
+      cluster.shutdown();
+    }
   }
 }

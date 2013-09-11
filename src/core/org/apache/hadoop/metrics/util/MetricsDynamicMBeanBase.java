@@ -18,9 +18,9 @@
 package org.apache.hadoop.metrics.util;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import javax.management.Attribute;
 import javax.management.AttributeList;
@@ -57,10 +57,11 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
   private final static String MIN_TIME = "MinTime";
   private final static String MAX_TIME = "MaxTime";
   private final static String NUM_OPS = "NumOps";
+  private final static String NUM_OPS_CURRENT = "NumOpsCurrent";
   private final static String RESET_ALL_MIN_MAX_OP = "resetAllMinMax";
   private MetricsRegistry metricsRegistry;
   private MBeanInfo mbeanInfo;
-  private Map<String, MetricsBase> metricsRateAttributeMod;
+  private ConcurrentMap<String, MetricsBase> metricsRateAttributeMod;
   private int numEntriesInRegistry = 0;
   private String mbeanDescription;
   
@@ -76,7 +77,7 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
   }
   
   private void createMBeanInfo() {
-    metricsRateAttributeMod = new HashMap<String, MetricsBase>();
+    metricsRateAttributeMod = new ConcurrentHashMap<String, MetricsBase>();
     boolean needsMinMaxResetOperation = false;
     List<MBeanAttributeInfo> attributesInfo = new ArrayList<MBeanAttributeInfo>();
     MBeanOperationInfo[] operationsInfo = null;
@@ -87,6 +88,8 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
       if (MetricsTimeVaryingRate.class.isInstance(o)) {
         // For each of the metrics there are 3 different attributes
         attributesInfo.add(new MBeanAttributeInfo(o.getName() + NUM_OPS, "java.lang.Integer",
+            o.getDescription(), true, false, false));
+        attributesInfo.add(new MBeanAttributeInfo(o.getName() + NUM_OPS_CURRENT, "java.lang.Integer",
             o.getDescription(), true, false, false));
         attributesInfo.add(new MBeanAttributeInfo(o.getName() + AVG_TIME, "java.lang.Long",
             o.getDescription(), true, false, false));
@@ -99,6 +102,7 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
         // Note the special attributes (AVG_TIME, MIN_TIME, ..) are derived from metrics 
         // Rather than check for the suffix we store them in a map.
         metricsRateAttributeMod.put(o.getName() + NUM_OPS, o);
+        metricsRateAttributeMod.put(o.getName() + NUM_OPS_CURRENT, o);
         metricsRateAttributeMod.put(o.getName() + AVG_TIME, o);
         metricsRateAttributeMod.put(o.getName() + MIN_TIME, o);
         metricsRateAttributeMod.put(o.getName() + MAX_TIME, o);
@@ -137,7 +141,8 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
       o = metricsRegistry.get(attributeName);
     }
     if (o == null)
-      throw new AttributeNotFoundException();
+      throw new AttributeNotFoundException(
+          "Not be able to find attribute: " + attributeName);
     
     if (o instanceof MetricsIntValue)
       return ((MetricsIntValue) o).get();
@@ -149,6 +154,8 @@ public abstract class MetricsDynamicMBeanBase implements DynamicMBean {
       return ((MetricsTimeVaryingLong) o).getPreviousIntervalValue();
     else if (o instanceof MetricsTimeVaryingRate) {
       MetricsTimeVaryingRate or = (MetricsTimeVaryingRate) o;
+      if (attributeName.endsWith(NUM_OPS_CURRENT))
+        return or.getCurrentIntervalNumOps();
       if (attributeName.endsWith(NUM_OPS))
         return or.getPreviousIntervalNumOps();
       else if (attributeName.endsWith(AVG_TIME))

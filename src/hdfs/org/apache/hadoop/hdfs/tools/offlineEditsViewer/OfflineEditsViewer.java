@@ -183,8 +183,10 @@ public class OfflineEditsViewer extends Configured implements Tool {
         printToScreen));
     } catch (EOFException e) {
       System.err.println("Input file ended unexpectedly. Exiting");
+      exitCode = 255;
     } catch(IOException e) {
       System.err.println("Encountered exception. Exiting: " + e.getMessage());
+      exitCode = 1;
     }
 
     return exitCode;

@@ -70,4 +70,15 @@ public interface SafeModeInfo {
    * Check and trigger safe mode if needed.
    */
   public void checkMode();
+  
+  /**
+   * Check if the RBW reports should be processed.
+   */
+  public boolean shouldProcessRBWReports();
+  
+  /**
+   * Initializes replication queues *without* leaving safemode.
+   * This should only be used only through dfsadmin command.
+   */
+  public void initializeReplicationQueues();
 }

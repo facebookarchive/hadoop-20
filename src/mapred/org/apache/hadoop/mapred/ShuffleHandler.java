@@ -9,33 +9,25 @@ import static org.jboss.netty.handler.codec.http.HttpResponseStatus.INTERNAL_SER
 import static org.jboss.netty.handler.codec.http.HttpResponseStatus.METHOD_NOT_ALLOWED;
 import static org.jboss.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
 import static org.jboss.netty.handler.codec.http.HttpResponseStatus.OK;
-import static org.jboss.netty.handler.codec.http.HttpResponseStatus.UNAUTHORIZED;
 import static org.jboss.netty.handler.codec.http.HttpVersion.HTTP_1_1;
 
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import javax.crypto.SecretKey;
-import javax.servlet.http.HttpServletResponse;
-import javax.servlet.http.HttpServletResponseWrapper;
-
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocalDirAllocator;
-import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.DataOutputBuffer;
 import org.apache.hadoop.mapred.TaskTracker.ShuffleServerMetrics;
 
+import org.apache.hadoop.util.DiskChecker;
 import org.jboss.netty.buffer.ChannelBuffers;
 import org.jboss.netty.channel.Channel;
 import org.jboss.netty.channel.ChannelFuture;
@@ -61,7 +53,7 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
   /** Class logger */
   public static final Log LOG = LogFactory.getLog(ShuffleHandler.class);
   private final NettyMapOutputAttributes attributes;
-  private int port;
+  private final int port;
   /** Metrics of all shuffles */
   private final ShuffleServerMetrics shuffleMetrics;
 
@@ -96,9 +88,9 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
     final List<String> mapIds = splitMaps(q.get("map"));
     final List<String> reduceQ = q.get("reduce");
     final List<String> jobQ = q.get("job");
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("RECV: " + request.getUri() +
-          "\n  mapId: " + mapIds +
+    if (LOG.isInfoEnabled()) {
+      LOG.info("RECV: " + request.getUri() +
+          "\n  mapIds: " + mapIds +
           "\n  reduceId: " + reduceQ +
           "\n  jobId: " + jobQ);
     }
@@ -130,13 +122,11 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
       return;
     }
 
-    if (mapIds.size() > 1) {
-      throw new IllegalArgumentException(
-        "Doesn't support more than one map id.  Current requst is asking for "
-        + mapIds.size());
-    }
+    // Generate simple response without security
+    HttpResponse response = new DefaultHttpResponse(HTTP_1_1, OK);
 
     Channel ch = evt.getChannel();
+    ch.write(response);
     // TODO refactor the following into the pipeline
     ChannelFuture lastMap = null;
     for (String mapId : mapIds) {
@@ -145,6 +135,7 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
             sendMapOutput(ctx, ch, jobId, mapId, reduceId);
         if (null == lastMap) {
           sendError(ctx, NOT_FOUND);
+          shuffleMetrics.failedOutput();
           return;
         }
       } catch (IOException e) {
@@ -160,58 +151,73 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
   protected ChannelFuture sendMapOutput(ChannelHandlerContext ctx, Channel ch,
       String jobId, String mapId, int reduce) throws IOException {
     LocalDirAllocator lDirAlloc = attributes.getLocalDirAllocator();
-    FileSystem rfs = ((LocalFileSystem) attributes.getLocalFS()).getRaw();
-
     ShuffleServerMetrics shuffleMetrics = attributes.getShuffleServerMetrics();
     TaskTracker tracker = attributes.getTaskTracker();
+    boolean found = true;
 
+    Path indexFileName = null;
+    Path mapOutputFileName = null;
+    try {
     // Index file
-    Path indexFileName = lDirAlloc.getLocalPathToRead(
+    indexFileName = lDirAlloc.getLocalPathToRead(
         TaskTracker.getIntermediateOutputDir(jobId, mapId)
         + "/file.out.index", attributes.getJobConf());
     // Map-output file
-    Path mapOutputFileName = lDirAlloc.getLocalPathToRead(
+    mapOutputFileName = lDirAlloc.getLocalPathToRead(
         TaskTracker.getIntermediateOutputDir(jobId, mapId)
         + "/file.out", attributes.getJobConf());
+    } catch (DiskChecker.DiskErrorException e) {
+      LOG.error("sendMapOutput: Failed to retrieve index or map output " +
+          "file, will send ShuffleHeader noting the file can't be found.",
+          e);
+      found = false;
+    }
 
     /**
      * Read the index file to get the information about where
      * the map-output for the given reducer is available.
      */
-    IndexRecord info = tracker.getIndexInformation(mapId, reduce,indexFileName);
-
-    HttpResponse response = new DefaultHttpResponse(HTTP_1_1, OK);
-
-    //set the custom "from-map-task" http header to the map task from which
-    //the map output data is being transferred
-    response.setHeader(MRConstants.FROM_MAP_TASK, mapId);
-
-    //set the custom "Raw-Map-Output-Length" http header to
-    //the raw (decompressed) length
-    response.setHeader(MRConstants.RAW_MAP_OUTPUT_LENGTH,
-        Long.toString(info.rawLength));
-
-    //set the custom "Map-Output-Length" http header to
-    //the actual number of bytes being transferred
-    response.setHeader(MRConstants.MAP_OUTPUT_LENGTH,
-        Long.toString(info.partLength));
-
-    //set the custom "for-reduce-task" http header to the reduce task number
-    //for which this map output is being transferred
-    response.setHeader(MRConstants.FOR_REDUCE_TASK, Integer.toString(reduce));
-
-    ch.write(response);
-    File spillfile = new File(mapOutputFileName.toString());
-    RandomAccessFile spill;
+    IndexRecord info = null;
     try {
-      spill = new RandomAccessFile(spillfile, "r");
-    } catch (FileNotFoundException e) {
-      LOG.info(spillfile + " not found");
-      return null;
+      info = tracker.getIndexInformation(mapId, reduce, indexFileName);
+    } catch (IOException e) {
+      LOG.error("sendMapOutput: Failed to get the index information, " +
+          "will send ShuffleHeader noting that the file can't be found.", e);
+      found = false;
+      info = new IndexRecord(-1, 0, 0);
     }
+
+    RandomAccessFile spill = null;
+    if (mapOutputFileName != null) {
+      File spillfile = new File(mapOutputFileName.toString());
+      try {
+        spill = new RandomAccessFile(spillfile, "r");
+      } catch (FileNotFoundException e) {
+        LOG.error("sendMapOutput: " + spillfile + " not found, " +
+            "will send ShuffleHeader noting that the file can't be found.", e);
+        found = false;
+      }
+    }
+
+    final ShuffleHeader header =
+        new ShuffleHeader(mapId, info.partLength, info.rawLength, reduce,
+            found);
+    final DataOutputBuffer dob = new DataOutputBuffer();
+    header.write(dob);
+    ChannelFuture writeFuture =
+        ch.write(wrappedBuffer(dob.getData(), 0, dob.getLength()));
+    // Exit early if we didn't find the spill file.
+    if (found == false || spill == null) {
+      attributes.getTaskTracker().mapOutputLost(
+          TaskAttemptID.forName(mapId),
+          "sendMapOutput: Couldn't get mapId = " + mapId + ", reduce " +
+              reduce);
+      return writeFuture;
+    }
+
     final FileRegion partition = new DefaultFileRegion(
       spill.getChannel(), info.startOffset, info.partLength);
-    ChannelFuture writeFuture = ch.write(partition);
+    writeFuture = ch.write(partition);
     writeFuture.addListener(new ChanneFutureListenerMetrics(partition));
     shuffleMetrics.outputBytes(info.partLength); // optimistic
     LOG.info("Sending out " + info.partLength + " bytes for reduce: " +
@@ -241,8 +247,10 @@ public class ShuffleHandler extends SimpleChannelUpstreamHandler {
 
     @Override
     public void operationComplete(ChannelFuture future) throws Exception {
+      if (future.isSuccess()) {
+        shuffleMetrics.successOutput();
+      }
       partition.releaseExternalResources();
-      shuffleMetrics.successOutput();
     }
   }
 

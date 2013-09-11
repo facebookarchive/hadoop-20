@@ -34,9 +34,7 @@ import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.DataTransferProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
-import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.http.HttpServer;
 import org.apache.hadoop.ipc.ProtocolProxy;
 import org.apache.hadoop.ipc.RemoteException;
@@ -55,6 +53,7 @@ public class FileChecksumServlets {
     /** {@inheritDoc} */
     public void doGet(HttpServletRequest request, HttpServletResponse response
         ) throws ServletException, IOException {
+      NameNode.getNameNodeMetrics().numRedirectServletDoGet.inc();
       final UserGroupInformation ugi = getUGI(request);
       final ServletContext context = getServletContext();
       final NameNode namenode = (NameNode)context.getAttribute("name.node");

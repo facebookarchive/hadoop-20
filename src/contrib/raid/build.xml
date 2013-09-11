@@ -31,6 +31,7 @@ to call at top-level: ant deploy-contrib compile-core-test
   </target>
 
   <property name="build.webapp" value="${build.dir}/webapps"/>
+  <property name="build.base.webapp" value="${build.dir}/../../webapps"/>
   <property name="build.src" value="${build.dir}/src" />
   <property name="src.webapp.raid" value="${basedir}/webapps/raid"/>
 
@@ -48,6 +49,7 @@ to call at top-level: ant deploy-contrib compile-core-test
      webxml="${build.webapp}/raid/WEB-INF/web.xml">
     </jsp-compile>
     <javac
+     includeantruntime="true"
      encoding="${build.encoding}"
      srcdir="${src.dir};${build.src}"
      includes="**/*.java"
@@ -55,7 +57,83 @@ to call at top-level: ant deploy-contrib compile-core-test
      debug="${javac.debug}"
      deprecation="${javac.deprecation}">
      <classpath refid="contrib-classpath"/>
+     <classpath path="${hadoop.root}/build/contrib/highavailability/hadoop-${version}-highavailability.jar"/>
     </javac>
+
+    <copy todir="${build.classes}">
+     <fileset dir="${src.dir}" includes="raid-default.xml"/>
+    </copy>
+    <copy todir="${build.base.webapp}">
+     <fileset dir="${build.webapp}" includes="**"/>
+    </copy>
+  </target>
+
+  <target name="test" depends="compile-test, compile" unless="skip.contrib">
+    <echo message="contrib: ${name}"/>
+    <delete dir="${hadoop.log.dir}"/>
+    <mkdir dir="${hadoop.log.dir}"/>
+
+    <emma enabled="${emma.enabled}">
+      <instr instrpath="${build.classes}"
+             destdir="${emma.instr.dir}"
+             metadatafile="${emma.coverage.dir}/metadata.emma"
+             merge="true"/>
+    </emma>
+    
+    <copy todir="${build.classes}">
+     <fileset dir="${src.test}" includes="raid-site.xml"/>
+    </copy>
+
+    <junit
+      printsummary="yes" showoutput="${test.output}"
+      haltonfailure="no" fork="yes" 
+      errorProperty="tests.failed" failureProperty="tests.failed"
+      timeout="${test.timeout}"
+      maxmemory="${test.junit.maxmemory}">
+
+      <sysproperty key="test.build.data" value="${build.test}/data"/>
+      <sysproperty key="build.test" value="${build.test}"/>
+      <sysproperty key="contrib.name" value="${name}"/>
+
+      <jvmarg value="-Demma.coverage.out.file=${emma.coverage.dir}/coverage.emma"/>
+
+      <!-- requires fork=yes for:
+        relative File paths to use the specified user.dir
+        classpath to use build/contrib/*.jar
+      -->
+      <sysproperty key="user.dir" value="${build.test}/data"/>
+
+      <sysproperty key="fs.default.name" value="${fs.default.name}"/>
+      <sysproperty key="hadoop.test.localoutputfile" value="${hadoop.test.localoutputfile}"/>
+      <sysproperty key="hadoop.log.dir" value="${hadoop.log.dir}"/>
+      <sysproperty key="taskcontroller-path" value="${taskcontroller-path}"/>
+      <sysproperty key="taskcontroller-user" value="${taskcontroller-user}"/>
+      <classpath>
+        <pathelement location="${emma.instr.dir}" />
+        <path refid="test.classpath" />
+        <path refid="emma.lib" />
+      </classpath>
+      <formatter type="${test.junit.output.format}" />
+      <batchtest todir="${build.test}" unless="testcase">
+        <fileset dir="${src.test}"
+          includes="**/${test.include}.java" excludes="**/${test.exclude}.java" />
+      </batchtest>
+      <batchtest todir="${build.test}" if="testcase">
+        <fileset dir="${src.test}" includes="**/${testcase}.java"/>
+      </batchtest>
+    </junit>
+
+    <emma enabled="${emma.enabled}">
+      <report sourcepath="${src.dir}" >
+        <fileset dir="${emma.coverage.dir}">
+          <include name="*.emma" />
+        </fileset>
+        <txt outfile="${emma.coverage.dir}/coverage.txt"/>
+        <html outfile="${emma.coverage.dir}/coverage.html"/>
+      </report>
+    </emma>
+
+    <fail if="tests.failed">Tests failed!</fail>
   </target>
 
   <target name="jar" depends="compile" unless="skip.contrib">

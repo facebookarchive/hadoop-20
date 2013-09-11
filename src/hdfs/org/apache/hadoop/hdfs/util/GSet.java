@@ -17,6 +17,8 @@
  */
 package org.apache.hadoop.hdfs.util;
 
+import java.util.Iterator;
+
 /**
  * A {@link GSet} is set,
  * which supports the {@link #get(Object)} operation.
@@ -78,4 +80,11 @@ public interface GSet<K, E extends K> extends Iterable<E> {
     * @throws NullPointerException if key == null.
   */
   E remove(K key);
+  
+  /**
+   * Get iterator for a shard of blocks.
+   * @param shardId
+   * @return
+   */
+  Iterator<E> shardIterator(int shardId, int numShards);
 }

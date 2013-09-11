@@ -1,0 +1,115 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<configuration>
+
+<property>
+  <name>dfs.http.address0</name>
+  <value>0.0.0.0:50070</value>
+  <description>
+    The address and the base port where the dfs namenode web ui will listen on.
+    If the port is 0 then the server will start on a free port.
+  </description>
+</property>
+
+<property>
+  <name>dfs.http.address1</name>
+  <value>0.0.0.0:50080</value>
+  <description>
+    The address and the base port where the dfs namenode web ui will listen on.
+    If the port is 0 then the server will start on a free port.
+  </description>
+</property>
+
+<property>
+  <name>dfs.name.dir</name>
+  <value>{{NameNode-local-fsimage}}</value>
+  <description>Determines where on the local filesystem the DFS name node
+      should store the name table(fsimage).  If this is a comma-delimited list
+      of directories then the name table is replicated in all of the
+      directories, for redundancy. </description>
+</property>
+
+<property>
+  <name>dfs.name.edits.dir</name>
+  <value>{{NameNode-local-fsedits}}</value>
+  <description>Determines where on the local filesystem the DFS name node
+      should store the transaction (edits) file. If this is a comma-delimited list of directories then the transaction file is replicated in all of the
+      directories, for redundancy. Default value is same as dfs.name.dir
+  </description>
+</property>
+
+<property>
+  <name>dfs.name.dir.shared0</name>
+  <value>{{NameNode-shared-fsimage-0}}</value>
+  <description>Determines where on the filer the AvatarNode
+      should store the name table(fsimage).
+      </description>
+</property>
+
+<property>
+  <name>dfs.name.dir.shared1</name>
+  <value>{{NameNode-shared-fsimage-1}}</value>
+  <description>Determines where on the filer the other instance of the AvatarNode
+      should store the name table(fsimage).
+      </description>
+</property>
+
+<property>
+  <name>dfs.name.edits.dir.shared0</name>
+  <value>{{NameNode-shared-fsedits-0}}</value>
+  <description>Determines where on the filer the AvatarNode
+      should store the transaction (edits) file. If this is a comma-delimited list of directories then the transaction file is replicated in all of the
+      directories, for redundancy. Default value is same as dfs.name.dir
+  </description>
+</property>
+
+<property>
+  <name>dfs.name.edits.dir.shared1</name>
+  <value>{{NameNode-shared-fsedits-1}}</value>
+  <description>Determines where on the filer the other instance of the AvatarNode
+      should store the transaction (edits) file.
+  </description>
+</property>
+
+<property>
+  <name>fs.checkpoint.enabled</name>
+  <value>true</value>
+</property>
+
+<property>
+  <name>standby.image.copies.tokeep</name>
+  <value>5</value>
+  <description>The number of backup copies of the image
+  and fsedits to keep around.
+  </description>
+</property>
+
+<property>
+  <name>standby.image.days.tokeep</name>
+  <value>2</value>
+  <description>How old should the backup image
+  be to get deleted.
+  </description>
+</property>
+
+<property>
+  <name>dfs.namenode.dn-address0</name>
+  <value>0.0.0.0:9005</value>
+  <description>
+  The address and port to run the RPC server which will be processing
+  requests from datanodes in the cluster.
+  </description>
+</property>
+
+<property>
+  <name>dfs.namenode.dn-address1</name>
+  <value>0.0.0.0:9006</value>
+  <description>
+  The address and port to run the RPC server which will be processing
+  requests from datanodes in the cluster.
+  </description>
+</property>
+
+
+</configuration>

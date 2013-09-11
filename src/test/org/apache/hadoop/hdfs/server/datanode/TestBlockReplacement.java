@@ -44,9 +44,9 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.FSConstants.DatanodeReportType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.Util;
-import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.net.NetUtils;
+import org.apache.hadoop.util.DataTransferThrottler;
 /**
  * This class tests if block replacement request to data nodes work correctly.
  */
@@ -94,6 +94,9 @@ public class TestBlockReplacement extends TestCase {
           CONF, REPLICATION_FACTOR, true, INITIAL_RACKS );
     try {
       cluster.waitActive();
+      for (DataNode dn: cluster.getDataNodes()) {
+        dn.useInlineChecksum = false;
+      }
       int namespaceId = cluster.getNameNode().getNamespaceID();
       
       FileSystem fs = cluster.getFileSystem();
@@ -119,6 +122,9 @@ public class TestBlockReplacement extends TestCase {
       // add a new datanode to the cluster
       cluster.startDataNodes(CONF, 1, true, null, NEW_RACKS);
       cluster.waitActive();
+      for (DataNode dn: cluster.getDataNodes()) {
+        dn.useInlineChecksum = false;
+      }
       
       DatanodeInfo[] datanodes = client.datanodeReport(DatanodeReportType.ALL);
 

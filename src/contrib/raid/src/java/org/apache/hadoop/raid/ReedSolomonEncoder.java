@@ -36,9 +36,13 @@ public class ReedSolomonEncoder extends Encoder {
                                   "org.apache.hadoop.raid.ReedSolomonEncoder");
   private ErasureCode reedSolomonCode;
 
+  private int stripeSize;
+  private int paritySize;
   public ReedSolomonEncoder(
-    Configuration conf, int stripeSize, int paritySize) {
-    super(conf, stripeSize, paritySize);
+    Configuration conf) {
+    super(conf, Codec.getCodec("rs"));
+    stripeSize = this.codec.stripeLength;
+    paritySize = this.codec.parityLength;
     this.reedSolomonCode = new ReedSolomonCode(stripeSize, paritySize);
   }
 
@@ -111,11 +115,6 @@ public class ReedSolomonEncoder extends Encoder {
     for (int i = 0; i < paritySize; i++) {
       writeBufs[i][idx] = (byte)code[i];
     }
-  }
-
-  @Override
-  public Path getParityTempPath() {
-    return new Path(RaidNode.rsTempPrefix(conf));
   }
 
 }

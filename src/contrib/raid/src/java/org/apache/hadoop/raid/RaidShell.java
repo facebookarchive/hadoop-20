@@ -18,25 +18,35 @@
 
 package org.apache.hadoop.raid;
 
+import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.FileNotFoundException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.InterruptedIOException;
 import java.io.PrintStream;
-import java.util.Collection;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Date;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.LinkedHashMap;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
+import java.net.SocketTimeoutException;
+
 import javax.security.auth.login.LoginException;
+import javax.xml.parsers.ParserConfigurationException;
 
 import org.apache.hadoop.ipc.*;
 import org.apache.commons.logging.Log;
@@ -55,17 +65,21 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.BlockLocation;
-import org.apache.hadoop.fs.HarFileSystem;
 import org.apache.hadoop.fs.RemoteIterator;
 
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.DistributedRaidFileSystem;
 import org.apache.hadoop.hdfs.DFSUtil;
 
+import org.apache.hadoop.raid.DistRaid.EncodingCandidate;
+import org.apache.hadoop.raid.RaidUtils.RaidInfo;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 import org.apache.hadoop.raid.protocol.RaidProtocol;
-
-import java.util.concurrent.atomic.AtomicLong;
+import org.apache.hadoop.raid.tools.FastFileCheck;
+import org.apache.hadoop.raid.tools.ParityVerifier;
+import org.apache.hadoop.raid.tools.RSBenchmark;
+import org.xml.sax.SAXException;
+import java.util.concurrent.atomic.*;
 
 /**
  * A {@link RaidShell} that allows browsing configured raid policies.
@@ -73,7 +87,9 @@ import java.util.concurrent.atomic.AtomicLong;
 public class RaidShell extends Configured implements Tool {
   static {
     Configuration.addDefaultResource("hdfs-default.xml");
+    Configuration.addDefaultResource("raid-default.xml");
     Configuration.addDefaultResource("hdfs-site.xml");
+    Configuration.addDefaultResource("raid-site.xml");
   }
   public static final Log LOG = LogFactory.getLog( "org.apache.hadoop.RaidShell");
   public RaidProtocol raidnode;
@@ -82,8 +98,16 @@ public class RaidShell extends Configured implements Tool {
   volatile boolean clientRunning = true;
   private Configuration conf;
   AtomicInteger corruptCounter = new AtomicInteger();
+  AtomicLong numNonRaidedMissingBlks = new AtomicLong();
+  Map<String, AtomicLongArray> numStrpMissingBlksMap = 
+            new HashMap<String, AtomicLongArray>(Codec.getCodecs().size());
   private final PrintStream out;
 
+  final static private String DistRaidCommand = "-distRaid";
+  final static private String FILE_CHECK_CMD = "-fileCheck";
+  final SimpleDateFormat dateFormat =
+      new SimpleDateFormat("yyyy-MM-dd-HH-mm-ss");
+  
   /**
    * Start RaidShell.
    * <p>
@@ -92,15 +116,17 @@ public class RaidShell extends Configured implements Tool {
    * @throws IOException
    */
   public RaidShell(Configuration conf) throws IOException {
-    super(conf);
-    this.conf = conf;
-    this.out = System.out;
+    this(conf, System.out);
   }
   
   public RaidShell(Configuration conf, PrintStream out) throws IOException {
     super(conf);
     this.conf = conf;
     this.out = out;
+    for (Codec codec : Codec.getCodecs()) {
+      numStrpMissingBlksMap.put(codec.id, 
+                new AtomicLongArray(codec.parityLength + codec.stripeLength));
+    }
   }
 
   void initializeRpc(Configuration conf, InetSocketAddress address) throws IOException {
@@ -136,7 +162,7 @@ public class RaidShell extends Configured implements Tool {
     }
   }
 
-  private static RaidProtocol createRPCRaidnode(InetSocketAddress raidNodeAddr,
+  public static RaidProtocol createRPCRaidnode(InetSocketAddress raidNodeAddr,
       Configuration conf, UnixUserGroupInformation ugi)
     throws IOException {
     LOG.info("RaidShell connecting to " + raidNodeAddr);
@@ -145,11 +171,8 @@ public class RaidShell extends Configured implements Tool {
         NetUtils.getSocketFactory(conf, RaidProtocol.class));
   }
 
-  private static RaidProtocol createRaidnode(RaidProtocol rpcRaidnode)
+  public static RaidProtocol createRaidnode(RaidProtocol rpcRaidnode)
     throws IOException {
-    RetryPolicy createPolicy = RetryPolicies.retryUpToMaximumCountWithFixedSleep(
-        5, 5000, TimeUnit.MILLISECONDS);
-
     Map<Class<? extends Exception>,RetryPolicy> remoteExceptionToPolicyMap =
       new HashMap<Class<? extends Exception>, RetryPolicy>();
 
@@ -168,13 +191,6 @@ public class RaidShell extends Configured implements Tool {
         rpcRaidnode, methodNameToPolicyMap);
   }
 
-  private void checkOpen() throws IOException {
-    if (!clientRunning) {
-      IOException result = new IOException("RaidNode closed");
-      throw result;
-    }
-  }
-
   /**
    * Close the connection to the raidNode.
    */
@@ -189,7 +205,6 @@ public class RaidShell extends Configured implements Tool {
    * Displays format of commands.
    */
   private static void printUsage(String cmd) {
-    String prefix = "Usage: java " + RaidShell.class.getSimpleName();
     if ("-showConfig".equals(cmd)) {
       System.err.println("Usage: java RaidShell" + 
                          " [-showConfig]"); 
@@ -202,8 +217,14 @@ public class RaidShell extends Configured implements Tool {
     } else if ("-raidFile".equals(cmd)) {
       System.err.println(
         "Usage: java RaidShell -raidFile <path-to-file> <path-to-raidDir> <XOR|RS>");
+    } else if (DistRaidCommand.equals(cmd)) {
+      System.err.println("Usage: java RaidShell " + DistRaidCommand 
+                       + " <raid_policy_name> <path1> ... <pathn>");
+    } else if (FILE_CHECK_CMD.equals(cmd)) {
+      System.err.println(
+          "Usage: java RaidShell -fileCheck [-filesPerJob N] [-sourceOnly] <path-to-file>");
     } else if ("-fsck".equals(cmd)) {
-      System.err.println("Usage: java RaidShell [-fsck [path [-threads numthreads] [-count]]]");
+      System.err.println("Usage: java RaidShell [-fsck [path [-threads numthreads] [-count]] [-retNumStrpsMissingBlks] [-listrecoverablefiles]]");
     } else if ("-usefulHar".equals(cmd)) {
       System.err.println("Usage: java RaidShell [-usefulHar <XOR|RS> [path-to-raid-har]]");
     } else if ("-checkFile".equals(cmd)) {
@@ -213,7 +234,14 @@ public class RaidShell extends Configured implements Tool {
     } else if ("-checkParity".equals(cmd)) {
       System.err.println("Usage: java RaidShell [-checkParity path]");
     } else if ("-findMissingParityFiles".equals(cmd)) { 
-      System.err.println("Usage: java RaidShell -findMissingParityFiles rootPath");
+      System.err.println("Usage: java RaidShell -findMissingParityFiles [-r] rootPath");
+    } else if ("-verifyFile".equals(cmd)) {
+      System.err.println("Usage: java RaidShell -verifyFile rootPath");
+    } else if ("-verifyParity".equals(cmd)) {
+      System.err.println("Usage: java RaidShell -verifyParity -repl expectRepl" +
+                         " [-restore] parityRootPath");
+    } else if ("-rs_benchmark".equals(cmd)) {
+      System.err.println("Usage: java RaidShell -rs_benchmark -verify");
     } else {
       System.err.println("Usage: java RaidShell");
       System.err.println("           [-showConfig ]");
@@ -221,11 +249,20 @@ public class RaidShell extends Configured implements Tool {
       System.err.println("           [-recover srcPath1 corruptOffset]");
       System.err.println("           [-recoverBlocks path1 path2...]");
       System.err.println("           [-raidFile <path-to-file> <path-to-raidDir> <XOR|RS>");
-      System.err.println("           [-fsck [path [-threads numthreads] [-count]]]");
+      System.err.println("           [" + DistRaidCommand 
+                                        + " <raid_policy_name> <path1> ... <pathn>]");
+      System.err.println("           [-fsck [path [-threads numthreads] [-count]] [-retNumStrpsMissingBlks] [-listrecoverablefiles]]");
+      System.err.println("           [" + FILE_CHECK_CMD
+                                        + " [-filesPerJob N] [-sourceOnly] <path-to-file>");
       System.err.println("           [-usefulHar <XOR|RS> [path-to-raid-har]]");
       System.err.println("           [-checkFile path]");
-      System.err.println("           -purgeParity path <XOR|RS>");
+      System.err.println("           [-purgeParity path <XOR|RS>]");
+      System.err.println("           [-findMissingParityFiles [-r] rootPath");
+      System.err.println("           [-verifyParity -repl expectRepl " +
+                         " [-restore] parityRootPath");
       System.err.println("           [-checkParity path]");
+      System.err.println("           [-verifyFile rootPath]");
+      System.err.println("           [-rs_benchmark -verify]");
       System.err.println();
       ToolRunner.printGenericCommandUsage(System.err);
     }
@@ -262,6 +299,11 @@ public class RaidShell extends Configured implements Tool {
         printUsage(cmd);
         return exitCode;
       }
+    } else if (DistRaidCommand.equals(cmd)) {
+      if (argv.length < 3) {
+        printUsage(cmd);
+        return exitCode;
+      }
     }
 
     try {
@@ -279,6 +321,14 @@ public class RaidShell extends Configured implements Tool {
         initializeLocal(conf);
         raidFile(argv, i);
         exitCode = 0;
+      } else if (DistRaidCommand.equals(cmd)) {
+        initializeLocal(conf);
+        distRaid(argv, i);
+        exitCode = 0;
+      } else if (FILE_CHECK_CMD.equals(cmd)) {
+        initializeLocal(conf);
+        fileCheck(argv, i);
+        exitCode = 0;
       } else if ("-fsck".equals(cmd)) {
         fsck(cmd, argv, i);
         exitCode = 0;
@@ -287,12 +337,23 @@ public class RaidShell extends Configured implements Tool {
         exitCode = 0;
       } else if ("-checkFile".equals(cmd)) {
         checkFile(cmd, argv, i);
+        exitCode = 0;
       } else if ("-purgeParity".equals(cmd)) {
         purgeParity(cmd, argv, i);
+        exitCode = 0;
       } else if ("-checkParity".equals(cmd)) {
         checkParity(cmd, argv, i);
+        exitCode = 0;
       } else if ("-findMissingParityFiles".equals(cmd)) {
         findMissingParityFiles(argv, i);
+        exitCode = 0;
+      } else if ("-verifyParity".equals(cmd)) {
+        verifyParity(argv, i);
+        exitCode = 0;
+      } else if ("-verifyFile".equals(cmd)) {
+        verifyFile(argv, i);
+      } else if ("-rs_benchmark".equals(cmd)) {
+        rsBenchmark(argv, i);
       } else {
         exitCode = -1;
         System.err.println(cmd.substring(1) + ": Unknown command");
@@ -329,22 +390,333 @@ public class RaidShell extends Configured implements Tool {
    * args[] contains the root where we need to check
    */
   private void findMissingParityFiles(String[] args, int startIndex) {
-    MissingParityFiles mParFiles = new MissingParityFiles(conf);
-    Path root = new Path(args[1]);
+    boolean restoreReplication = false;
+    Path root = null;
+    for (int i = startIndex; i < args.length; i++) {
+      String arg = args[i];
+      if (arg.equals("-r")) {
+        restoreReplication = true;
+      } else {
+        root = new Path(arg);
+      }
+    }
+    if (root == null) {
+      throw new IllegalArgumentException("Too few arguments");
+    }
     try {
-      Set<Path> allMissingParityFiles = mParFiles.findMissingParityFiles(root);
+      FileSystem fs = root.getFileSystem(conf);
+      // Make sure default uri is the same as root  
+      conf.set(FileSystem.FS_DEFAULT_NAME_KEY, fs.getUri().toString());
+      MissingParityFiles mParFiles = new MissingParityFiles(conf, restoreReplication);
+      mParFiles.findMissingParityFiles(root, System.out);
     } catch (IOException ex) {
       System.err.println("findMissingParityFiles: " + ex);
     }
+  }
+  
+  private long estimateSaving(final Codec codec,
+      final List<Path> files, final int targetReplication, final int numThreads,
+      final boolean isDebug) throws IOException { 
+    final AtomicLong totalSavingSize = new AtomicLong(0);
+    ExecutorService executor = Executors.newFixedThreadPool(numThreads);
+    LOG.info("Processing " + files.size() + " files/dirs for " + codec.id +
+        " in " + numThreads + " threads");
+    if (isDebug) {
+      System.out.println("oldDiskSize | oldParitySize | newDiskSize | newParitySize" +
+                         "| savingSize | totalSavingSize | path ");
+    }
+    final AtomicInteger finishNum = new AtomicInteger(0);
+    for (int i = 0; i < numThreads; i++) {
+      final int startIdx = i; 
+      Runnable work = new Runnable() {
+        public void run() {
+          try {
+            for (int idx = startIdx; idx < files.size(); idx += numThreads) {
+              try {
+                Path p = files.get(idx);
+                FileSystem fs = FileSystem.get(conf);
+                p = fs.makeQualified(p);
+                FileStatus stat = null;
+                try {
+                  stat = fs.getFileStatus(p);
+                } catch (FileNotFoundException e) {
+                  LOG.warn("Path " + p  + " does not exist", e);
+                }
+                if (stat == null) {
+                  continue;
+                }
+                short repl = 0;
+                List<FileStatus> lfs = null;
+                if (codec.isDirRaid) {
+                  if (!stat.isDir()) {
+                    continue;
+                  }
+                  lfs = RaidNode.listDirectoryRaidFileStatus(conf, fs, p);
+                  if (lfs == null) {
+                    continue;
+                  }
+                  repl = DirectoryStripeReader.getReplication(lfs);
+                } else {
+                  repl = stat.getReplication();
+                }
+                 
+                // if should not raid, will not put the file into the write list.
+                if (!RaidNode.shouldRaid(conf, fs, stat, codec, lfs)) {
+                  LOG.info("Should not raid file: " + p);
+                  continue;
+                }
+                // check the replication.
+                boolean add = false;
+                if (repl > targetReplication) {
+                  add = true;
+                } else if (repl == targetReplication &&
+                           !ParityFilePair.parityExists(stat, codec, conf)) {
+                  add = true;
+                }
+                if (add) {
+                  long oldDiskSize = 0L;
+                  long newDiskSize = 0L;
+                  long numBlocks = 0L;
+                  long parityBlockSize = 0L;
+                  if (codec.isDirRaid) {
+                    for (FileStatus fsStat: lfs) {
+                      oldDiskSize += fsStat.getLen() * (fsStat.getReplication());
+                      newDiskSize += fsStat.getLen() * targetReplication;
+                    }
+                    numBlocks = DirectoryStripeReader.getBlockNum(lfs);
+                    parityBlockSize =
+                        DirectoryStripeReader.getParityBlockSize(conf, lfs); 
+                  } else {
+                    oldDiskSize = stat.getLen() * stat.getReplication();
+                    newDiskSize = stat.getLen() * targetReplication; 
+                    numBlocks = RaidNode.getNumBlocks(stat);
+                    parityBlockSize = stat.getBlockSize();
+                  }
+                  
+                  long numStripes = RaidNode.numStripes(numBlocks,
+                      codec.stripeLength); 
+                  long newParitySize = numStripes * codec.parityLength * 
+                      parityBlockSize * targetReplication;
+                  long oldParitySize = 0L;
+                  for (Codec other: Codec.getCodecs()) {
+                    if (other.priority < codec.priority) {
+                      Path parityPath = new Path(other.parityDirectory,
+                          RaidNode.makeRelative(stat.getPath()));
+                      long logicalSize = 0;
+                      try {
+                        logicalSize = 
+                            fs.getContentSummary(parityPath).getSpaceConsumed();
+                      } catch (IOException ioe) {
+                        // doesn't exist
+                        continue;
+                      }
+                      oldParitySize += logicalSize;
+                    }
+                  }
+                  long savingSize = oldDiskSize + oldParitySize - newDiskSize -
+                      newParitySize;
+                  totalSavingSize.addAndGet(savingSize);
+                  if (isDebug) {
+                    System.out.println(oldDiskSize + " " + oldParitySize + " " +
+                        newDiskSize + " " + newParitySize + " " + savingSize + 
+                        " " + totalSavingSize.get() + " " + stat.getPath());
+                  }
+                }
+              } catch (IOException ioe) {
+                LOG.warn("Get IOException" , ioe);
+              }
+            }
+          } finally {
+            finishNum.incrementAndGet();
+          }
+        }
+      };
+      if (executor != null) {
+        executor.execute(work);
+      }
+    }
+    if (executor != null) {
+      try {
+        while (finishNum.get() < numThreads) {
+          try {
+            Thread.sleep(2000);
+          } catch (InterruptedException ie) {
+            LOG.warn("EstimateSaving get exception ", ie);
+            throw new IOException(ie);
+          }
+        }
+      } finally {
+        executor.shutdown(); // Waits for submitted tasks to finish.
+      }
+    }
+    return totalSavingSize.get();
+  }
+  
+  private ArrayList<Path> readFileList(String fileListPath)
+      throws IOException {
+    FileSystem fs = FileSystem.get(conf);
+    ArrayList<Path> paths = new ArrayList<Path>();
+    InputStream in = fs.open(new Path(fileListPath));
+    BufferedReader input = new BufferedReader(
+        new InputStreamReader(in));
+    String l;
+    try {
+      while ((l = input.readLine()) != null){
+        paths.add(new Path(l));
+      }
+      return paths;
+    } finally {
+      input.close();
+    }
+  }
+  
+  private void estimateSaving(String[] args, int startIndex)
+      throws Exception {
+    String mappings = args[startIndex++];
+    HashMap<String, String> codecFileListMap = new HashMap<String, String>();
+    for (String mapping: mappings.split(",")) {
+      String[] parts = mapping.split(":");
+      codecFileListMap.put(parts[0], parts[1]);
+    }
+    int numThreads = 10;
+    boolean isDebug = false;
+    while (startIndex < args.length) {
+      if (args[startIndex].equals("-threads")) {
+        numThreads = Integer.parseInt(args[++startIndex]);
+      } else if (args[startIndex].equals("-debug")) {
+        isDebug = true;
+      } else {
+        throw new IOException("Can't recognize " + args[startIndex]);
+      }
+      startIndex++;
+    }
+    long totalSavingSize = 0;
+    ArrayList<PolicyInfo> allPolicies = new ArrayList<PolicyInfo>();
+    ArrayList<PolicyInfo> allPoliciesWithSrcPath = new ArrayList<PolicyInfo>();
+    ConfigManager configMgr = new ConfigManager(conf);
+    for (PolicyInfo info : configMgr.getAllPolicies()) {
+      allPolicies.add(info);
+      if (info.getSrcPath() != null) {
+        allPoliciesWithSrcPath.add(info);
+      }
+    }
+    for (PolicyInfo info: allPolicies) {
+      if (info.getFileListPath() == null || !info.getShouldRaid()) {
+        continue;
+      }
+      Codec c = Codec.getCodec(info.getCodecId());
+      // Assume each codec has only one fileList path
+      String filePath = codecFileListMap.get(c.id);
+      if (filePath == null) {
+        continue;
+      }
+      List<Path> files = readFileList(filePath); 
+      totalSavingSize += estimateSaving(c, files,
+          Integer.parseInt(info.getProperty("targetReplication")),
+          numThreads, isDebug);
+    }
+    LOG.info("Total Saving Bytes is:" + totalSavingSize);
+  }
+  
+  /**
+   * search each parity and verify the source files have
+   * the expected replication
+   */
+  private void verifyParity(String[] args, int startIndex) {
+    boolean restoreReplication = false;
+    int repl = -1;
+    Path root = null;
+    for (int i = startIndex; i < args.length; i++) {
+      String arg = args[i];
+      if (arg.equals("-restore")) {
+        restoreReplication = true;
+      } else if (arg.equals("-repl")){
+        i++;
+        if (i >= args.length) {
+          throw new IllegalArgumentException("Missing repl after -r option");
+        }
+        repl = Integer.parseInt(args[i]);
+      } else {
+        root = new Path(arg);
+      }
+    }
+    if (root == null) {
+      throw new IllegalArgumentException("Too few arguments");
+    }
+    if (repl == -1) {
+      throw new IllegalArgumentException("Need to specify -r option");
+    }
+    if (repl < 1 || repl > 3) {
+      throw new IllegalArgumentException("repl could only in the range [1, 3]");
+    }
+    Codec matched = null;
+    String rootPath = root.toUri().getPath();
+    if (!rootPath.endsWith(Path.SEPARATOR)) {
+      rootPath += Path.SEPARATOR;
+    }
+    for (Codec code : Codec.getCodecs()) {
+      if (rootPath.startsWith(code.getParityPrefix())) {
+        matched = code;
+        break;
+      }
+    }
+    if (matched == null) {
+      throw new IllegalArgumentException(
+          "root needs to starts with parity dirs");
+    }
+    try {
+      FileSystem fs = root.getFileSystem(conf);
+      // Make sure default uri is the same as root  
+      conf.set(FileSystem.FS_DEFAULT_NAME_KEY, fs.getUri().toString());
+      ParityVerifier pv = new ParityVerifier(conf, restoreReplication, 
+          repl, matched);
+      pv.verifyParities(root, System.out);
+    } catch (IOException ex) {
+      System.err.println("findMissingParityFiles: " + ex);
+    }
+  }
+  
+  /**
+   * Scan file and verify the checksums match the checksum store if have
+   * args[] contains the root where we need to check
+   */
+  private void verifyFile(String[] args, int startIndex) {
+    Path root = null;
+    if (args.length <= startIndex) {
+      throw new IllegalArgumentException("too few arguments");
+    }
+    String arg = args[startIndex];
+    root = new Path(arg);
+    try {
+      FileSystem fs = root.getFileSystem(conf);
+      // Make sure default uri is the same as root  
+      conf.set(FileSystem.FS_DEFAULT_NAME_KEY, fs.getUri().toString());
+      FileVerifier fv = new FileVerifier(conf);
+      fv.verifyFile(root, System.out);
+    } catch (IOException ex) {
+      System.err.println("verifyFile: " + ex);
+    }
+  }
+  
+  private void rsBenchmark(String[] args, int startIndex) {
+    boolean verify = false;
+    if (args.length > startIndex) {
+      String option = args[startIndex];
+      if (option.equals("-verify")) {
+        verify = true;
+      }
+    }
+    RSBenchmark rsBen = new RSBenchmark(verify);
+    rsBen.run();
   }
 
   /**
    * Apply operation specified by 'cmd' on all parameters
    * starting from argv[startindex].
    */
-  private int showConfig(String cmd, String argv[], int startindex) throws IOException {
+  private int showConfig(String cmd, String argv[], int startindex)
+      throws IOException {
     int exitCode = 0;
-    int i = startindex;
     PolicyInfo[] all = raidnode.getAllPolicies();
     for (PolicyInfo p: all) {
       out.println(p);
@@ -393,101 +765,281 @@ public class RaidShell extends Configured implements Tool {
   }
 
   public void recoverBlocks(String[] args, int startIndex)
-    throws IOException {
+    throws IOException, InterruptedException {
     LOG.info("Recovering blocks for " + (args.length - startIndex) + " files");
     BlockReconstructor.CorruptBlockReconstructor fixer = new BlockReconstructor.CorruptBlockReconstructor(conf);
     for (int i = startIndex; i < args.length; i++) {
       String path = args[i];
-      fixer.reconstructFile(new Path(path), RaidUtils.NULL_PROGRESSABLE);
+      fixer.reconstructFile(new Path(path), null);
     }
   }
+  
+  private void fileCheck(String[] args, int startIndex) 
+      throws IOException, InterruptedException {
+    FastFileCheck checker = new FastFileCheck(conf);
+    checker.startFileCheck(args, startIndex, conf);
+  }
 
+  /**
+   * Submit a map/reduce job to raid the input paths
+   * @param args all input parameters
+   * @param startIndex staring index of arguments: policy_name path1, ..., pathn
+   * @return 0 if successful
+   * @throws IOException if any error occurs
+   * @throws ParserConfigurationException 
+   * @throws ClassNotFoundException 
+   * @throws RaidConfigurationException 
+   * @throws SAXException 
+   */
+  private int distRaid(String[] args, int startIndex) throws IOException,
+    SAXException, RaidConfigurationException,
+    ClassNotFoundException, ParserConfigurationException {
+    // find the matched raid policy
+    String policyName = args[startIndex++];
+    ConfigManager configManager = new ConfigManager(conf);
+    PolicyInfo policy = configManager.getPolicy(policyName);
+    if (policy == null) {
+      System.err.println ("Invalid policy: " + policyName);
+      return -1;
+    }
+    Codec codec = Codec.getCodec(policy.getCodecId());
+    if (codec == null) {
+      System.err.println("Policy " + policyName
+          + " with invalid codec " + policy.getCodecId());
+    }
+
+    // find the matched paths to raid
+    FileSystem fs = FileSystem.get(conf);
+    List<FileStatus> pathsToRaid = new ArrayList<FileStatus>();
+    List<Path> policySrcPaths = policy.getSrcPathExpanded();
+    for (int i = startIndex; i< args.length; i++) {
+      boolean invalidPathToRaid = true;
+      Path pathToRaid = new Path(args[i]).makeQualified(fs);
+      String pathToRaidStr = pathToRaid.toString();
+      if (!pathToRaidStr.endsWith(Path.SEPARATOR)) {
+        pathToRaidStr = pathToRaidStr.concat(Path.SEPARATOR);
+      }
+      for (Path srcPath : policySrcPaths) {
+        String srcStr = srcPath.toString();
+        if (!srcStr.endsWith(Path.SEPARATOR)) {
+          srcStr = srcStr.concat(Path.SEPARATOR);
+        }
+        if (pathToRaidStr.startsWith(srcStr)) {
+          if (codec.isDirRaid) {
+            FileUtil.listStatusForLeafDir(
+                fs, fs.getFileStatus(pathToRaid), pathsToRaid);
+          } else {
+            FileUtil.listStatusHelper(fs, pathToRaid, 
+                Integer.MAX_VALUE, pathsToRaid);
+          }
+          invalidPathToRaid = false;
+          break;
+        }
+      }
+      if (invalidPathToRaid) {
+        System.err.println("Path " + pathToRaidStr + 
+          " does not support by the given policy " + policyName);
+      }
+    }
+    
+    // Check if files are valid
+    List<FileStatus> validPaths = new ArrayList<FileStatus>();
+    List<PolicyInfo> policyInfos = new ArrayList<PolicyInfo>(1);
+    policyInfos.add(policy);
+    RaidState.Checker checker = new RaidState.Checker(
+        policyInfos, conf);
+    long now = System.currentTimeMillis();
+    for (FileStatus fileStatus : pathsToRaid) {
+      FileStatus[] dirStats = null;
+      if (codec.isDirRaid) {
+        dirStats = fs.listStatus(fileStatus.getPath());
+      }
+      RaidState stat = checker.check(
+          policy, fileStatus, now, false, 
+          dirStats == null ? null : Arrays.asList(dirStats));
+      if (stat == RaidState.NOT_RAIDED_BUT_SHOULD) {
+        validPaths.add(fileStatus);
+      } else {
+        System.err.println("Path " + fileStatus.getPath() + 
+            " is not qualified for raiding: " + stat);
+      }
+    }
+    if (validPaths.isEmpty()) {
+      System.err.println("No file can be raided");
+      return 0;
+    }
+    DistRaid dr = new DistRaid(conf);
+    //add paths for distributed raiding
+    List<EncodingCandidate> validEC =
+        RaidNode.splitPaths(conf, Codec.getCodec(policy.getCodecId()), validPaths);
+    dr.addRaidPaths(policy, validEC);
+    
+    if (dr.startDistRaid()) {
+      System.out.println("Job started: " + dr.getJobTrackingURL());
+      System.out.print("Job in progress ");
+      while (!dr.checkComplete()) {
+        try {
+          System.out.print(".");
+          Thread.sleep(1000);
+        } catch (InterruptedException e) {
+          throw new InterruptedIOException("Got interrupted.");
+        }
+      }
+      if (dr.successful()) {
+        System.out.println("/nFiles are successfully raided.");
+        return 0;
+      } else {
+        System.err.println("/nRaid job failed.");
+        return -1;
+      }
+    }
+    return -1;
+  }
+  
   public void raidFile(String[] args, int startIndex) throws IOException {
     Path file = new Path(args[startIndex]);
     Path destPath = new Path(args[startIndex + 1]);
-    ErasureCodeType code = ErasureCodeType.valueOf(args[startIndex + 2]);
-    LOG.info("Raiding file " + file + " to " + destPath + " using " + code);
+    Codec codec = Codec.getCodec(args[startIndex + 2]);
+    LOG.info("Raiding file " + file + " to " + destPath + " using " + codec);
     FileSystem fs = destPath.getFileSystem(conf);
     FileStatus stat = fs.getFileStatus(file);
     boolean doSimulate = false;
     int targetRepl = conf.getInt("raidshell.raidfile.targetrepl",
       stat.getReplication());
     int metaRepl = conf.getInt("raidshell.raidfile.metarepl", 2);
-    int stripeLength = RaidNode.getStripeLength(conf);
-    RaidNode.doRaid(conf, stat, destPath, code, new RaidNode.Statistics(),
-      RaidUtils.NULL_PROGRESSABLE, doSimulate, targetRepl, metaRepl,
-      stripeLength);
+    List<EncodingCandidate> lec = RaidNode.splitPaths(conf, codec, stat);
+    for (EncodingCandidate ec : lec) {
+      RaidNode.doRaid(conf, ec, destPath, codec, new RaidNode.Statistics(),
+          RaidUtils.NULL_PROGRESSABLE, doSimulate, targetRepl, metaRepl);
+    }
   }
+  
+  public static int collectNumCorruptBlocksInFile(final DistributedFileSystem dfs,
+                                    final Path filePath) throws IOException {
+    FileStatus stat = dfs.getFileStatus(filePath);
+    BlockLocation[] blocks = 
+        dfs.getFileBlockLocations(stat, 0, stat.getLen());
+    
+    int count = 0;
+    for (BlockLocation block : blocks) {
+      if (RaidShell.isBlockCorrupt(block)) {
+        count ++;
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("file " + filePath.toString() + " corrupt in block " + 
+                   block);
+        }
+      } else {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("file " + filePath.toString() + " OK in block " + 
+                   block);
+        }
+      }
+    }
+    return count;
+  }
+  
+  
 
   /**
    * checks whether a file has more than the allowable number of
    * corrupt blocks and must therefore be considered corrupt
    */
+  
   protected boolean isFileCorrupt(final DistributedFileSystem dfs, 
-                                final Path filePath) 
+      final FileStatus fileStat) 
     throws IOException {
+    return isFileCorrupt(dfs, fileStat, false, conf,
+        this.numNonRaidedMissingBlks, this.numStrpMissingBlksMap); 
+  }
+  
+  protected boolean isFileCorrupt(final DistributedFileSystem dfs, 
+      final FileStatus fileStat, boolean cntMissingBlksPerStrp) 
+    throws IOException {
+    return isFileCorrupt(dfs, fileStat, cntMissingBlksPerStrp, conf,
+        this.numNonRaidedMissingBlks, this.numStrpMissingBlksMap); 
+  }
+  
+  /**
+   * 
+   * @param dfs
+   * @param filePath
+   * @param cntMissingBlksPerStrp
+   * @param numNonRaidedMissingBlks
+   * @param numStrpMissingBlksMap
+   * @return
+   * @throws IOException
+   */
+  public static boolean isFileCorrupt(final DistributedFileSystem dfs, 
+                                final FileStatus fileStat, 
+                                final boolean cntMissingBlksPerStrp,
+                                final Configuration conf, 
+                                AtomicLong numNonRaidedMissingBlks,
+                                Map<String, AtomicLongArray> numStrpMissingBlksMap) 
+    throws IOException {
+    if (fileStat == null) {
+      return false;
+    }
+    Path filePath = fileStat.getPath();
     try {
       // corruptBlocksPerStripe: 
       // map stripe # -> # of corrupt blocks in that stripe (data + parity)
       HashMap<Integer, Integer> corruptBlocksPerStripe =
         new LinkedHashMap<Integer, Integer>();
-
-      // read conf
-      final int stripeBlocks = RaidNode.getStripeLength(conf);
-
-      // figure out which blocks are missing/corrupted
-      final FileStatus fileStatus = dfs.getFileStatus(filePath);
-      final long blockSize = fileStatus.getBlockSize();
-      final long fileLength = fileStatus.getLen();
-      final long fileLengthInBlocks = (fileLength / blockSize) +
-        (((fileLength % blockSize) == 0) ? 0L : 1L);
-      final long fileStripes = (fileLengthInBlocks / stripeBlocks) +
-        (((fileLengthInBlocks % stripeBlocks) == 0) ? 0L : 1L);
-      final BlockLocation[] fileBlocks = 
-        dfs.getFileBlockLocations(fileStatus, 0, fileLength);
+      boolean fileCorrupt = false;
+      RaidInfo raidInfo = RaidUtils.getFileRaidInfo(fileStat, conf);
       
-      // figure out which stripes these corrupted blocks belong to
-      for (BlockLocation fileBlock: fileBlocks) {
-        int blockNo = (int) (fileBlock.getOffset() / blockSize);
-        final int stripe = (int) (blockNo / stripeBlocks);
-        if (fileBlock.isCorrupt() || 
-            (fileBlock.getNames().length == 0 && fileBlock.getLength() > 0)) {
-          if (corruptBlocksPerStripe.get(stripe) == null) {
-            corruptBlocksPerStripe.put(stripe, 1);
-          } else {
-            corruptBlocksPerStripe.put(stripe, corruptBlocksPerStripe.
-                                       get(stripe) + 1);
-          }
-          LOG.debug("file " + filePath.toString() + " corrupt in block " + 
-                   blockNo + "/" + fileLengthInBlocks + ", stripe " + stripe +
-                   "/" + fileStripes);
-        } else {
-          LOG.debug("file " + filePath.toString() + " OK in block " + blockNo +
-                   "/" + fileLengthInBlocks + ", stripe " + stripe + "/" +
-                   fileStripes);
+      if (raidInfo.codec == null) {
+        // Couldn't find out the parity file, so the file is corrupt
+        int count = collectNumCorruptBlocksInFile(dfs, filePath);
+        if (cntMissingBlksPerStrp && numNonRaidedMissingBlks != null) {
+          numNonRaidedMissingBlks.addAndGet(count);
         }
+        return true;
       }
 
-      RaidInfo raidInfo = getFileRaidInfo(filePath);
-
-      // now check parity blocks
-      if (raidInfo.raidType != RaidType.NONE) {
-        checkParityBlocks(filePath, corruptBlocksPerStripe, blockSize,
-                          fileStripes, raidInfo);
+      if (raidInfo.codec.isDirRaid) {
+        RaidUtils.collectDirectoryCorruptBlocksInStripe(conf, dfs, raidInfo, 
+            filePath, corruptBlocksPerStripe);
+      } else {
+        RaidUtils.collectFileCorruptBlocksInStripe(dfs, raidInfo, filePath,
+            corruptBlocksPerStripe);
       }
 
       final int maxCorruptBlocksPerStripe = raidInfo.parityBlocksPerStripe;
 
-      for (int corruptBlocksInStripe: corruptBlocksPerStripe.values()) {
-        if (corruptBlocksInStripe > maxCorruptBlocksPerStripe) {
-          return true;
+      for (Integer corruptBlocksInStripe: corruptBlocksPerStripe.values()) {
+        if (corruptBlocksInStripe == null) {
+          continue;
+        }
+        //detect if the file has any stripes which cannot be fixed by Raid
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("file " + filePath.toString() +
+                    " has corrupt blocks per Stripe value " +
+                    corruptBlocksInStripe);
+        }
+        if (!fileCorrupt) {
+          if (corruptBlocksInStripe > maxCorruptBlocksPerStripe) {
+            fileCorrupt = true;
+          }
+        }
+        if(cntMissingBlksPerStrp && numStrpMissingBlksMap != null) {
+          numStrpMissingBlksMap.get(raidInfo.codec.id).incrementAndGet(
+              corruptBlocksInStripe-1);
         }
       }
-      return false;
+      return fileCorrupt;
     } catch (SocketException e) {
       // Re-throw network-related exceptions.
       throw e;
+    } catch (SocketTimeoutException e) {
+      throw e;
     } catch (IOException e) {
+      // re-throw local exceptions.
+      if (e.getCause() != null &&
+          !(e.getCause() instanceof RemoteException)) {
+        throw e;
+      }
+      
       LOG.error("While trying to check isFileCorrupt " + filePath +
         " got exception ", e);
       return true;
@@ -495,193 +1047,11 @@ public class RaidShell extends Configured implements Tool {
   }
 
   /**
-   * holds the type of raid used for a particular file
-   */
-  private enum RaidType {
-    XOR,
-    RS,
-    NONE
-  }
-
-  /**
-   * holds raid type and parity file pair
-   */
-  private class RaidInfo {
-    public RaidInfo(final RaidType raidType, 
-                    final ParityFilePair parityPair,
-                    final int parityBlocksPerStripe) {
-      this.raidType = raidType;
-      this.parityPair = parityPair;
-      this.parityBlocksPerStripe = parityBlocksPerStripe;
-    }
-    public final RaidType raidType;
-    public final ParityFilePair parityPair;
-    public final int parityBlocksPerStripe;
-  }
-
-  /**
-   * returns the raid for a given file
-   */
-  private RaidInfo getFileRaidInfo(final Path filePath)
-    throws IOException {
-    // now look for the parity file
-    ParityFilePair ppair = null;
-    try {
-      // look for xor parity file first
-      ppair = ParityFilePair.getParityFile(ErasureCodeType.XOR, filePath, conf);
-    } catch (FileNotFoundException ignore) {
-    }
-    if (ppair != null) {
-      return new RaidInfo(RaidType.XOR, ppair, 1);
-    } else {
-      // failing that, look for rs parity file
-      try {
-        ppair = ParityFilePair.getParityFile(
-            ErasureCodeType.RS, filePath, conf);
-      } catch (FileNotFoundException ignore) {
-      }
-      if (ppair != null) {
-        return new RaidInfo(RaidType.RS, ppair, RaidNode.rsParityLength(conf));
-      } else {
-        return new RaidInfo(RaidType.NONE, null, 0);
-      }
-    }
-  }
-
-  /**
-   * gets the parity blocks corresponding to file
-   * returns the parity blocks in case of DFS
-   * and the part blocks containing parity blocks
-   * in case of HAR FS
-   */
-  private BlockLocation[] getParityBlocks(final Path filePath,
-                                          final long blockSize,
-                                          final long fileStripes,
-                                          final RaidInfo raidInfo) 
-    throws IOException {
-
-
-    final String parityPathStr = raidInfo.parityPair.getPath().toUri().
-      getPath();
-    FileSystem parityFS = raidInfo.parityPair.getFileSystem();
-    
-    // get parity file metadata
-    FileStatus parityFileStatus = parityFS.
-      getFileStatus(new Path(parityPathStr));
-    long parityFileLength = parityFileStatus.getLen();
-
-    if (parityFileLength != fileStripes * raidInfo.parityBlocksPerStripe *
-        blockSize) {
-      throw new IOException("expected parity file of length" + 
-                            (fileStripes * raidInfo.parityBlocksPerStripe *
-                             blockSize) +
-                            " but got parity file of length " + 
-                            parityFileLength);
-    }
-
-    BlockLocation[] parityBlocks = 
-      parityFS.getFileBlockLocations(parityFileStatus, 0L, parityFileLength);
-    
-    if (parityFS instanceof DistributedFileSystem ||
-        parityFS instanceof DistributedRaidFileSystem) {
-      long parityBlockSize = parityFileStatus.getBlockSize();
-      if (parityBlockSize != blockSize) {
-        throw new IOException("file block size is " + blockSize + 
-                              " but parity file block size is " + 
-                              parityBlockSize);
-      }
-    } else if (parityFS instanceof HarFileSystem) {
-      LOG.debug("HAR FS found");
-    } else {
-      LOG.warn("parity file system is not of a supported type");
-    }
-    
-    return parityBlocks;
-  }
-
-  /**
-   * checks the parity blocks for a given file and modifies
-   * corruptBlocksPerStripe accordingly
-   */
-  private void checkParityBlocks(final Path filePath,
-                                 final HashMap<Integer, Integer>
-                                 corruptBlocksPerStripe,
-                                 final long blockSize,
-                                 final long fileStripes,
-                                 final RaidInfo raidInfo)
-    throws IOException {
-
-    // get the blocks of the parity file
-    // because of har, multiple blocks may be returned as one container block
-    BlockLocation[] containerBlocks = getParityBlocks(filePath, blockSize,
-                                                      fileStripes, raidInfo);
-
-    long parityStripeLength = blockSize *
-      ((long) raidInfo.parityBlocksPerStripe);
-
-    long parityFileLength = parityStripeLength * fileStripes;
-
-    long parityBlocksFound = 0L;
-
-    for (BlockLocation cb: containerBlocks) {
-      if (cb.getLength() % blockSize != 0) {
-        throw new IOException("container block size is not " +
-                              "multiple of parity block size");
-      }
-      int blocksInContainer = (int) (cb.getLength() / blockSize);
-      LOG.debug("found container with offset " + cb.getOffset() +
-               ", length " + cb.getLength());
-
-      for (long offset = cb.getOffset();
-           offset < cb.getOffset() + cb.getLength();
-           offset += blockSize) {
-        long block = offset / blockSize;
-        
-        int stripe = (int) (offset / parityStripeLength);
-
-        if (stripe < 0) {
-          // before the beginning of the parity file
-          continue;
-        }
-        if (stripe >= fileStripes) {
-          // past the end of the parity file
-          break;
-        }
-
-        parityBlocksFound++;
-
-        if (cb.isCorrupt() ||
-            (cb.getNames().length == 0 && cb.getLength() > 0)) {
-          LOG.debug("parity file for " + filePath.toString() + 
-                   " corrupt in block " + block +
-                   ", stripe " + stripe + "/" + fileStripes);
-          
-          if (corruptBlocksPerStripe.get(stripe) == null) {
-            corruptBlocksPerStripe.put(stripe, 1);
-          } else {
-            corruptBlocksPerStripe.put(stripe, 
-                                       corruptBlocksPerStripe.get(stripe) +
-                                       1);
-          }
-        } else {
-          LOG.debug("parity file for " + filePath.toString() + 
-                   " OK in block " + block +
-                   ", stripe " + stripe + "/" + fileStripes);
-        }
-      }
-    }
-
-    long parityBlocksExpected = raidInfo.parityBlocksPerStripe * fileStripes;
-    if (parityBlocksFound != parityBlocksExpected ) {
-      throw new IOException("expected " + parityBlocksExpected + 
-                            " parity blocks but got " + parityBlocksFound);
-    }
-  }
-
-
-  /**
    * checks the raided file system, prints a list of corrupt files to
-   * this.out and returns the number of corrupt files
+   * this.out and returns the number of corrupt files.
+   * Also prints out the total number of files with at least one missing block.
+   * When called with '-retNumStrpsMissingBlks', also prints out number of stripes
+   * with certain number of blocks missing for files using the 'RS' codec. 
    */
   public void fsck(String cmd, String[] args, int startIndex) throws IOException {
     final int numFsckArgs = args.length - startIndex;
@@ -689,6 +1059,8 @@ public class RaidShell extends Configured implements Tool {
     String path = "/";
     boolean argsOk = false;
     boolean countOnly = false;
+    boolean cntMissingBlksPerStrp = false;
+    boolean listRecoverableFile = false;
     if (numFsckArgs >= 1) {
       argsOk = true;
       path = args[startIndex];
@@ -698,14 +1070,19 @@ public class RaidShell extends Configured implements Tool {
         numThreads = Integer.parseInt(args[++i]);
       } else if (args[i].equals("-count")) {
         countOnly = true;
+      } else if (args[i].equals("-retNumStrpsMissingBlks")) {
+        cntMissingBlksPerStrp = true;
+      } else if (args[i].equals("-listrecoverablefiles")) {
+        listRecoverableFile = true;
       }
     }
     if (!argsOk) {
       printUsage(cmd);
       return;
     }
+    final String dateString = dateFormat.format(new Date());;
     System.err.println("Running RAID FSCK with " + numThreads + 
-      " threads on " + path);
+      " threads on " + path + " at time " + dateString);
 
     FileSystem fs = (new Path(path)).getFileSystem(conf);
 
@@ -721,16 +1098,6 @@ public class RaidShell extends Configured implements Tool {
     }
     final DistributedFileSystem dfs = (DistributedFileSystem) fs;
 
-    // get conf settings
-    String xorPrefix = RaidNode.xorDestinationPath(conf).toUri().getPath();
-    String rsPrefix = RaidNode.rsDestinationPath(conf).toUri().getPath();
-    if (!xorPrefix.endsWith("/")) {
-      xorPrefix = xorPrefix + "/";
-    }
-    if (!rsPrefix.endsWith("/")) {
-      rsPrefix = rsPrefix + "/";
-    }
-
     // get a list of corrupted files (not considering parity blocks just yet)
     // from the name node
     // these are the only files we need to consider:
@@ -744,33 +1111,92 @@ public class RaidShell extends Configured implements Tool {
       // if this file is a parity file
       // or if it does not start with the specified path,
       // ignore it
-      if (!f.startsWith(xorPrefix) &&
-          !f.startsWith(rsPrefix)) {
+      boolean matched = false;
+      for (Codec c : Codec.getCodecs()) {
+        if (f.startsWith(c.getParityPrefix())) {
+          matched = true;
+        }
+      }
+      if (!matched) {
         corruptFileCandidates.add(f);
       }
     }
     // filter files marked for deletion
     RaidUtils.filterTrash(conf, corruptFileCandidates);
+    
+    //clear numStrpMissingBlks if missing blocks per stripe is to be counted
+    if (cntMissingBlksPerStrp) {
+      for (AtomicLongArray numStrpMissingBlks : 
+                          numStrpMissingBlksMap.values()) {
+        for (int i = 0; i < numStrpMissingBlks.length(); i++) {
+          numStrpMissingBlks.set(i, 0);
+        }
+      }
+    }
     System.err.println(
       "Processing " + corruptFileCandidates.size() + " possibly corrupt files using " +
       numThreads + " threads");
     ExecutorService executor = null;
+    ThreadFactory factory = new ThreadFactory() {
+      final AtomicInteger tnum = new AtomicInteger();
+      public Thread newThread(Runnable r) {
+        Thread t = new Thread(r);
+        t.setName("Raidfsck-" + dateString + "-" + tnum.incrementAndGet());
+        return t;
+      }
+    };
     if (numThreads > 1) {
-      executor = Executors.newFixedThreadPool(numThreads);
+      executor = Executors.newFixedThreadPool(numThreads, factory);
+    } else {
+      numThreads = 1;
     }
+    final List<String> unRecoverableFiles = Collections.synchronizedList(new LinkedList<String>());
+    final List<String> recoverableFiles = Collections.synchronizedList(new LinkedList<String>());
     final boolean finalCountOnly = countOnly;
-    for (final String corruptFileCandidate: corruptFileCandidates) {
+    final boolean finalMissingBlksPerStrpCnt = cntMissingBlksPerStrp;
+    final boolean finalListRecoverableFile = listRecoverableFile;
+    final int step = numThreads;
+    final AtomicInteger finishNum = new AtomicInteger(0);
+    for (int i = 0; i < numThreads; i++) {
+      if (!dfs.getClient().isOpen()) {
+        throw new IOException("Filesystem closed.");
+      }
+      final int startIdx = i; 
       Runnable work = new Runnable() {
         public void run() {
           try {
-            if (isFileCorrupt(dfs, new Path(corruptFileCandidate))) {
-              incrCorruptCount();
-              if (!finalCountOnly) {
-                out.println(corruptFileCandidate);
+            for (int idx = startIdx; idx < corruptFileCandidates.size();
+                idx += step) {
+              String corruptFileCandidate = corruptFileCandidates.get(idx);
+              boolean corrupt = false;
+              try {
+                FileStatus corruptStat;
+                try {
+                  corruptStat = dfs.getFileStatus(new Path(corruptFileCandidate));
+                } catch (FileNotFoundException fnfe) {
+                  continue;
+                }
+                if (!dfs.getClient().isOpen()) {
+                  LOG.warn("Filesystem closed.");
+                  return;
+                }
+                corrupt = isFileCorrupt(dfs, corruptStat, finalMissingBlksPerStrpCnt);
+                if (corrupt) {
+                  incrCorruptCount();
+                  if (!finalCountOnly && !finalListRecoverableFile) {
+                    unRecoverableFiles.add(corruptFileCandidate);
+                  }
+                } else {
+                  if (!finalCountOnly && finalListRecoverableFile) {
+                    recoverableFiles.add(corruptFileCandidate);
+                  }
+                }
+              } catch (Throwable e) {
+                LOG.error("Error in processing " + corruptFileCandidate, e);
               }
             }
-          } catch (IOException e) {
-            LOG.error("Error in processing " + corruptFileCandidate, e);
+          } finally {
+            finishNum.incrementAndGet();
           }
         }
       };
@@ -781,15 +1207,67 @@ public class RaidShell extends Configured implements Tool {
       }
     }
     if (executor != null) {
-      executor.shutdown(); // Waits for submitted tasks to finish.
       try {
-        executor.awaitTermination(3600, TimeUnit.SECONDS);
-      } catch (InterruptedException e) {
+        while (finishNum.get() < numThreads) {
+          try {
+            Thread.sleep(2000);
+          } catch (InterruptedException ie) {
+            LOG.warn("Raidfsck get exception ", ie);
+            throw new IOException(ie);
+          }
+        }
+      } finally {
+        executor.shutdown(); // Waits for submitted tasks to finish.
       }
     }
+    
+    // If client is closed, fail the fsck check.
+    if (!dfs.getClient().isOpen()) {
+      throw new IOException("Filesystem closed.");
+    }
+    
     if (countOnly) {
+      //Number of corrupt files (which cannot be fixed by Raid)
       out.println(getCorruptCount());
-      System.err.println("Nubmer of corrupt files:" + getCorruptCount());
+      LOG.info("Nubmer of corrupt files:" + getCorruptCount());
+      //Number of files with at least one missing block
+      out.println(corruptFileCandidates.size()); 
+      LOG.info("Number of files with at least one block missing/corrupt: "+corruptFileCandidates.size());
+    } else {
+      if (listRecoverableFile) {
+        for (String file : recoverableFiles) {
+          out.println(file);
+        }
+      } else {
+        for (String file : unRecoverableFiles) {
+          out.println(file);
+        }
+      }
+    }
+    
+    /*Number of stripes with missing blocks array, separated by each code id:
+     * Number of missing blocks found from non-raided files.
+     * codeId1
+     * index 0: Number of stripes found with one block missing in this fsck
+     * index 1: Number of stripes found with two block missing in this fsck
+     * and so on
+     * codeId2
+     * index 0: Number of stripes found with one block missing in this fsck
+     * index 1: Number of stripes found with two block missing in this fsck
+     * and so on
+     */
+    if (cntMissingBlksPerStrp) {
+      out.println(this.numNonRaidedMissingBlks);
+      for (String codecId : numStrpMissingBlksMap.keySet()) {
+        out.println(codecId);
+        AtomicLongArray numStrpMissingBlks = 
+                      numStrpMissingBlksMap.get(codecId);
+        for (int j = 0; j < numStrpMissingBlks.length() ; j++) {
+          long temp = numStrpMissingBlks.get(j);
+          out.println(temp); 
+          LOG.info("Number of stripes with missing blocks at index "+ j + " is " + temp);
+        }
+      }
     }
   }
 
@@ -802,14 +1280,18 @@ public class RaidShell extends Configured implements Tool {
   int getCorruptCount() {
     return corruptCounter.get();
   }
+  
+  long getStrpMissingBlks(String codecId, int index){
+    return numStrpMissingBlksMap.get(codecId).get(index);
+  }
 
   void usefulHar(String[] args, int startIndex) throws IOException {
     if (args.length - startIndex < 2) {
       printUsage("usefulHar");
       throw new IllegalArgumentException("Too few arguments");
     }
-    ErasureCodeType code = ErasureCodeType.valueOf(args[startIndex]);
-    Path prefixPath = RaidNode.getDestinationPath(code, conf);
+    Codec codec = Codec.getCodec(args[startIndex]);
+    Path prefixPath = new Path(codec.parityDirectory);
     String prefix = prefixPath.toUri().getPath();
     FileSystem fs = new Path("/").getFileSystem(conf);
     for (int i = startIndex + 1; i < args.length; i++) {
@@ -817,7 +1299,7 @@ public class RaidShell extends Configured implements Tool {
       if (harPath.startsWith(prefix)) {
         float usefulPercent =
           PurgeMonitor.usefulHar(
-            code, fs, fs, new Path(harPath), prefix, conf, null);
+            codec, null, fs, fs, new Path(harPath), prefix, conf, null);
         out.println("Useful percent of " + harPath + " " + usefulPercent);
       } else {
         System.err.println("Har " + harPath + " is not located in " +
@@ -848,13 +1330,13 @@ public class RaidShell extends Configured implements Tool {
         Path corruptFile = corruptIt.next();
         // Result of checking.
         String result = null;
-        FileStatus stat = fs.getFileStatus(p);
+        FileStatus stat = fs.getFileStatus(corruptFile);
         if (stat.getReplication() < fs.getDefaultReplication()) {
-          RaidInfo raidInfo = getFileRaidInfo(corruptFile);
-          if (raidInfo.raidType == RaidType.NONE) {
+          RaidInfo raidInfo = RaidUtils.getFileRaidInfo(stat, conf);
+          if (raidInfo.codec == null) {
             result = "Below default replication but no parity file found";
           } else {
-            boolean notRecoverable = isFileCorrupt(dfs, corruptFile);
+            boolean notRecoverable = isFileCorrupt(dfs, stat);
             if (notRecoverable) {
               result = "Missing too many blocks to be recovered " + 
                 "using parity file " + raidInfo.parityPair.getPath();
@@ -883,19 +1365,20 @@ public class RaidShell extends Configured implements Tool {
     AtomicLong entriesProcessed = new AtomicLong(0);
     System.err.println("Starting recursive purge of " + parityPath);
 
-    ErasureCodeType code = ErasureCodeType.valueOf(args[startIndex + 1]);
+    Codec codec = Codec.getCodec(args[startIndex + 1]);
     FileSystem srcFs = parityPath.getFileSystem(conf);
     if (srcFs instanceof DistributedRaidFileSystem) {
       srcFs = ((DistributedRaidFileSystem)srcFs).getFileSystem();
     }
     FileSystem parityFs = srcFs;
-    String parityPrefix = RaidNode.getDestinationPath(code, conf).toUri().getPath();
+    String parityPrefix = codec.parityDirectory;
     DirectoryTraversal obsoleteParityFileRetriever =
       new DirectoryTraversal(
         "Purge File ",
         java.util.Collections.singletonList(parityPath),
         parityFs,
-        new PurgeMonitor.PurgeParityFileFilter(conf, code, srcFs, parityFs,
+        new PurgeMonitor.PurgeParityFileFilter(conf, codec, null,
+            srcFs, parityFs,
           parityPrefix, null, entriesProcessed),
         1,
         false);
@@ -912,37 +1395,47 @@ public class RaidShell extends Configured implements Tool {
       printUsage(cmd);
       throw new IllegalArgumentException("Insufficient arguments");
     }
-    boolean xorParityFound = false;
-    boolean rsParityFound = false;
     for (int i = startIndex; i < args.length; i++) {
       Path p = new Path(args[i]);
-      // look for xor parity file first
+      FileSystem fs = p.getFileSystem(conf);
+      FileStatus stat = null;
+      try {
+        stat = fs.getFileStatus(p);
+      } catch (FileNotFoundException e) {
+        System.out.println("Path: " + p + " does not exist!");
+        continue;
+      }
       ParityFilePair ppair = null;
-      try {
-        ppair = ParityFilePair.getParityFile(ErasureCodeType.XOR, p, conf);
-        if (ppair != null) {
-          out.println("XOR parity: " + ppair.getPath());
-          xorParityFound = true;
+      int numParityFound = 0;
+      for (Codec c : Codec.getCodecs()) {
+        try {
+          ppair = ParityFilePair.getParityFile(c, stat, conf);
+          if (ppair != null) {
+            System.out.println(c.id + " parity: " + ppair.getPath());
+            numParityFound += 1;
+          }
+        } catch (FileNotFoundException ignore) {
         }
-      } catch (FileNotFoundException ignore) {
       }
-      // look for rs parity file
-      try {
-        ppair = ParityFilePair.getParityFile(ErasureCodeType.RS, p, conf);
-        if (ppair != null) {
-          out.println("RS parity: " + ppair.getPath());
-          rsParityFound = true;
-        }
-      } catch (FileNotFoundException ignore) {
+      if (numParityFound == 0) {
+        System.out.println("No parity file found");
       }
-      if (!xorParityFound && !rsParityFound) {
-        out.println("No parity file found");
-      }
-      if (xorParityFound && rsParityFound) {
-        out.println("Warning: XOR and RS parity file found");
+      if (numParityFound > 1) {
+        System.out.println("Warning: multiple parity files found");
       }
     }
   }
+  
+  static private boolean isBlockCorrupt(BlockLocation fileBlock)
+      throws IOException {
+    if (fileBlock == null)
+      // empty block
+      return false;
+    return fileBlock.isCorrupt() || 
+        (fileBlock.getNames().length == 0 && fileBlock.getLength() > 0);
+  }
+  
+  
 
   /**
    * main() has some simple utility methods

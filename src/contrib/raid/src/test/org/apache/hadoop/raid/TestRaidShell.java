@@ -17,20 +17,13 @@
  */
 package org.apache.hadoop.raid;
 
+import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
-import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.GregorianCalendar;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Properties;
 import java.util.Random;
+import java.util.UUID;
 import java.util.zip.CRC32;
 
 import junit.framework.TestCase;
@@ -39,24 +32,21 @@ import org.apache.commons.logging.LogFactory;
 
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
-import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
-import org.apache.hadoop.hdfs.DistributedRaidFileSystem;
 import org.apache.hadoop.hdfs.TestRaidDfs;
 import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.mapred.MiniMRCluster;
 import org.apache.hadoop.raid.RaidNode;
+import org.apache.hadoop.raid.tools.FastFileCheck;
 
 
 public class TestRaidShell extends TestCase {
@@ -66,6 +56,8 @@ public class TestRaidShell extends TestCase {
       "build/contrib/raid/test/data")).getAbsolutePath();
   final static String CONFIG_FILE = new File(TEST_DIR,
       "test-raid.xml").getAbsolutePath();
+  final static private String RAID_SRC_PATH = "/user/raidtest";
+  final static private String RAID_POLICY_NAME = "RaidTest1";
   final static long RELOAD_INTERVAL = 1000;
   final static int NUM_DATANODES = 3;
   Configuration conf;
@@ -75,7 +67,116 @@ public class TestRaidShell extends TestCase {
   FileSystem fileSys = null;
   RaidNode cnode = null;
   Random rand = new Random();
+  
+  private void doRaid(Path srcPath, Codec codec) throws IOException {
+    RaidNode.doRaid(conf, fileSys.getFileStatus(srcPath),
+              new Path("/raid"), codec, 
+              new RaidNode.Statistics(), 
+                RaidUtils.NULL_PROGRESSABLE,
+                false, 1, 1);
+  }
+  
+  public void testFileCheck() throws Exception {
+    LOG.info("Test FileCheck started.");
+    
+    mySetup(3, -1);
+    File fileList = null;
+    try {
+      MiniMRCluster mr = new MiniMRCluster(4, namenode, 3);
+      String jobTrackerName = "localhost:" + mr.getJobTrackerPort();
+      conf.set("mapred.job.tracker", jobTrackerName);
+      
+      Path srcPath = new Path("/user/dikang/raidtest/file0");
+      TestRaidDfs.createTestFilePartialLastBlock(fileSys, srcPath, 
+          1, 8, 8192L);
+      Codec codec = Codec.getCodec("xor");
+      doRaid(srcPath, codec);
+      FileStatus stat = fileSys.getFileStatus(srcPath);
+      ParityFilePair pfPair = ParityFilePair.getParityFile(codec, stat, conf);
+      assertNotNull(pfPair);
+      
+      // write the filelist
+      fileList = new File(TEST_DIR + "/" + UUID.randomUUID().toString());
+      BufferedWriter writer = new BufferedWriter(new FileWriter(fileList));
+      writer.write(fileList.getPath() + "\n");
+      writer.close();
+      
+      // Create RaidShell
+      RaidShell shell = new RaidShell(conf);
+      String[] args = new String[4];
+      args[0] = "-fileCheck";
+      args[1] = "-filesPerJob";
+      args[2] = "1";
+      args[3] = fileList.getPath();
+      
+      assertEquals(0, ToolRunner.run(shell, args));
+      
+      // test check source only
+      // delete the parity file
+      fileSys.delete(pfPair.getPath());
+      args = new String[5];
+      args[0] = "-fileCheck";
+      args[1] = "-filesPerJob";
+      args[2] = "1";
+      args[3] = "-sourceOnly";
+      args[4] = fileList.getPath();
+      assertEquals(0, ToolRunner.run(shell, args));
+      
+    } finally {
+      if (null != fileList) {
+        fileList.delete();
+      }
+      myTearDown();
+    }
+  }
 
+  /**
+   * Test distRaid command
+   * @throws Exception
+   */
+  public void testDistRaid() throws Exception {
+    LOG.info("TestDist started.");
+    // create a dfs and map-reduce cluster
+    mySetup(3, -1);
+    MiniMRCluster mr = new MiniMRCluster(4, namenode, 3);
+    String jobTrackerName = "localhost:" + mr.getJobTrackerPort();
+    conf.set("mapred.job.tracker", jobTrackerName);
+
+    try {
+      // Create files to be raided
+      TestRaidNode.createTestFiles(fileSys, RAID_SRC_PATH,
+          "/raid" + RAID_SRC_PATH, 1, 3, (short)3);
+      String subDir = RAID_SRC_PATH + "/subdir";
+      TestRaidNode.createTestFiles(
+          fileSys, subDir, "/raid" + subDir, 1, 3, (short)3);
+      
+      // Create RaidShell and raid the files.
+      RaidShell shell = new RaidShell(conf);
+      String[] args = new String[3];
+      args[0] = "-distRaid";
+      args[1] = RAID_POLICY_NAME;
+      args[2] = RAID_SRC_PATH;
+      assertEquals(0, ToolRunner.run(shell, args));
+
+      // Check files are raided
+      checkIfFileRaided(new Path(RAID_SRC_PATH, "file0"));
+      checkIfFileRaided(new Path(subDir, "file0"));
+    } finally {
+      mr.shutdown();
+      myTearDown();
+    }
+  }
+  
+  // check if a file has been raided
+  private void checkIfFileRaided(Path srcPath) throws IOException {
+    FileStatus srcStat = fileSys.getFileStatus(srcPath);
+    assertEquals(1, srcStat.getReplication());
+    
+    Path parityPath = new Path("/raid", srcPath);
+    FileStatus parityStat = fileSys.getFileStatus(parityPath);
+    assertEquals(1, parityStat.getReplication());
+  }
+  
   /**
    * Create a file with three stripes, corrupt a block each in two stripes,
    * and wait for the the file to be fixed.
@@ -85,8 +186,8 @@ public class TestRaidShell extends TestCase {
     long blockSize = 8192L;
     int stripeLength = 3;
     mySetup(stripeLength, -1);
-    Path file1 = new Path("/user/dhruba/raidtest/file1");
-    Path destPath = new Path("/destraid/user/dhruba/raidtest");
+    Path file1 = new Path(RAID_SRC_PATH, "file1");
+    Path destPath = new Path("/raid"+RAID_SRC_PATH);
     long crc1 = TestRaidDfs.createTestFilePartialLastBlock(fileSys, file1,
                                                           1, 7, blockSize);
     long file1Len = fileSys.getFileStatus(file1).getLen();
@@ -94,7 +195,6 @@ public class TestRaidShell extends TestCase {
 
     // create an instance of the RaidNode
     Configuration localConf = new Configuration(conf);
-    localConf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
     localConf.setInt("raid.blockfix.interval", 1000);
     localConf.set("raid.blockfix.classname",
                   "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
@@ -143,7 +243,7 @@ public class TestRaidShell extends TestCase {
       String[] args = new String[2];
       args[0] = "-recoverBlocks";
       args[1] = file1.toUri().getPath();
-      ToolRunner.run(shell, args);
+      assertEquals(0, ToolRunner.run(shell, args));
 
       long start = System.currentTimeMillis();
       do {
@@ -191,9 +291,7 @@ public class TestRaidShell extends TestCase {
 
     // do not use map-reduce cluster for Raiding
     conf.set("raid.classname", "org.apache.hadoop.raid.LocalRaidNode");
-    conf.set("raid.server.address", "localhost:0");
-    conf.setInt("hdfs.raid.stripeLength", stripeLength);
-    conf.set("hdfs.raid.locations", "/destraid");
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
 
     conf.setBoolean("dfs.permissions", false);
 
@@ -210,10 +308,10 @@ public class TestRaidShell extends TestCase {
     FileWriter fileWriter = new FileWriter(CONFIG_FILE);
     fileWriter.write("<?xml version=\"1.0\"?>\n");
     String str = "<configuration> " +
-                   "<policy name = \"RaidTest1\"> " +
-                        "<srcPath prefix=\"/user/dhruba/raidtest\"/> " +
-                        "<erasureCode>xor</erasureCode> " +
-                        "<destPath> /destraid</destPath> " +
+                   "<policy name = \"" + RAID_POLICY_NAME + "\"> " +
+                        "<srcPath prefix=\"" + RAID_SRC_PATH + "\"/> " +
+                        "<codecId>xor</codecId> " +
+                        "<destPath> /raid</destPath> " +
                         "<property> " +
                           "<name>targetReplication</name> " +
                           "<value>1</value> " +
@@ -228,7 +326,7 @@ public class TestRaidShell extends TestCase {
                         "</property> " +
                         "<property> " +
                           "<name>modTimePeriod</name> " +
-                          "<value>2000</value> " +
+                          "<value>0</value> " +
                           "<description> time (milliseconds) after a file is modified to make it " +
                                          "a candidate for RAIDing " +
                           "</description> " +
@@ -248,6 +346,8 @@ public class TestRaidShell extends TestCase {
                  "</configuration>";
     fileWriter.write(str);
     fileWriter.close();
+
+    Utils.loadTestCodecs(conf, stripeLength, 1, 3, "/raid", "/raidrs");
   }
 
   private void myTearDown() throws Exception {

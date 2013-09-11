@@ -17,24 +17,68 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
-
-
 /**
  * Context for an ongoing SaveNamespace operation. This class
  * allows cancellation.
  */
-class SaveNamespaceContext {
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionHandler;
+
+/**
+ * Context for an ongoing SaveNamespace operation. This class
+ * allows cancellation, and also is responsible for accumulating
+ * failed storage directories.
+ */
+class SaveNamespaceContext {
+  private FSNamesystem sourceNamesystem;
+  private long txid = HdfsConstants.INVALID_TXID;
+  private List<StorageDirectory> errorSDs =
+    Collections.synchronizedList(new ArrayList<StorageDirectory>());
+  
   /**
    * If the operation has been canceled, set to the reason why
    * it has been canceled (eg standby moving to active)
    */
   private volatile String cancelReason = null;
-  private long txid = -1;
+  
+  private int numFailures = 0;
+  
+  SaveNamespaceContext() {}
 
+  FSNamesystem getSourceNamesystem() {
+    return sourceNamesystem;
+  }
 
+  long getTxId() {
+    return txid;
+  }
+  
+  public void set(FSNamesystem sourceNamesystem, long txid) {
+    this.sourceNamesystem = sourceNamesystem;
+    this.txid = txid;
+  }
+
+  synchronized void reportErrorOnStorageDirectory(StorageDirectory sd) {
+    if (sd != null)
+      errorSDs.add(sd);
+    numFailures++;
+  }
+  
+  synchronized int getNumFailures() {
+    return numFailures;
+  }
+
+  List<StorageDirectory> getErrorSDs() {
+    return errorSDs;
+  }
+  
   /**
    * Requests that the current saveNamespace operation be
    * canceled if it is still running.
@@ -58,13 +102,9 @@ class SaveNamespaceContext {
   
   public void clear() {
     this.cancelReason = null;
-  }
-  
-  public void setTxId(long txid) {
-    this.txid = txid;
-  }
-  
-  long getTxId() {
-    return txid;
+    this.sourceNamesystem = null;
+    this.txid = HdfsConstants.INVALID_TXID;
+    this.errorSDs.clear();
+    this.numFailures = 0;
   }
 }

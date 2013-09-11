@@ -41,6 +41,10 @@ class JvmManager {
   public static final Log LOG =
     LogFactory.getLog("org.apache.hadoop.mapred.JvmManager");
 
+  /** How long to wait prior to sigkill after a kill */
+  public static final String SLEEPTIME_BEFORE_SIGKILL_KEY =
+      "mapred.tasktracker.tasks.sleeptime.before.sigkill";
+
   JvmManagerForType mapJvmManager;
 
   JvmManagerForType reduceJvmManager;
@@ -214,6 +218,13 @@ class JvmManager {
         JvmRunner jvmRunner;
         if ((jvmRunner = jvmIdToRunner.get(jvmId)) != null) {
           jvmRunner.taskRan();
+          // This JVM is done. Unfortunately sometimes the
+          // process hangs around, so we should sigkill it
+          // However it is only applicable to the JVMs that
+          // ran all the tasks they were supposed to
+          if (jvmRunner.ranAll()) {
+            jvmRunner.kill();
+          }
         }
       }
     }
@@ -448,7 +459,7 @@ class JvmManager {
           if (initalContext != null && initalContext.env != null) {
             initalContext.pid = jvmIdToPid.get(jvmId);
             initalContext.sleeptimeBeforeSigkill = tracker.getJobConf()
-              .getLong("mapred.tasktracker.tasks.sleeptime-before-sigkill",
+              .getLong(SLEEPTIME_BEFORE_SIGKILL_KEY,
                   ProcessTree.DEFAULT_SLEEPTIME_BEFORE_SIGKILL);
             controller.destroyTaskJVM(initalContext);
           } else {
@@ -502,6 +513,20 @@ class JvmManager {
       this.workDir = workDir;
       this.env = env;
       this.conf = conf;
+    }
+
+    @Override
+    public String toString() {
+      return "JvmEnv{" +
+          "vargs=" + vargs +
+          ", setup=" + setup +
+          ", stdout=" + stdout +
+          ", stderr=" + stderr +
+          ", workDir=" + workDir +
+          ", logSize=" + logSize +
+          ", conf=" + conf +
+          ", env=" + env +
+          '}';
     }
   }
 }

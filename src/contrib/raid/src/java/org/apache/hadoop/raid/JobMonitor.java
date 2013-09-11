@@ -20,6 +20,7 @@ package org.apache.hadoop.raid;
 
 import java.io.IOException;
 import java.text.SimpleDateFormat; 
+import java.util.Collections;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
@@ -32,6 +33,10 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.mapred.Counters;
+import org.apache.hadoop.mapred.Counters.Group;
+import org.apache.hadoop.mapreduce.CounterGroup;
+import org.apache.hadoop.metrics.util.MetricsRegistry;
+import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
 import org.apache.hadoop.raid.DistRaid.Counter;
 
 /**
@@ -51,6 +56,7 @@ public class JobMonitor implements Runnable {
   private Map<String, List<DistRaid>> history;
   private Map<String, Counters> raidProgress; 
   private long jobMonitorInterval;
+  private long maximumRunningTime;
   private volatile long jobsMonitored = 0;
   private volatile long jobsSucceeded = 0;
   private static final SimpleDateFormat dateForm = new SimpleDateFormat("yyyy-MM-dd");
@@ -59,9 +65,15 @@ public class JobMonitor implements Runnable {
   public enum STATUS {
     RUNNING, FINISHED, RAIDED
   }
+  public static final String JOBMONITOR_INTERVAL_KEY = "raid.jobmonitor.interval";
+  public static final String JOBMONITOR_MAXIMUM_RUNNINGTIME_KEY =
+      "raid.jobmonitor.max.runningtime";
+  public static final long DEFAULT_MAXIMUM_RUNNING_TIME = 24L * 3600L * 1000L;
 
   public JobMonitor(Configuration conf) {
-    jobMonitorInterval = conf.getLong("raid.jobmonitor.interval", 60000);
+    jobMonitorInterval = conf.getLong(JOBMONITOR_INTERVAL_KEY, 60000);
+    maximumRunningTime = conf.getLong(JOBMONITOR_MAXIMUM_RUNNINGTIME_KEY,
+        DEFAULT_MAXIMUM_RUNNING_TIME);
     jobs = new java.util.HashMap<String, List<DistRaid>>();
     history = new java.util.HashMap<String, List<DistRaid>>();
     raidProgress = new java.util.HashMap<String, Counters>();
@@ -122,6 +134,12 @@ public class JobMonitor implements Runnable {
               if (job.successful()) {
                 jobsSucceeded++;
               }
+            } else if (System.currentTimeMillis() -
+                job.getStartTime() > maximumRunningTime){
+              // If the job is running for more than one day
+              throw new Exception("Job " + job.getJobID() + 
+                  " is hanging more than " + maximumRunningTime/1000
+                  + " seconds. Kill it");
             }
           } catch (Exception e) {
             // If there was an error, consider the job finished.
@@ -129,7 +147,7 @@ public class JobMonitor implements Runnable {
             try {
               job.killJob();
             } catch (Exception ee) {
-              LOG.error(StringUtils.stringifyException(ee));
+              LOG.error(ee);
             }
           }
         }
@@ -141,9 +159,11 @@ public class JobMonitor implements Runnable {
           // Iterate through finished jobs and remove from jobs.
           // removeJob takes care of locking.
           for (DistRaid job: finishedJobList) {
+            addCounter(raidProgress, job, INT_CTRS);
             removeJob(jobs, key, job);
             addJob(history, key, job);
-            addCounter(raidProgress, job, INT_CTRS);
+            // delete the temp directory 
+            job.cleanUp();
           }
         }
       }
@@ -178,6 +198,26 @@ public class JobMonitor implements Runnable {
     }
     return count;
   }
+  
+  // for test
+  public List<DistRaid> getRunningJobs() {
+    List<DistRaid> list = new LinkedList<DistRaid>();
+    synchronized(jobs) {
+      for (List<DistRaid> jobList : jobs.values()) {
+        synchronized(jobList) {
+          list.addAll(jobList);
+        }
+      }
+    }
+    return list;
+  }
+  
+  // for test
+  public Map<String, Counters> getRaidProgress() {
+    synchronized (raidProgress) {
+      return Collections.unmodifiableMap(this.raidProgress);
+    }
+  }
 
   public void monitorJob(String key, DistRaid job) {
     addJob(jobs, key, job);
@@ -187,7 +227,7 @@ public class JobMonitor implements Runnable {
   public long jobsMonitored() {
     return this.jobsMonitored;
   }
-
+  
   public long jobsSucceeded() {
     return this.jobsSucceeded;
   }
@@ -222,6 +262,23 @@ public class JobMonitor implements Runnable {
       LOG.error(e);
       return;
     }
+    
+    //Adding to logMetrics
+    Group counterGroup = ctrs.getGroup(LogUtils.LOG_COUNTER_GROUP_NAME);
+    MetricsRegistry registry = RaidNodeMetrics.getInstance(
+        RaidNodeMetrics.DEFAULT_NAMESPACE_ID).getMetricsRegistry();
+    Map<String, MetricsTimeVaryingLong> logMetrics = RaidNodeMetrics.getInstance(
+        RaidNodeMetrics.DEFAULT_NAMESPACE_ID).logMetrics;
+    synchronized(logMetrics) {
+      for (Counters.Counter ctr: counterGroup) {
+        if (!logMetrics.containsKey(ctr.getName())) {
+          logMetrics.put(ctr.getName(),
+              new MetricsTimeVaryingLong(ctr.getName(), registry));
+        }
+        ((MetricsTimeVaryingLong)logMetrics.get(ctr.getName())).inc(ctr.getValue());
+      }
+    }
+    
     String currDate = dateForm.format(new Date(RaidNode.now()));
     synchronized(countersMap) {
       if (countersMap.containsKey(currDate)) {
@@ -234,7 +291,8 @@ public class JobMonitor implements Runnable {
         Counters.Counter ctr = ctrs.findCounter(ctrName);
         if (ctr != null) {
           total_ctrs.incrCounter(ctrName, ctr.getValue());
-          LOG.info(ctrName + " " + ctr.getValue() + ": " + total_ctrs.getCounter(ctrName));
+          LOG.info(ctrName + " " + ctr.getValue() + ": " +
+              total_ctrs.getCounter(ctrName));
         }
       }
     }

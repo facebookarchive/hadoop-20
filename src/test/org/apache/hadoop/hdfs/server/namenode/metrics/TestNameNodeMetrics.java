@@ -29,6 +29,10 @@ import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.Daemon;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 /**
  * Test for metrics published by the Namenode
@@ -70,6 +74,7 @@ public class TestNameNodeMetrics extends TestCase {
   @Override
   protected void tearDown() throws Exception {
     cluster.shutdown();
+    InjectionHandler.clear();
   }
   
   /** create a file with a length of <code>fileLen</code> */
@@ -191,4 +196,29 @@ public class TestNameNodeMetrics extends TestCase {
     updateMetrics();
     assertEquals(0, metrics.underReplicatedBlocks.get());
   }
+  
+  /** Test to ensure metrics reflects monitoring threads' health*/
+  public void testMonitoringThread() throws Exception {
+    updateMetrics();
+    assertEquals(0, metrics.numDeadMonitoringThread.get());
+    TestNameNodeMonitorThreadHandler h = new TestNameNodeMonitorThreadHandler();
+    InjectionHandler.set(h);
+    updateMetrics(2000L);
+    // OverReplicationMonitor and UnderReplicationMonitor are dead
+    // HeartbeatMonitor might be dead
+    assertTrue(metrics.numDeadMonitoringThread.get() >= 2);
+  }
+  
+  class TestNameNodeMonitorThreadHandler extends InjectionHandler {
+    @Override
+    protected void _processEvent(InjectionEventI event, Object... args) {
+      if (event == InjectionEvent.FSNAMESYSTEM_STOP_MONITOR) {
+        Daemon monitor = (Daemon) args[0];
+        if (monitor != null && monitor.isAlive()) {
+          monitor.interrupt();
+        }
+      }
+    }
+  }
+
 }

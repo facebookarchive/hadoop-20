@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs.protocol;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.util.DataChecksum;
 
 /************************************
  * Some handy constants
@@ -61,10 +62,19 @@ public interface FSConstants {
   public static final int SIZE_OF_INTEGER = Integer.SIZE / Byte.SIZE;
 
   // SafeMode actions
-  public enum SafeModeAction{ SAFEMODE_LEAVE, SAFEMODE_ENTER, SAFEMODE_GET; }
+  public enum SafeModeAction {
+    SAFEMODE_LEAVE, 
+    SAFEMODE_ENTER, 
+    SAFEMODE_GET, 
+    SAFEMODE_INITQUEUES, 
+    SAFEMODE_PREP_FAILOVER;
+  }
 
   // type of the datanode report
   public static enum DatanodeReportType {ALL, LIVE, DEAD }
+  
+  public static int CHECKSUM_TYPE = DataChecksum.CHECKSUM_CRC32;
+  public static int DEFAULT_BYTES_PER_CHECKSUM = 512;
 
   /**
    * Distributed upgrade actions:
@@ -90,9 +100,12 @@ public interface FSConstants {
   // Version is reflected in the data storage file.
   // Versions are negative.
   // Decrement LAYOUT_VERSION to define a new version.
-  public static final int LAYOUT_VERSION = -37;
+  public static final int LAYOUT_VERSION = -41;
   // Current version: 
-  // -37: persist last transaction id in FSImage.
+  // -40: All the INodeFiles will have a INode type (1 byte) and 
+  // only the hardlink files will persist an additional hardlink ID (1 vLong)
+  // right after the the Inode type.
+  // -41: support inline checksum.
   public static final int FEDERATION_VERSION = -35;
   
   public static final String DFS_SOFT_LEASE_KEY = "dfs.softlease.period";
@@ -113,14 +126,23 @@ public interface FSConstants {
   public static final String  DFS_NAMENODE_SECONDARY_HTTP_ADDRESS_KEY = "dfs.secondary.http.address";
   public static final String  DFS_RAIDNODE_HTTP_ADDRESS_KEY = "dfs.raid.http.address";
 
+  public static final String  FS_OUTPUT_STREAM_AUTO_PRINT_PROFILE = "dfs.write.profile.auto.print";
+  
+  public static final String DFS_NAMENODE_NAME_DIR_WILDCARD = "avatar_instance";
   public static final String DFS_NAMENODE_NAME_DIR_KEY = "dfs.name.dir";
   public static final String DFS_NAMENODE_EDITS_DIR_KEY = "dfs.name.edits.dir";
   public static final String DFS_NAMENODE_CHECKPOINT_DIR_KEY = "fs.checkpoint.dir";
   public static final String DFS_NAMENODE_CHECKPOINT_EDITS_DIR_KEY = "fs.checkpoint.edits.dir";
+
+  public static final String DFS_USE_INLINE_CHECKSUM_KEY = "dfs.use.inline.checksum";
+
+  
+  public static String DFS_NAMENODE_NUM_CHECKPOINTS_RETAINED_KEY = "dfs.num.checkpoints.retained";
 
   public static final long MIN_INTERVAL_CHECK_DIR_MSEC = 300 * 1000;
 
   public static String FS_NAMENODE_ALIASES = "fs.default.name.aliases";
   public static String DFS_NAMENODE_DN_ALIASES = "dfs.namenode.dn-address.aliases";
   public static String DFS_HTTP_ALIASES = "dfs.http.address.aliases";
+  public static String DFS_CLIENT_NAMENODE_SOCKET_TIMEOUT = "dfs.client.namenode.ipc.socket.timeout";
 }

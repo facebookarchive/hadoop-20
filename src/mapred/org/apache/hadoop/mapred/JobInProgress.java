@@ -248,6 +248,16 @@ public class JobInProgress extends JobInProgressTraits {
     RACK_MAP_INPUT_BYTES,
     TOTAL_MAP_WAIT_MILLIS,
     TOTAL_REDUCE_WAIT_MILLIS,
+    TOTAL_HIGH_MEMORY_MAP_TASK_KILLED,
+    TOTAL_HIGH_MEMORY_REDUCE_TASK_KILLED,
+    TOTAL_CGROUP_MEMORY_MAP_TASK_KILLED,
+    TOTAL_CGROUP_MEMORY_REDUCE_TASK_KILLED,
+    MAX_MAP_MEM_BYTES,
+    MAX_MAP_RSS_MEM_BYTES,
+    MAX_MAP_INST_MEM_BYTES,
+    MAX_REDUCE_MEM_BYTES,
+    MAX_REDUCE_RSS_MEM_BYTES,
+    MAX_REDUCE_INST_MEM_BYTES
   }
   Counters jobCounters = new Counters();
 
@@ -517,7 +527,9 @@ public class JobInProgress extends JobInProgressTraits {
         conf.getFloat(SPECULATIVE_SLOWTASK_THRESHOLD,1.0f));
     this.speculativeCap = conf.getFloat(SPECULATIVECAP,0.1f);
     this.slowNodeThreshold = conf.getFloat(SPECULATIVE_SLOWNODE_THRESHOLD,1.0f);
-    this.refreshTimeout = conf.getLong(JobInProgress.REFRESH_TIMEOUT, 5000L);
+    this.refreshTimeout = conf.getLong(JobInProgress.REFRESH_TIMEOUT,
+        jobtracker.getJobTrackerReconfigurable().
+        getInitialJobRefreshTimeoutMs());
     this.speculativeStddevMeanRatioMax = conf.getFloat(
         JobInProgress.SPECULATIVE_STDDEVMEANRATIO_MAX, 0.33f);
     this.speculativeMapUnfininshedThreshold = conf.getFloat(
@@ -1167,12 +1179,12 @@ public class JobInProgress extends JobInProgressTraits {
       TaskCompletionEvent taskEvent = null;
       if (state == TaskStatus.State.SUCCEEDED) {
         TaskCompletionEvent.Status taskCompletionStatus = TaskCompletionEvent.Status.SUCCEEDED;
-        // Ensure that this is a map task. 
+        // Ensure that this is a map task.
         boolean isMapTask = status.getIsMap() && !tip.isJobCleanupTask() && !tip.isJobSetupTask();
         if (enableNoFetchEmptyMapOutputs && isMapTask) {
           long outBytes = status.getCounters().getCounter(Task.Counter.MAP_OUTPUT_BYTES);
           if (outBytes == 0) {
-            taskCompletionStatus = TaskCompletionEvent.Status.SUCCEEDED_NO_OUTPUT; 
+            taskCompletionStatus = TaskCompletionEvent.Status.SUCCEEDED_NO_OUTPUT;
           }
         }
         taskEvent = new TaskCompletionEvent(
@@ -2747,7 +2759,7 @@ public class JobInProgress extends JobInProgressTraits {
         }
       }
       if (tip.isSpeculativeAttempt(taskid)) {
-        metrics.speculativeSucceededMap(taskid, 
+        metrics.speculativeSucceededMap(taskid,
             tip.isUsingProcessingRateForSpeculation());
       }
       int level = getLocalityLevel(tip, ttStatus);
@@ -3048,7 +3060,7 @@ public class JobInProgress extends JobInProgressTraits {
                           TaskTracker taskTracker, boolean wasRunning,
                           boolean wasComplete, boolean wasAttemptRunning) {
     this.jobtracker.getTaskErrorCollector().collect(
-        tip, taskid, taskTracker, JobTracker.getClock().getTime());
+        tip, taskid, JobTracker.getClock().getTime());
     final JobTrackerInstrumentation metrics = jobtracker.getInstrumentation();
     // check if the TIP is already failed
     boolean wasFailed = tip.isFailed();
@@ -3062,11 +3074,11 @@ public class JobInProgress extends JobInProgressTraits {
     if (wasAttemptRunning) {
       if (!tip.isJobCleanupTask() && !tip.isJobSetupTask()) {
         boolean isSpeculative= tip.isSpeculativeAttempt(taskid);
-        boolean isUsingSpeculationByProcessingRate = 
+        boolean isUsingSpeculationByProcessingRate =
             tip.isUsingProcessingRateForSpeculation();
         long taskStartTime = status.getStartTime();
         if (tip.isMapTask()) {
-          metrics.failedMap(taskid, wasFailed, isSpeculative, 
+          metrics.failedMap(taskid, wasFailed, isSpeculative,
               isUsingSpeculationByProcessingRate, taskStartTime);
         } else {
           metrics.failedReduce(taskid, wasFailed, isSpeculative,

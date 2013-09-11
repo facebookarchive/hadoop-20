@@ -184,9 +184,13 @@ public class CoronaJobHistory {
     for (PrintWriter out : writers) {
       out.close();
     }
-    // By clearning the writers, we will prevent JobHistory.moveToDone() from
+    // By clearning the writers and notify the thread waiting on it, 
+    // we will prevent JobHistory.moveToDone() from
     // waiting on writer
-    writers.clear();
+    synchronized (writers) {
+      writers.clear();
+      writers.notifyAll();
+    }
   }
 
   /**

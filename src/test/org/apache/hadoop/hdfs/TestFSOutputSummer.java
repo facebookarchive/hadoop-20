@@ -17,7 +17,6 @@
  */
 package org.apache.hadoop.hdfs;
 
-import junit.framework.TestCase;
 import java.io.*;
 import java.util.Random;
 import org.apache.hadoop.conf.Configuration;
@@ -26,10 +25,14 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 
+import org.junit.After;
+import org.junit.Test;
+import static org.junit.Assert.*;
+
 /**
  * This class tests if FSOutputSummer works correctly.
  */
-public class TestFSOutputSummer extends TestCase {
+public class TestFSOutputSummer {
   private static final long seed = 0xDEADBEEFL;
   private static final int BYTES_PER_CHECKSUM = 10;
   private static final int BLOCK_SIZE = 2*BYTES_PER_CHECKSUM;
@@ -39,6 +42,7 @@ public class TestFSOutputSummer extends TestCase {
   private byte[] expected = new byte[FILE_SIZE];
   private byte[] actual = new byte[FILE_SIZE];
   private FileSystem fileSys;
+  private MiniDFSCluster cluster;
 
   /* create a file, write all data at once */
   private void writeFile1(Path name) throws Exception {
@@ -106,28 +110,52 @@ public class TestFSOutputSummer extends TestCase {
     assertTrue(!fileSys.exists(name));
   }
   
-  /**
-   * Test write opeation for output stream in DFS.
-   */
-  public void testFSOutputSummer() throws Exception {
+  public void setUp(boolean checksumFS) throws Exception {
     Configuration conf = new Configuration();
     conf.setLong("dfs.block.size", BLOCK_SIZE);
     conf.setInt("io.bytes.per.checksum", BYTES_PER_CHECKSUM);
-    conf.set("fs.hdfs.impl",
-             "org.apache.hadoop.hdfs.ChecksumDistributedFileSystem");      
-    MiniDFSCluster cluster = new MiniDFSCluster(
-        conf, NUM_OF_DATANODES, true, null);
-    fileSys = cluster.getFileSystem();
-    try {
-      Path file = new Path("try.dat");
-      Random rand = new Random(seed);
-      rand.nextBytes(expected);
-      writeFile1(file);
-      writeFile2(file);
-      writeFile3(file);
-    } finally {
-      fileSys.close();
-      cluster.shutdown();
+    if (checksumFS) {
+      conf.set("fs.hdfs.impl",
+          "org.apache.hadoop.hdfs.ChecksumDistributedFileSystem");
     }
+    cluster = new MiniDFSCluster(conf, NUM_OF_DATANODES, true,
+        null);
+    fileSys = cluster.getFileSystem();
+  }
+
+  @After
+  public void tearDown() throws Exception {
+    fileSys.close();
+    cluster.shutdown();
+  }
+
+  @Test
+  public void testWriteAndSync() throws Exception {
+    setUp(false);
+    Path file = new Path("/testWriteAndSync");
+    FSDataOutputStream out = fileSys.create(file);
+    for (int i = 0; i < (BYTES_PER_CHECKSUM - 2); i++) {
+      out.write(0);
+    }
+    out.sync();
+    for (int i = 0; i < (BYTES_PER_CHECKSUM - 2); i++) {
+      out.write(0);
+    }
+    byte buffer[] = new byte[1];
+    out.write(buffer, 0, 1);
+  }
+
+  /**
+   * Test write opeation for output stream in DFS.
+   */
+  @Test
+  public void testFSOutputSummer() throws Exception {
+    setUp(true);
+    Path file = new Path("try.dat");
+    Random rand = new Random(seed);
+    rand.nextBytes(expected);
+    writeFile1(file);
+    writeFile2(file);
+    writeFile3(file);
   }
 }

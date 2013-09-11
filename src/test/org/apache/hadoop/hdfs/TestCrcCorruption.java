@@ -29,6 +29,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.ChecksumException;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.io.IOUtils;
 
 /**
@@ -59,6 +60,32 @@ import org.apache.hadoop.io.IOUtils;
  *     replica was created from the non-corrupted replica.
  */
 public class TestCrcCorruption extends TestCase {
+  
+  public void testSmallFileCorruption() throws Exception {
+    long fileSize = 1L;
+    Configuration conf = new Configuration();
+    conf.setInt("dfs.replication", 1);
+    MiniDFSCluster cluster = new MiniDFSCluster(conf, 1, true, null);
+
+    try {
+      cluster.waitActive();
+      FileSystem fs = cluster.getFileSystem();
+      Path file = new Path("/test");
+      DFSTestUtil.createFile(fs, file, fileSize, (short)1, 12345L);
+      Block block = DFSTestUtil.getFirstBlock(fs, file);
+      cluster.corruptBlockOnDataNodes(block);
+      try {
+        IOUtils.copyBytes(fs.open(file), new IOUtils.NullOutputStream(), conf,
+                          true);
+        fail("Didn't get checksum exception");
+      } catch (ChecksumException ioe) {
+        DFSClient.LOG.info("Got expected checksum exception", ioe);
+      }
+    } finally {
+      cluster.shutdown();
+    }
+  }
+
 
   /** 
    * check if DFS can handle corrupted CRC blocks
@@ -249,7 +276,7 @@ public class TestCrcCorruption extends TestCase {
       DFSTestUtil.createFile(fs, file, fileSize, (short)numDataNodes, 12345L /*seed*/);
       DFSTestUtil.waitReplication(fs, file, (short)numDataNodes);
 
-      String block = DFSTestUtil.getFirstBlock(fs, file).getBlockName();
+      Block block = DFSTestUtil.getFirstBlock(fs, file);
       cluster.corruptBlockOnDataNodes(block);
 
       try {

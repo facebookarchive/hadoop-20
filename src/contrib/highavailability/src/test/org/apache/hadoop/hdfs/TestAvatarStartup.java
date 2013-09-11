@@ -1,15 +1,26 @@
 package org.apache.hadoop.hdfs;
 
 import java.io.IOException;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Random;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import junit.framework.TestCase;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniAvatarCluster.NameNodeInfo;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants;
+import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import org.junit.After;
 import org.junit.AfterClass;
@@ -19,6 +30,7 @@ import org.junit.Test;
 
 public class TestAvatarStartup extends FailoverLoadTestUtil {
   private static MiniAvatarCluster cluster;
+  private static final List<AvatarNode> extraNodes = new ArrayList<AvatarNode>();
   private static Configuration conf;
   private static AvatarZooKeeperClient zkClient;
   private static final Random r = new Random();
@@ -41,18 +53,24 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
     conf = new Configuration();
     conf.setBoolean("fs.ha.retrywrites", retrywrites);
     if (federation) {
-      cluster = new MiniAvatarCluster(conf, 1, true, null, null,
-          2 + r.nextInt(4), true);
+      cluster = new MiniAvatarCluster.Builder(conf)
+      		.numNameNodes(2 + r.nextInt(4)).federation(true).enableQJM(false).build();
     } else {
-      cluster = new MiniAvatarCluster(conf, 1, true, null, null);
+      cluster = new MiniAvatarCluster.Builder(conf).enableQJM(false).build();
     }
     zkClient = new AvatarZooKeeperClient(conf, null);
   }
 
   @After
   public void tearDown() throws Exception {
-    zkClient.shutdown();
-    cluster.shutDown();
+    if (zkClient != null)
+      zkClient.shutdown();
+    if (cluster != null)
+      cluster.shutDown();
+    for(AvatarNode an : extraNodes) {
+      an.shutdown(true);
+    }
+    extraNodes.clear();
   }
 
   @AfterClass
@@ -64,7 +82,7 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
     AvatarNode primaryAvatar = cluster.getPrimaryAvatar(index).avatar;
     String address = AvatarNode.getClusterAddress(primaryAvatar
         .getStartupConf());
-    return zkClient.getPrimarySsId(address);
+    return zkClient.getPrimarySsId(address, false);
   }
 
   private void verifyStartup(boolean federation, int index,
@@ -75,6 +93,7 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
   private void verifyStartup(boolean federation, int index,
       boolean singleStartup, boolean standby, boolean forceStartup)
       throws Exception {
+    MiniAvatarCluster.instantiationRetries = 2;
     NameNodeInfo nnInfo = cluster.getNameNode(index);
     String instance = (!standby) ? AvatarConstants.StartupOption.NODEZERO
         .getName() : AvatarConstants.StartupOption.NODEONE.getName();
@@ -95,15 +114,17 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
     AvatarNode primary1 = MiniAvatarCluster.instantiateAvatarNode(
         args,
         MiniAvatarCluster.getServerConf(instance, nnInfo));
+    extraNodes.add(primary1);
     if (singleStartup) {
       if (!standby) {
         assertEquals(primary1.getSessionId(), getSessionId(index));
       }
       return;
     }
-    try {
-      MiniAvatarCluster.instantiateAvatarNode(args, MiniAvatarCluster.getServerConf(
-              instance, nnInfo));
+    try {      
+      AvatarNode second = MiniAvatarCluster.instantiateAvatarNode(args,
+          MiniAvatarCluster.getServerConf(instance, nnInfo));
+      extraNodes.add(second);
       fail("Did not throw exception");
     } catch (Exception e) {
       LOG.info("Expected exception : ", e);
@@ -173,5 +194,54 @@ public class TestAvatarStartup extends FailoverLoadTestUtil {
     loadThread.cancel();
     loadThread.join(30000);
     assertTrue(pass);
+  }
+  
+  @Test
+  public void testStartupWithDNSChange() throws Exception {
+    final AtomicBoolean success = new AtomicBoolean(true);
+    final AtomicBoolean triggered = new AtomicBoolean(false);
+    
+    InjectionHandler.set(new InjectionHandler() {
+      private Object lock = new Object();
+      private Object nameAddr2 = null;
+      private Object avatarAddr2 = null;
+      private boolean called = false;
+      
+      @Override
+      protected void _processEventIO(InjectionEventI event, Object... args)
+          throws IOException {
+        if (event == InjectionEvent.OFFERSERVICE_BEFORE_INIT_PROXY2) {
+          synchronized (lock) {
+            if (nameAddr2 == null) {
+              nameAddr2 = args[0];
+              avatarAddr2 = args[1];
+              throw new ConnectException("test connect exception");
+            }
+          }
+        } else if (event == InjectionEvent.OFFSRSERVICE_AFTER_RESOLVE_ADDRESS2) {
+          triggered.set(true);
+          if (called) {
+            success.set(false);
+          }
+          if (nameAddr2 != args[0] || avatarAddr2 != args[1]) {
+            success.set(false);
+          }
+          called = true;
+        }
+      }
+    });
+    
+    setUp(false, "testStartupWithDNSChange");
+    cluster.shutDownAvatarNodes();
+    int nameNodes = cluster.getNumNameNodes();
+    for (int i = 0; i < nameNodes; i++) {
+      verifyStartup(false, i, false, false);
+    }
+    if (!triggered.get()) {
+      TestCase.fail("Resolving DNS is not triggered");      
+    }
+    if (!success.get()) {
+      TestCase.fail("Failure");
+    }
   }
 }

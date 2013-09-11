@@ -70,8 +70,9 @@ public class TestAvatarDataNodeMXBean {
     conf.setFloat("dfs.namenode.replqueue.threshold-pct", 0f);
     conf.setLong("fs.avatar.standbyfs.initinterval", 1000);
     conf.setLong("fs.avatar.standbyfs.checkinterval", 1000);
-    MiniAvatarCluster cluster = new MiniAvatarCluster(conf, 1, true, null, null, 2, true); 
+    MiniAvatarCluster cluster = null;
     try {
+      cluster = new MiniAvatarCluster(conf, 1, true, null, null, 2, true); 
       List<AvatarDataNode> datanodes = cluster.getDataNodes();
       Assert.assertEquals(datanodes.size(), 1);
       checkMXBean(datanodes.get(0));
@@ -86,8 +87,9 @@ public class TestAvatarDataNodeMXBean {
   @Test
   public void testDataNode() throws Exception {
     Configuration conf = new Configuration();
-    MiniDFSCluster cluster = new MiniDFSCluster(0, conf, 1, true, null, 2);
+    MiniDFSCluster cluster = null;
     try {
+      cluster = new MiniDFSCluster(0, conf, 1, true, null, 2);
       List<DataNode> datanodes = cluster.getDataNodes();
       Assert.assertEquals(datanodes.size(), 1);
       checkMXBean(datanodes.get(0));

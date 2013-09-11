@@ -15,10 +15,11 @@
   NodeManager nm = cm.getNodeManager();
   String cmHostName = StringUtils.simpleHostname(cm.getHostName());
   String type = request.getParameter("type");
+  String resourceType = request.getParameter("resourceType");
 %>
 
 <%!
-  public void generateHostTable(JspWriter out, NodeManager nm, String type) 
+  public void generateHostTable(JspWriter out, NodeManager nm, String type, String resourceType)
         throws IOException {
     out.print("<center>\n");
     Collection<String> nodes = null;
@@ -41,6 +42,19 @@
       Set<String> allNodes = new TreeSet<String>(nm.getAllNodes());
       nodes = allNodes;
       out.println("<h2>All Nodes</h2>");
+    } else if ("free".equals(type)) {
+      List<String> freeNodes = new ArrayList<String>();
+      try {
+        freeNodes = nm.getFreeNodesForType(ResourceType.valueOf(resourceType));
+      } catch (IllegalArgumentException e) {
+        throw new IllegalArgumentException(
+            "Cannot correctly parse resource type " +
+            resourceType + ", must be one of " +
+            Arrays.toString(ResourceType.values()));
+      }
+      Collections.sort(freeNodes);
+      nodes = freeNodes;
+      out.println("<h2>Free " + resourceType + " Nodes</h2>");
     } else {
       return;
     }
@@ -70,8 +84,9 @@
   if ("alive".equals(type) ||
       "blacklisted".equals(type) ||
       "excluded".equals(type) ||
-      "all".equals(type)) {
-    generateHostTable(out, nm, type);
+      "all".equals(type) ||
+      "free".equals(type)) {
+    generateHostTable(out, nm, type, resourceType);
   } else {
     out.println("Unknown type " + type);
   }

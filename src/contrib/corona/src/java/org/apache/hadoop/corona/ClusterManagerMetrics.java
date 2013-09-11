@@ -22,14 +22,15 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
-import org.apache.hadoop.mapred.PoolFairnessCalculator;
 import org.apache.hadoop.metrics.MetricsContext;
 import org.apache.hadoop.metrics.MetricsRecord;
 import org.apache.hadoop.metrics.MetricsUtil;
 import org.apache.hadoop.metrics.Updater;
 import org.apache.hadoop.metrics.util.MetricsBase;
 import org.apache.hadoop.metrics.util.MetricsIntValue;
+import org.apache.hadoop.metrics.util.MetricsLongValue;
 import org.apache.hadoop.metrics.util.MetricsRegistry;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingInt;
 import org.apache.hadoop.metrics.util.MetricsTimeVaryingLong;
@@ -71,6 +72,9 @@ class ClusterManagerMetrics implements Updater {
   private final Map<ResourceType, MetricsIntValue> typeToFreeSlots;
   /** Scheduler run time by resource type. */
   private final Map<ResourceType, MetricsIntValue> typeToSchedulerRunTime;
+  /** The start time of the current run of the scheduler by resource type.
+   * Contains a non 0 value if the cycle is in progress and 0 otherwise */
+  private final Map<ResourceType, Long> typeToSchedulerCurrentCycleStart;
   /** Number of alive nodes. */
   private final MetricsIntValue aliveNodes;
   /** Number of dead nodes. */
@@ -86,10 +90,14 @@ class ClusterManagerMetrics implements Updater {
   private final MetricsTimeVaryingInt totalSessionCount;
   /** Number of pending calls to sessions. */
   private final MetricsIntValue pendingCallsCount;
+  /** Number of CoronaJobTracker failures. */
+  private final MetricsTimeVaryingInt numCJTFailures;
   /** Cluster manager scheduler for metrics */
   private Scheduler scheduler;
   /** Cluster manager session notifier for metrics. */
   private SessionNotifier sessionNotifier;
+  /** Number of task tracker get restarted */
+  private final MetricsIntValue numTaskTrackerRestarted;
 
   /**
    * Constructor.
@@ -107,6 +115,8 @@ class ClusterManagerMetrics implements Updater {
     typeToTotalSlots = createTypeToCountMap(types, "total");
     typeToFreeSlots = createTypeToCountMap(types, "free");
     typeToSchedulerRunTime = createTypeToCountMap(types, "scheduler_runtime");
+    typeToSchedulerCurrentCycleStart =
+        new ConcurrentHashMap<ResourceType, Long>();
     sessionStatusToMetrics = createSessionStatusToMetricsMap();
     aliveNodes = new MetricsIntValue("alive_nodes", registry);
     deadNodes = new MetricsIntValue("dead_nodes", registry);
@@ -114,6 +124,8 @@ class ClusterManagerMetrics implements Updater {
     numRunningSessions = new MetricsIntValue("num_running_sessions", registry);
     totalSessionCount = new MetricsTimeVaryingInt("total_sessions", registry);
     pendingCallsCount = new MetricsIntValue("num_pending_calls", registry);
+    numCJTFailures = new MetricsTimeVaryingInt("num_cjt_failures", registry);
+    numTaskTrackerRestarted = new MetricsIntValue("num_task_tracker_restarted", registry);
   }
 
   /**
@@ -153,7 +165,13 @@ class ClusterManagerMetrics implements Updater {
   }
 
   public void setSchedulerRunTime(ResourceType resourceType, int runtime) {
+    // This is called when the scheduling cycle is complete
+    setSchedulerCurrentCycleStartTime(resourceType, 0);
     typeToSchedulerRunTime.get(resourceType).set(runtime);
+  }
+
+  public void setSchedulerCurrentCycleStartTime(ResourceType resourceType, long tstamp) {
+    typeToSchedulerCurrentCycleStart.put(resourceType, tstamp);
   }
 
   /**
@@ -194,6 +212,14 @@ class ClusterManagerMetrics implements Updater {
    */
   public void setAliveNodes(int numAlive) {
     aliveNodes.set(numAlive);
+  }
+  
+  /**
+   * num of task trackers get restarted
+   * @param num The number of task trackers get restarted
+   */
+  public void restartTaskTracker(int num) {
+    this.numTaskTrackerRestarted.inc(num);
   }
 
   /**
@@ -246,6 +272,13 @@ class ClusterManagerMetrics implements Updater {
    */
   public void setNumPendingCalls(int numPendingCalls) {
     pendingCallsCount.set(numPendingCalls);
+  }
+
+  /**
+   * Records CoronaJobTracker failure.
+   */
+  public void recordCJTFailure() {
+    numCJTFailures.inc();
   }
 
   /**
@@ -332,8 +365,17 @@ class ClusterManagerMetrics implements Updater {
   public void doUpdates(MetricsContext context) {
     // Get the fair scheduler metrics
     if (scheduler != null) {
-      PoolFairnessCalculator.calculateFairness(scheduler.getPoolMetadataList(),
-        metricsRecord);
+      scheduler.submitMetrics(metricsRecord);
+    }
+
+    for (Map.Entry<ResourceType, Long> currStart :
+        typeToSchedulerCurrentCycleStart.entrySet()) {
+      long start = currStart.getValue();
+      if (start > 0) {
+        // This means that there's a scheduling cycle in progress.
+        int currCycleRun = (int)(System.currentTimeMillis() - start);
+        typeToSchedulerRunTime.get(currStart.getKey()).set(currCycleRun);
+      }
     }
 
     // Get the number of pending calls.
@@ -347,5 +389,9 @@ class ClusterManagerMetrics implements Updater {
     }
 
     metricsRecord.update();
+  }
+
+  public MetricsContext getContext() {
+    return context;
   }
 }

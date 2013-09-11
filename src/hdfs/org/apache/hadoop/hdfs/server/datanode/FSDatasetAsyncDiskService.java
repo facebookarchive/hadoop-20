@@ -211,8 +211,12 @@ class FSDatasetAsyncDiskService {
 
     @Override
     public void run() {
-      long dfsBytes = blockFile.length() + metaFile.length();
-      if ( !blockFile.delete() || ( !metaFile.delete() && metaFile.exists() ) ) {
+      long dfsBytes = blockFile.length();
+      if (metaFile != null) {
+        dfsBytes += metaFile.length();
+      }
+      if (!blockFile.delete()
+          || (metaFile != null && !metaFile.delete() && metaFile.exists())) {
         DataNode.LOG.warn("Unexpected error trying to delete block "
             + blockName + " at file " + blockFile + ". Ignored.");
       } else {

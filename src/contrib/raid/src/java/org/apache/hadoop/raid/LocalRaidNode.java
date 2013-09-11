@@ -29,6 +29,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FileStatus;
 
+import org.apache.hadoop.raid.DistRaid.EncodingCandidate;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
 
 /**
@@ -49,7 +50,9 @@ public class LocalRaidNode extends RaidNode {
    */
   @Override
   void raidFiles(PolicyInfo info, List<FileStatus> paths) throws IOException {
-    doRaid(conf, info, paths);
+    List<EncodingCandidate> lec = RaidNode.splitPaths(conf,
+        Codec.getCodec(info.getCodecId()), paths);
+    doRaid(conf, info, lec);
   }
 
   /**

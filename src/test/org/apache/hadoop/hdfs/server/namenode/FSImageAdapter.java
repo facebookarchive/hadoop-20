@@ -19,6 +19,8 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import static org.mockito.Mockito.spy;
 
+import java.lang.reflect.Field;
+
 public class FSImageAdapter {
   public static FSEditLog injectEditLogSpy(FSNamesystem ns) {
     FSImage image = ns.getFSImage();

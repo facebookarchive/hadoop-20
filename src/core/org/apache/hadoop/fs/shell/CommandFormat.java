@@ -52,8 +52,14 @@ public class CommandFormat {
         String opt = args[pos].substring(1);
         if (options.containsKey(opt))
           options.put(opt, Boolean.TRUE);
-        else
-          throw new IllegalArgumentException("Illegal option " + args[pos]);
+        else {
+          try {
+            Long.parseLong(args[pos]);
+            parameters.add(args[pos]);
+          } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Illegal option " + args[pos]);
+          }
+        }
       }
       else
         parameters.add(args[pos]);

@@ -9,7 +9,7 @@
   import="java.lang.Integer"
   import="java.text.SimpleDateFormat"
 %>
-<%! static SimpleDateFormat dateFormat = new SimpleDateFormat("d-MMM-yyyy HH:mm:ss") ;
+<%! static SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm:ss") ;
 
     private String detailsUrl = null;
     private String jobUrl = null;

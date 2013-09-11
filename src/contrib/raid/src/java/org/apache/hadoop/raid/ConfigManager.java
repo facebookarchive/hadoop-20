@@ -60,7 +60,12 @@ class ConfigManager {
 
   public static final int DISTRAID_MAX_JOBS = 10;
 
-  public static final int DISTRAID_MAX_FILES = 10000;
+  public static final int DISTRAID_MAX_FILES = 5000;
+  
+  public static final String DIRRAID_BLOCK_LIMIT_KEY =
+      "hdfs.raid.dir.raid.block.limit";
+  
+  public static final int DEFAULT_DIRRAID_BLOCK_LIMIT = 5000;
 
   /**
    * Time to wait after the config file has been modified before reloading it
@@ -80,6 +85,9 @@ class ConfigManager {
   private int maxJobsPerPolicy; // Max no. of jobs running simultaneously for
                                 // a job.
   private int maxFilesPerJob; // Max no. of files raided by a job.
+  private int maxBlocksPerDirRaidJob; // Max no. of blocks raided by a dir-raid job
+  // the url of the read reconstruction metrics
+  private String readReconstructionMetricsUrl;
 
   // Reload the configuration
   private boolean doReload;
@@ -104,6 +112,10 @@ class ConfigManager {
                                         DISTRAID_MAX_JOBS);
     this.maxFilesPerJob = conf.getInt("raid.distraid.max.files",
                                       DISTRAID_MAX_FILES);
+    this.maxBlocksPerDirRaidJob = conf.getInt(DIRRAID_BLOCK_LIMIT_KEY,
+        DEFAULT_DIRRAID_BLOCK_LIMIT);
+    this.readReconstructionMetricsUrl = conf.get(
+                                "raid.read.reconstruction.metrics.url", "");
     if (configFileName == null) {
       String msg = "No raid.config.file given in conf - " +
                    "the Hadoop Raid utility cannot run. Aborting....";
@@ -164,12 +176,6 @@ class ConfigManager {
           <name>metaReplication</name>
           <value>2</value>
           <description> the replication factor of the RAID meta file
-          </description>
-        </property>
-        <property>
-          <name>stripeLength</name>
-          <value>10</value>
-          <description> the number of blocks to RAID together
           </description>
         </property>
       </policy>
@@ -255,10 +261,10 @@ class ConfigManager {
             String text = ((Text)property.getFirstChild()).getData().trim();
             LOG.info(policyName + ".fileList = " + text);
             curr.setFileListPath(new Path(text));
-          } else if ("erasureCode".equalsIgnoreCase(propertyName)) {
+          } else if ("codecId".equalsIgnoreCase(propertyName)) {
             String text = ((Text)property.getFirstChild()).getData().trim();
-            LOG.info(policyName + ".erasureCode = " + text);
-            curr.setErasureCode(text);
+            LOG.info(policyName + ".codecId = " + text);
+            curr.setCodecId(text);
           } else if ("shouldRaid".equalsIgnoreCase(propertyName)) {
             String text = ((Text)property.getFirstChild()).getData().trim();
             curr.setShouldRaid(Boolean.parseBoolean(text));
@@ -329,6 +335,14 @@ class ConfigManager {
   public synchronized int getMaxFilesPerJob() {
     return maxFilesPerJob;
   }
+  
+  public synchronized int getMaxBlocksPerDirRaidJob() {
+    return maxBlocksPerDirRaidJob;
+  }
+  
+  public synchronized String getReadReconstructionMetricsUrl() {
+    return readReconstructionMetricsUrl;
+  }
 
   /**
    * Get a collection of all policies
@@ -386,5 +400,19 @@ class ConfigManager {
         }
       }
     }
+  }
+  
+  /**
+   * Find the PolicyInfo corresponding to a given policy name
+   * @param policyName the name of a policy
+   * @return PolicyInfo if there is a matched policy; null otherwise
+   */
+  PolicyInfo getPolicy(String policyName) {
+    for (PolicyInfo policy : allPolicies) {
+      if (policyName.equals(policy.getName())) {
+        return policy;
+      }
+    }
+    return null;
   }
 }

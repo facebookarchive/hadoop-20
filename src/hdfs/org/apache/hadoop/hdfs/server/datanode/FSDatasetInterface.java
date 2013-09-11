@@ -19,10 +19,8 @@ package org.apache.hadoop.hdfs.server.datanode;
 
 
 import java.io.Closeable;
-import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.io.File;
 
 
@@ -44,53 +42,6 @@ import org.apache.hadoop.util.DiskChecker.DiskErrorException;
  */
 public interface FSDatasetInterface extends FSDatasetMBean {
 
-  
-  /**
-   * Returns the length of the metadata file of the specified block
-   * @param namespaceId - parent namespace id
-   * @param b - the block for which the metadata length is desired
-   * @return the length of the metadata file for the specified block.
-   * @throws IOException
-   */
-  public long getMetaDataLength(int namespaceId, Block b) throws IOException;
-
-  /**
-   * This class provides the input stream and length of the metadata
-   * of a block
-   *
-   */
-  static class MetaDataInputStream extends FilterInputStream {
-    MetaDataInputStream(InputStream stream, long len) {
-      super(stream);
-      length = len;
-    }
-    private long length;
-    
-    public long getLength() {
-      return length;
-    }
-  }
-  
-  /**
-   * Returns metaData of block b as an input stream (and its length)
-   * @param namespaceId - parent namespace id
-   * @param b - the block
-   * @return the metadata input stream; 
-   * @throws IOException
-   */
-  public MetaDataInputStream getMetaDataInputStream(int namespaceId, Block b)
-        throws IOException;
-  
-  /**
-   * Does the meta file exist for this block?
-   * @param namespaceId - parent namespace id
-   * @param b - the block
-   * @return true of the metafile for specified block exits
-   * @throws IOException
-   */
-  public boolean metaFileExists(int namespaceId, Block b) throws IOException;
-
-
   /**
    * Returns the specified block's on-disk length (excluding metadata)
    * @param namespaceId - parent namespace id
@@ -99,15 +50,6 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    * @throws IOException
    */
   public long getFinalizedBlockLength(int namespaceId, Block b) throws IOException;
-
-  /**
-   * Returns the specified block's visible length (has metadata for this)
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @return   the specified block's visible length
-   * @throws IOException
-   */
-  public long getVisibleLength(int namespaceId, Block b) throws IOException;
 
   /**
    * Get the object which can be used to set visibility for the block
@@ -135,80 +77,7 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    */
   public Block getStoredBlock(int namespaceId, long blkid) throws IOException;
 
-  /**
-   * Returns an input stream to read the contents of the specified block
-   * 
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @return an input stream to read the contents of the specified block
-   * @throws IOException
-   */
-  public InputStream getBlockInputStream(int namespaceId, Block b) throws IOException;
-  
-  /**
-   * Returns an input stream at specified offset of the specified block
-   * 
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @param seekOffset
-   * @return an input stream to read the contents of the specified block,
-   *  starting at the offset
-   * @throws IOException
-   */
-  public InputStream getBlockInputStream(int namespaceId, Block b, long seekOffset)
-            throws IOException;
 
-  /**
-   * Returns an input stream at specified offset of the specified block
-   * The block is still in the tmp directory and is not finalized
-   * 
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @param blkoff
-   * @param ckoff
-   * @return an input stream to read the contents of the specified block,
-   *  starting at the offset
-   * @throws IOException
-   */
-  public BlockInputStreams getTmpInputStreams(int namespaceId, Block b, long blkoff, long ckoff)
-            throws IOException;
-
-     /**
-      * 
-      * This class contains the output streams for the data and checksum
-      * of a block
-      *
-      */
-     static class BlockWriteStreams {
-      OutputStream dataOut;
-      OutputStream checksumOut;
-      BlockWriteStreams(OutputStream dOut, OutputStream cOut) {
-        dataOut = dOut;
-        checksumOut = cOut;
-      }
-      
-    }
-
-  /**
-   * This class contains the input streams for the data and checksum
-   * of a block
-   */
-  static class BlockInputStreams implements Closeable {
-    final InputStream dataIn;
-    final InputStream checksumIn;
-
-    BlockInputStreams(InputStream dataIn, InputStream checksumIn) {
-      this.dataIn = dataIn;
-      this.checksumIn = checksumIn;
-    }
-
-    /** {@inheritDoc} */
-    public void close() {
-      IOUtils.closeStream(dataIn);
-      IOUtils.closeStream(checksumIn);
-    }
-  }
-    
   /**
    * Creates the block and returns output streams to write data and CRC
    * 
@@ -220,8 +89,9 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    *  and CRC
    * @throws IOException
    */
-  public BlockWriteStreams writeToBlock(int namespaceId, Block b, boolean isRecovery, 
-                                        boolean isReplicationRequest) throws IOException;
+  public DatanodeBlockWriter writeToBlock(int namespaceId, Block b, Block oldBlock,
+      boolean isRecovery, boolean isReplicationRequest, int checksumType,
+      int bytePerChecksum) throws IOException;
 
   /**
    * Update the block to the new generation stamp and length.  
@@ -321,33 +191,6 @@ public interface FSDatasetInterface extends FSDatasetMBean {
   public void shutdown();
 
   /**
-   * Returns the current offset in the data stream.
-   * 
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @param stream The stream to the data file and checksum file
-   * @return the position of the file pointer in the data stream
-   * @throws IOException
-   */
-  public long getChannelPosition(int namespaceId, Block b, BlockWriteStreams stream) throws IOException;
-
-  /**
-   * Sets the file pointer of the data stream and checksum stream to
-   * the specified values.
-   * 
-   * @param namespaceId - parent namespace id
-   * @param b
-   * @param stream The stream for the data file and checksum file
-   * @param dataOffset The position to which the file pointre for the data stream
-   *        should be set
-   * @param ckOffset The position to which the file pointre for the checksum stream
-   *        should be set
-   * @throws IOException
-   */
-  public void setChannelPosition(int namespaceId, Block b, BlockWriteStreams stream, long dataOffset,
-                                 long ckOffset) throws IOException;
-
-  /**
    * Validate that the contents in the Block matches
    * the file on disk. Returns true if everything is fine.
    * 
@@ -369,6 +212,24 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    * @param b - block
    **/
   public File getBlockFile(int namespaceId, Block b) throws IOException;
+
+  /** 
+   * Get replica information for a given data block.  
+   * @param namespaceId - parent namespace id 
+   * @param b - block 
+   **/  
+  public DatanodeBlockInfo getDatanodeBlockInfo(int namespaceId, Block b) throws IOException;
+  
+  /**
+   * Return a replicaToRead object that can fetch file location and
+   * size information.
+   * @param namespaceId
+   * @param blockId
+   * @return
+   */
+  public ReplicaToRead getReplicaToRead(int namespaceId, Block block)
+      throws IOException;  
+
 
   /**
    * Copies over a block from a block file, note that the block file might be a
@@ -435,4 +296,5 @@ public interface FSDatasetInterface extends FSDatasetMBean {
    * @return the number of blocks in the namespace
    */
   public long size(int namespaceId);
+
 }

@@ -64,17 +64,28 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
   private int clientTimeout;
   private TServer tserver;
 
-  private FileSystem getFileSystem(String name) throws IOException,
+  private FileSystem getFileSystem(String name, boolean unique) throws IOException,
       URISyntaxException {
-    return FileSystem.get(new URI(name), conf);
+    URI uri = new URI(name);
+    if (!unique) {
+      return FileSystem.get(uri, conf);
+    } else {
+      return FileSystem.newInstance(uri, conf);
+    }
   }
   
   @Override
-  public void copyFromLocal(String src, String dest)
+  public void copyFromLocal(String src, String dest, boolean validate)
       throws FsShellException, TException {
     LOG.info("copy from local: src: " + src + " dest: " + dest);
     try {
-      getFileSystem(dest).copyFromLocalFile(new Path(src), new Path(dest));
+      FileSystem fs = getFileSystem(dest, true);
+      try {
+        fs.copyFromLocalFile(false, false, validate, new Path(src), new Path(
+            dest));
+      } finally {
+        fs.close();
+      }
     } catch (IOException e) {
       throw new FsShellException(e.toString());
     } catch (URISyntaxException e) {
@@ -83,12 +94,14 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
   }
 
   @Override
-  public void copyToLocal(String src, String dest) throws FsShellException,
-      TException {
+  public void copyToLocal(String src, String dest, boolean validate)
+      throws FsShellException, TException {
     LOG.info("copy to local: src: " + src + " dest: " + dest);
     try {
-      getFileSystem(src).copyToLocalFile(new Path(src), new Path(dest));
+      getFileSystem(src, false).copyToLocalFile(false, validate, new Path(src),
+          new Path(dest));
     } catch (IOException e) {
+      LOG.info("copyToLocal IOException", e);
       throw new FsShellException(e.toString());
     } catch (URISyntaxException e) {
       throw new FsShellException(e.toString());
@@ -101,17 +114,9 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
     LOG.info("remove: src: " + path + " recusive: " + recursive
         + " skipTrash: " + skipTrash);
     try {
-      FileSystem fs = getFileSystem(path);
-      if (!skipTrash) {
-        return getFileSystem(path).delete(new Path(path), recursive);
-      } else {
-        DistributedFileSystem dfs = DFSUtil.convertToDFS(fs);
-        if (dfs == null) {
-          throw new FsShellException(path + " is not a distributed path");
-        }
-        return dfs.getClient().delete(path, recursive);
-      }
+      return getFileSystem(path, false).delete(new Path(path), recursive, skipTrash);
     } catch (IOException e) {
+      LOG.info("remove IOException", e);
       throw new FsShellException(e.toString());
     } catch (URISyntaxException e) {
       throw new FsShellException(e.toString());
@@ -122,8 +127,9 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
   public boolean mkdirs(String f) throws FsShellException, TException {
     LOG.info("mkdir f: " + f);
     try {
-      return getFileSystem(f).mkdirs(new Path(f));
+      return getFileSystem(f, false).mkdirs(new Path(f));
     } catch (IOException e) {
+      LOG.info("mkdirs IOException", e);
       throw new FsShellException(e.toString());
     } catch (URISyntaxException e) {
       throw new FsShellException(e.toString());
@@ -135,8 +141,9 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
       TException {
     LOG.info("rename: src: " + src + " dest: " + dest);
     try {
-      return getFileSystem(src).rename(new Path(src), new Path(dest));
+      return getFileSystem(src, false).rename(new Path(src), new Path(dest));
     } catch (IOException e) {
+      LOG.info("src IOException", e);
       throw new FsShellException(e.toString());
     } catch (URISyntaxException e) {
       throw new FsShellException(e.toString());
@@ -148,7 +155,7 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
       FsShellFileNotFoundException, TException {
     LOG.info("listStatus: path: " + path);
     try {
-      FileStatus[] fsArray =  getFileSystem(path).listStatus(new Path(path));
+      FileStatus[] fsArray =  getFileSystem(path, false).listStatus(new Path(path));
       if (fsArray == null) {
         // directory doesn't exist
         throw new FsShellFileNotFoundException("The directory doesn't exist.");
@@ -160,6 +167,7 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
       }
       return retList;
     } catch (IOException e) {
+      LOG.info("listStatus IOException", e);
       throw new FsShellException(e.toString());
     } catch (URISyntaxException e) {
       throw new FsShellException(e.toString());
@@ -171,7 +179,7 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
       FsShellFileNotFoundException, TException {
     LOG.info("getFileStatus: path: " + path);
     try {
-      FileSystem fs = getFileSystem(path);
+      FileSystem fs = getFileSystem(path, false);
       FileStatus fi = fs.getFileStatus(new Path(path));
 
       if (fi != null) {
@@ -182,8 +190,10 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
         throw new FsShellFileNotFoundException("File does not exist: " + path);
       }
     } catch (FileNotFoundException fnfe) {
+      LOG.info("getFileStatus FileNotFoundException", fnfe);
       throw new FsShellFileNotFoundException(fnfe.getMessage());
     } catch (IOException e) {
+      LOG.info("getFileStatus IOException", e);
       throw new FsShellException(e.toString());
     } catch (URISyntaxException e) {
       throw new FsShellException(e.toString());
@@ -194,15 +204,28 @@ public class FsShellServiceImpl implements FsShellService.Iface, Runnable {
   public boolean exists(String path) throws FsShellException, TException {
     LOG.info("exists: path: " + path);
     try {
-      return getFileSystem(path).exists(new Path(path));
+      return getFileSystem(path, false).exists(new Path(path));
     } catch (IOException e) {
+      LOG.info("exists IOException", e);
       throw new FsShellException(e.toString());
     } catch (URISyntaxException e) {
       throw new FsShellException(e.toString());
     }
   }
 
-  
+  @Override
+  public int getFileCrc(String path) throws FsShellException, TException {
+    LOG.info("getFileCrc: path: " + path);
+    try {
+      return getFileSystem(path, false).getFileCrc(new Path(path));
+    } catch (IOException e) {
+      LOG.info("getFileCrc IOException", e);
+      throw new FsShellException(e.toString());
+    } catch (URISyntaxException e) {
+      throw new FsShellException(e.toString());
+    }
+  }
+
   private void initThriftServer(int port, int maxQueue) {
     // Setup the Thrift server
     LOG.info("Setting up Thrift server listening port " + port);

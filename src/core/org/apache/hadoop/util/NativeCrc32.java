@@ -18,14 +18,58 @@
 package org.apache.hadoop.util;
 
 import java.nio.ByteBuffer;
+import java.util.zip.Checksum;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.ChecksumException;
 
 /**
  * Wrapper around JNI support code to do checksum computation
  * natively.
  */
-class NativeCrc32 {
+public class NativeCrc32 implements Checksum {
+  static {
+    NativeCodeLoader.isNativeCodeLoaded();
+  }
+  /** the current CRC value, bit-flipped */
+  private int crc;
+  private final PureJavaCrc32 pureJavaCrc32 = new PureJavaCrc32();
+  private final PureJavaCrc32C pureJavaCrc32C = new PureJavaCrc32C();
+  private int checksumType = CHECKSUM_CRC32;
+
+  private boolean isAvailable = true;
+  // Local benchmarks show that for >= 128 bytes, NativeCrc32 performs
+  // better than PureJavaCrc32.
+  private static final int SMALL_CHECKSUM = 128;
+  private static final Log LOG = LogFactory.getLog(NativeCrc32.class);
+
+  public NativeCrc32(int checksumType) {
+    this();
+    if (checksumType != CHECKSUM_CRC32 && checksumType != CHECKSUM_CRC32C) {
+      throw new IllegalArgumentException("Invalid checksum type");
+    }
+    this.checksumType = checksumType;
+  }
+
+  public NativeCrc32() {
+    isAvailable = isAvailable();
+    reset();
+  }
+
+  /** {@inheritDoc} */
+  public long getValue() {
+     return (~crc) & 0xffffffffL;
+  }
+
+  public void setValue(int crc) {
+    this.crc = ~crc;
+  }
+
+  /** {@inheritDoc} */
+  public void reset() {
+     crc = 0xffffffff;
+  }
   
   /**
    * Return true if the JNI-based native CRC extensions are available.
@@ -59,6 +103,42 @@ class NativeCrc32 {
         data, data.position(), data.remaining(),
         fileName, basePos);
   }
+
+  public void update(int b) {
+    byte[] buf = new byte[1];
+    buf[0] = (byte)b;
+    update(buf, 0, buf.length);
+  }
+
+  private void updatePureJava(byte[] buf, int offset, int len) {
+    if (checksumType == CHECKSUM_CRC32) {
+      pureJavaCrc32.setValueInternal(crc);
+      pureJavaCrc32.update(buf, offset, len);
+      crc = pureJavaCrc32.getCrcValue();
+    } else {
+      pureJavaCrc32C.setValueInternal(crc);
+      pureJavaCrc32C.update(buf, offset, len);
+      crc = pureJavaCrc32C.getCrcValue();
+    }
+  }
+
+  public void update(byte[] buf, int offset, int len) {
+    // To avoid JNI overhead, use native methods only for large checksum chunks.
+    if (isAvailable && len >= SMALL_CHECKSUM) {
+      try {
+        crc = update(crc, buf, offset, len, checksumType);
+      } catch (UnsatisfiedLinkError ule) {
+        isAvailable = false;
+        LOG.warn("Could not find native crc32 libraries," +
+            " falling back to pure java", ule);
+        updatePureJava(buf, offset, len);
+      }
+    } else {
+      updatePureJava(buf, offset, len);
+    }
+  }
+
+  public native int update(int crc, byte[] buf, int offset, int len, int checksumType);
   
   private static native void nativeVerifyChunkedSums(
       int bytesPerSum, int checksumType,

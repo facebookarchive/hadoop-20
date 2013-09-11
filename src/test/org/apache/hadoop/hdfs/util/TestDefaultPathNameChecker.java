@@ -15,6 +15,11 @@ public class TestDefaultPathNameChecker extends TestCase {
     assertFalse(d.isValidPath("/:abc/dd"));
     assertFalse(d.isValidPath("/abc//dd"));
     assertTrue(d.isValidPath("/test-1/test.-1/tEsT.1-.TesT"));
+
+    // No newlines and tabs allowed.
+    assertFalse(d.isValidPath("/abc\n/dd"));
+    assertFalse(d.isValidPath("/abc\r/dd"));
+    assertFalse(d.isValidPath("/abc/\tdd"));
   }
 
   public void testisValidPath() {

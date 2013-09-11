@@ -84,12 +84,21 @@ public class DirectoryTraversal {
   public DirectoryTraversal(String friendlyName, Collection<Path> roots,
       FileSystem fs, Filter filter, int numThreads, boolean doShuffle)
       throws IOException {
-    this(friendlyName, roots, fs, filter, numThreads, doShuffle, false);
+    this(friendlyName, roots, fs, filter, numThreads, doShuffle, false,
+        false);
+  }
+  
+  public DirectoryTraversal(String friendlyName, Collection<Path> roots,
+      FileSystem fs, Filter filter, int numThreads, boolean doShuffle, 
+      boolean allowUseStandby)
+      throws IOException {
+    this(friendlyName, roots, fs, filter, numThreads, doShuffle, 
+        allowUseStandby, false);
   }
 
   public DirectoryTraversal(String friendlyName, Collection<Path> roots,
       FileSystem fs, Filter filter, int numThreads, boolean doShuffle,
-      boolean allowUseStandby)
+      boolean allowUseStandby, boolean checkLeafDir)
       throws IOException {
     this.output = new ArrayBlockingQueue<FileStatus>(OUTPUT_QUEUE_SIZE);
     this.directories = new LinkedBlockingDeque<Path>();
@@ -124,7 +133,11 @@ public class DirectoryTraversal {
       return;
     }
     for (int i = 0; i < processors.length; ++i) {
-      processors[i] = new Processor();
+      if (checkLeafDir) {
+        processors[i] = new LeafDirectoryProcessor();
+      } else {
+        processors[i] = new Processor();
+      }
       processors[i].setName(friendlyName + i);
     }
     for (int i = 0; i < processors.length; ++i) {
@@ -164,6 +177,42 @@ public class DirectoryTraversal {
       }
     }
   }
+  
+  private class LeafDirectoryProcessor extends Processor {
+    @Override
+    protected void filterDirectory(Path dir, List<Path> subDirs,
+        List<FileStatus> filtered) throws IOException {
+      subDirs.clear();
+      filtered.clear();
+      if (dir == null) {
+        return;
+      }
+      FileStatus[] elements;
+      if (avatarFs != null) {
+        elements = avatarFs.listStatus(dir, true);
+      } else {
+        elements = fs.listStatus(dir);
+      }
+      cache.clear();
+      if (elements != null) {
+        boolean isLeafDir = true;
+        for (FileStatus element : elements) {
+          if (element.isDir()) {
+            subDirs.add(element.getPath());
+            isLeafDir = false;
+          }
+        }
+        if (isLeafDir && elements.length > 0) {
+          FileStatus dirStat = avatarFs != null?
+              avatarFs.getFileStatus(dir): 
+              fs.getFileStatus(dir);
+          if (filter.check(dirStat)) {
+            filtered.add(dirStat);
+          }
+        }
+      }
+    }
+  }
 
   private class Processor extends Thread {
     /* This cache is used to reduce the number of RPC calls, instead of running listLocatedStatus for each file, 
@@ -171,7 +220,7 @@ public class DirectoryTraversal {
      * files under the same directory, only few RPC call is needed to get LocatedFileStatus of these files.
      * Please check PlacementMonitor.getLocatedFileStatus for more details.  
      */
-    private HashMap<String, LocatedFileStatus> cache;
+    protected HashMap<String, LocatedFileStatus> cache;
     @Override
     public void run() {
       this.cache = PlacementMonitor.locatedFileStatusCache.get();
@@ -218,7 +267,7 @@ public class DirectoryTraversal {
       }
     }
 
-    private void filterDirectory(Path dir, List<Path> subDirs,
+    protected void filterDirectory(Path dir, List<Path> subDirs,
         List<FileStatus> filtered) throws IOException {
       subDirs.clear();
       filtered.clear();
@@ -289,7 +338,7 @@ public class DirectoryTraversal {
 
   public static DirectoryTraversal directoryRetriever(
       List<Path> roots, FileSystem fs, int numThreads, boolean doShuffle,
-      boolean allowUseStandby)
+      boolean allowUseStandby, boolean checkLeafDir)
       throws IOException {
     Filter filter = new Filter() {
       @Override
@@ -298,7 +347,14 @@ public class DirectoryTraversal {
       }
     };
     return new DirectoryTraversal("Directory Retriever ", roots, fs, filter,
-      numThreads, doShuffle, allowUseStandby);
+      numThreads, doShuffle, allowUseStandby, checkLeafDir);
+  }
+  
+  public static DirectoryTraversal directoryRetriever(
+      List<Path> roots, FileSystem fs, int numThreads, boolean doShuffle,
+      boolean allowUseStandby) throws IOException {
+    return directoryRetriever(roots, fs, numThreads, 
+              doShuffle, allowUseStandby, false);
   }
 
   public static DirectoryTraversal directoryRetriever(
@@ -326,6 +382,33 @@ public class DirectoryTraversal {
     };
     FileSystem fs = new Path(Path.SEPARATOR).getFileSystem(conf);
     return new DirectoryTraversal("Raid File Retriever ", roots, fs, filter,
-      numThreads, doShuffle, allowStandby);
+      numThreads, doShuffle, allowStandby, false);
+  }
+  
+  public static DirectoryTraversal raidLeafDirectoryRetriever(
+      final PolicyInfo info, List<Path> roots, Collection<PolicyInfo> allInfos,
+      final Configuration conf, int numThreads, boolean doShuffle,
+      boolean allowStandby)
+      throws IOException {
+    final RaidState.Checker checker = new RaidState.Checker(allInfos, conf);
+    final FileSystem fs = FileSystem.get(conf);
+    Filter filter = new Filter() {
+      @Override
+      public boolean check(FileStatus f) throws IOException {
+        long now = RaidNode.now();
+        if (!f.isDir()) {
+          return false;
+        }
+        List<FileStatus> lfs = RaidNode.listDirectoryRaidFileStatus(conf,
+            fs, f.getPath());
+        RaidState state = checker.check(info, f, now, false, lfs);
+        if (LOG.isDebugEnabled()) {
+          LOG.debug(f.getPath() + " : " + state);
+        }
+        return state == RaidState.NOT_RAIDED_BUT_SHOULD;
+      }
+    };
+    return new DirectoryTraversal("Raid File Retriever ", roots, fs, filter,
+      numThreads, doShuffle, allowStandby, true);
   }
 }

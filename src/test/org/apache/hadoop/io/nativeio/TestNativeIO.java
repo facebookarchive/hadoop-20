@@ -214,6 +214,31 @@ public class TestNativeIO {
     assertPermissions(toChmod, 0644);
   }
 
+  /**
+   * Test basic fsync operations.
+   */
+  @Test
+  public void testFsync() throws Exception {
+    // Test fsync on invalid dir.
+    File testDir = new File(TEST_DIR, "testfsyncdir");
+    testDir.deleteOnExit();
+    try {
+      NativeIO.fsync(testDir.getAbsolutePath());
+      fail("Did not throw exception");
+    } catch (IOException ie) {
+      LOG.info("Got expected exception", ie);
+    }
+
+    // Test fsync on valid dir.
+    assertTrue(testDir.mkdirs());
+    NativeIO.fsync(testDir.getAbsolutePath());
+
+    // Test fsync on file.
+    File testF = new File(TEST_DIR, "testfsyncfile");
+    testF.deleteOnExit();
+    testF.createNewFile();
+    NativeIO.fsync(testF.getAbsolutePath());
+  }
 
   @Test
   public void testPosixFadvise() throws Exception {
@@ -411,11 +436,152 @@ public class TestNativeIO {
     fail("No Exception thrown");
   }
 
+  @Test
+  public void testClockGetTimeNative() throws IOException {
+    // get first time
+    NativeIO.TimeSpec t1 = new NativeIO.TimeSpec();
+    NativeIO.clock_gettime(NativeIO.CLOCK_REALTIME, t1);
+    if(t1.tv_sec == 0 && t1.tv_nsec == 0)
+      fail("clock_gettime returned 0 for the time.");
+
+    // get second time
+    NativeIO.TimeSpec t2 = new NativeIO.TimeSpec();
+    NativeIO.clock_gettime(NativeIO.CLOCK_REALTIME, t2);
+    if(t2.tv_sec == 0 && t2.tv_nsec == 0)
+      fail("clock_gettime returned 0 for the time.");
+
+    // make sure time hasn't gone backwards
+    if(t2.tv_sec < t1.tv_sec ||
+       (t2.tv_sec == t1.tv_sec && t2.tv_nsec < t1.tv_nsec))
+      fail("2nd call to clock_gettime returned smaller value than 1s call");
+  }
+
+  @Test
+  public void testClockGetTimeNull() throws IOException {
+    try {
+      NativeIO.clock_gettime(NativeIO.CLOCK_REALTIME, null);
+    } catch (IOException ioe) {
+      LOG.info("Got expected exception", ioe);
+      return;
+    }
+    fail("No exception throw");
+  }
+
+  @Test
+  public void testClockGetTimeWithInvalidClock() throws IOException {
+    try {
+      // use a garbage number (i.e., 53715) for which_clock
+      NativeIO.clock_gettime(53715, null);
+    } catch (IOException ioe) {
+      LOG.info("Got expected exception", ioe);
+      return;
+    }
+    fail("No exception throw");
+  }
+
+  @Test
+  public void testClockGetTimeEachClock() throws IOException {
+    NativeIO.TimeSpec t = new NativeIO.TimeSpec();
+    NativeIO.clock_gettime(NativeIO.CLOCK_REALTIME, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_MONOTONIC, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_PROCESS_CPUTIME_ID, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_THREAD_CPUTIME_ID, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_MONOTONIC_RAW, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_REALTIME_COARSE, t);
+    NativeIO.clock_gettime(NativeIO.CLOCK_MONOTONIC_COARSE, t);
+  }
+
+  @Test
+  public void testClockGetTimeIfPossible() throws IOException {
+    // get first time
+    NativeIO.TimeSpec t1 = new NativeIO.TimeSpec();
+    NativeIO.clockGetTimeIfPossible(NativeIO.CLOCK_REALTIME, t1);
+    if(t1.tv_sec == 0 && t1.tv_nsec == 0)
+      fail("clockGetTimeIfPossible returned 0 for the time.");
+
+    // get second time
+    NativeIO.TimeSpec t2 = new NativeIO.TimeSpec();
+    NativeIO.clockGetTimeIfPossible(NativeIO.CLOCK_REALTIME, t2);
+    if(t2.tv_sec == 0 && t2.tv_nsec == 0)
+      fail("clockGetTimeIfPossible returned 0 for the time.");
+
+    // make sure time hasn't gone backwards
+    if(t2.tv_sec < t1.tv_sec ||
+       (t2.tv_sec == t1.tv_sec && t2.tv_nsec < t1.tv_nsec))
+      fail("2nd call to clockGetTimeIfPossible returned "+
+           "smaller value than 1s call");
+  }
+
+  @Test
+  public void testFileRangeSync() throws IOException {
+    File testFile = new File(TEST_DIR, "fileRangeSync");
+    testFile.deleteOnExit();
+    FileOutputStream out = new FileOutputStream(testFile);
+    try {
+      byte[] buffer = new byte[8096];
+      random.nextBytes(buffer);
+      out.write(buffer);
+      NativeIO.syncFileRangeIfPossible(out.getFD(), 0, 8096,
+          NativeIO.SYNC_FILE_RANGE_WRITE);
+    } finally {
+      out.close();
+    }
+  }
+
+  @Test
+  public void testIoprioSet() throws IOException {
+    // TODO : figure out how to test IOPRIO_CLASS_RT and IOPRIO_CLASS_IDLE,
+    // currently they need CAP_SYS_ADMIN capablilities for the current process.
+    for (int i = 0; i < 8; i++) {
+      NativeIO.ioprio_set(NativeIO.IOPRIO_CLASS_BE, i);
+    }
+  }
+
+  @Test
+  public void testIoprioSet1() throws IOException {
+    for (int i = 0; i < 8; i++) {
+      NativeIO.ioprio_set((NativeIO.IOPRIO_CLASS_BE << 13) | i);
+    }
+  }
+
+  @Test
+  public void testIoprioSetGet() throws IOException {
+    NativeIO.ioprio_set(NativeIO.IOPRIO_CLASS_BE, 5);
+    assertEquals((NativeIO.IOPRIO_CLASS_BE << 13) | 5,
+        NativeIO.ioprio_get());
+  }
+
+  @Test(expected=IOException.class)
+  public void testIoprioSet1Err1() throws IOException {
+    NativeIO.ioprio_set((NativeIO.IOPRIO_CLASS_BE << 13) | (-1));
+  }
+
+  @Test(expected=IOException.class)
+  public void testIoprioSetErr1() throws IOException {
+    NativeIO.ioprio_set(NativeIO.IOPRIO_CLASS_BE, -1);
+  }
+
+  @Test(expected=IOException.class)
+  public void testIoprioSetErr2() throws IOException {
+    // Only 0-7 is allowed.
+    NativeIO.ioprio_set(NativeIO.IOPRIO_CLASS_BE, 8);
+  }
+
+  @Test(expected=IOException.class)
+  public void testIoprioSetErr3() throws IOException {
+    NativeIO.ioprio_set(-1, 1);
+  }
+
+  @Test(expected=IOException.class)
+  public void testIoprioSetErr4() throws IOException {
+    // only 0-3 class of service supported.
+    NativeIO.ioprio_set(4, 1);
+  }
+
   private void assertPermissions(File f, int expected) throws IOException {
     FileSystem localfs = FileSystem.getLocal(new Configuration());
     FsPermission perms = localfs.getFileStatus(
       new Path(f.getAbsolutePath())).getPermission();
     assertEquals(expected, perms.toShort());
   }
-
 }

@@ -7,9 +7,8 @@
   import="org.apache.hadoop.mapred.*"
   import="org.apache.hadoop.util.*"
   import="java.lang.Integer"
-  import="java.text.SimpleDateFormat"
 %>
-<%! static SimpleDateFormat dateFormat = new SimpleDateFormat("d-MMM-yyyy HH:mm:ss") ;
+<%! 
 
 	private String tasksUrl = null;
 	private String jobUrl = null;

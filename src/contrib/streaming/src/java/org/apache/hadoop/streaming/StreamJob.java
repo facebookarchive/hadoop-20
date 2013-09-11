@@ -106,6 +106,23 @@ public class StreamJob implements Tool {
   
   @Override
   public int run(String[] args) throws Exception {
+    // Set up graceful shutdowns
+    Runtime.getRuntime().addShutdownHook(new Thread() {
+      @Override
+      public void run() {
+        if (running_ != null) {
+          try {
+            if (!running_.isComplete()) {
+              LOG.warn("killing " + running_.getTrackingURL());
+              running_.killJob();
+            }
+          } catch (IOException e) {
+            LOG.error("error killing " + running_.getID(), e);
+          }
+        }
+      }
+    });
+
     try {
       this.argv_ = args;
       init();

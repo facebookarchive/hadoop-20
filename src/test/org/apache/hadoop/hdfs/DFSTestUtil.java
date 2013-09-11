@@ -25,25 +25,33 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Random;
+
 import junit.framework.TestCase;
-import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
-import org.apache.hadoop.hdfs.protocol.Block;
-import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
-import org.apache.hadoop.hdfs.protocol.LocatedBlock;
-import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.hdfs.server.datanode.DataNode;
-import org.apache.hadoop.io.IOUtils;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.BlockLocation;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
+import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.BlockPathInfo;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
+import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+import org.apache.hadoop.hdfs.server.datanode.DataNode;
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
+import org.apache.hadoop.io.IOUtils;
 
 /**
  */
@@ -132,15 +140,23 @@ public class DFSTestUtil extends TestCase {
     }
   }
   
-  public static void createFile(FileSystem fs, Path fileName, long fileLen, 
-      short replFactor, long seed) throws IOException {
+  public static void createFile(FileSystem fs, Path fileName, long fileLen,
+      short replFactor, long seed, InetSocketAddress[] favoredNodes) throws IOException{
     if (!fs.mkdirs(fileName.getParent())) {
       throw new IOException("Mkdirs failed to create " + 
                             fileName.getParent().toString());
     }
     FSDataOutputStream out = null;
     try {
-      out = fs.create(fileName, replFactor);
+      if (favoredNodes == null){
+        out = fs.create(fileName, replFactor);
+      } else {
+        out = ((DistributedFileSystem) fs).create(fileName, FsPermission.getDefault(), true, fs
+            .getConf().getInt("io.file.buffer.size", 4096), replFactor, fs.getDefaultBlockSize(),
+            fs.getConf().getInt("io.bytes.per.checksum", FSConstants.DEFAULT_BYTES_PER_CHECKSUM),
+            null, favoredNodes);
+      }
+
       byte[] toWrite = new byte[1024];
       Random rb = new Random(seed);
       long bytesToWrite = fileLen;
@@ -158,6 +174,11 @@ public class DFSTestUtil extends TestCase {
     }
   }
   
+  public static void createFile(FileSystem fs, Path fileName, long fileLen,
+      short replFactor, long seed) throws IOException {
+    createFile(fs, fileName, fileLen, replFactor, seed, null);
+  }
+
   /** check if the files have been copied correctly. */
   public boolean checkFiles(FileSystem fs, String topdir) throws IOException {
     
@@ -263,7 +284,7 @@ public class DFSTestUtil extends TestCase {
         ).getLogger().setLevel(org.apache.log4j.Level.ALL);
   }
 
-  static String readFile(File f) throws IOException {
+  public static String readFile(File f) throws IOException {
     StringBuilder b = new StringBuilder();
     BufferedReader in = new BufferedReader(new FileReader(f));
     for(int c; (c = in.read()) != -1; b.append((char)c));
@@ -326,7 +347,60 @@ public class DFSTestUtil extends TestCase {
 
     return datanode.getBlockPathInfo(lastblock);
   }
+  
 
+  /**
+   * Recursively delete the contents of dir, but not the dir itself. Deletes any
+   * subdirectory which is empty after its files are deleted.
+   */
+  public static int deleteContents(File dir) {
+    return deleteContents(dir, true);
+  }
+
+  /**
+   * Recursively delete the contents of dir, but not the dir itself. If
+   * deleteEmptyDirs is true, this deletes any subdirectory which is empty after
+   * its files are deleted.
+   */
+  public static int deleteContents(File dir, boolean deleteEmptyDirs) {
+    if (null == dir) {
+      throw new IllegalArgumentException("null dir");
+    }
+    if ((!dir.exists()) || (!dir.canWrite())) {
+      return 0;
+    }
+    if (!dir.isDirectory()) {
+      dir.delete();
+      return 1;
+    }
+    String[] fromFiles = dir.list();
+    int result = 0;
+    for (int i = 0; i < fromFiles.length; i++) {
+      String string = fromFiles[i];
+      File file = new File(dir, string);
+      if (file.isDirectory()) {
+        result += deleteContents(file, deleteEmptyDirs);
+        if (deleteEmptyDirs && (0 == file.list().length)) {
+          file.delete();
+        }
+      } else {
+        file.delete();
+        result++;
+      }
+    }
+    return result;
+  }
+  
+  // extracts only the file:// entries from the list of given URIS
+  public static Collection<File> getFileStorageDirs(Collection<URI> uris) {
+    ArrayList<File> directories = new ArrayList<File>();
+    for (URI uri : uris) {
+      if (uri.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0) {
+        directories.add(new File(uri.getPath()));
+      }
+    }
+    return directories;
+  }
   
   // sleep for one second
   public static void waitSecond() {
@@ -343,6 +417,16 @@ public class DFSTestUtil extends TestCase {
     try {
       LOG.info("Waiting.....");
       Thread.sleep(n * 1000);
+    } catch (InterruptedException e) {
+      return;
+    }
+  }
+  
+  // sleep for n milliseconds
+  public static void waitNMilliSecond(int n) {
+    try {
+      LOG.info("Waiting.....");
+      Thread.sleep(n);
     } catch (InterruptedException e) {
       return;
     }

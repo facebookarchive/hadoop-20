@@ -20,6 +20,7 @@ package org.apache.hadoop.mapred;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.Collections;
 import java.util.HashMap;
@@ -58,6 +59,7 @@ public class TaskErrorCollector implements Updater {
   public static final String NUM_WINDOWS_KEY = "mapred.taskerrorcollector.window.number";
   public static final String WINDOW_LENGTH_KEY = "mapred.taskerrorcollector.window.milliseconds";
   public static final String CONFIG_FILE_KEY = "mapred.taskerrorcollector.error.file";
+  public static final String COUNTER_GROUP_NAME = "TaskError";
   
   public static final Log LOG = LogFactory.getLog(TaskErrorCollector.class);
   
@@ -74,41 +76,58 @@ public class TaskErrorCollector implements Updater {
   private long lastWindowIndex = 0;
   private final int windowLength;
   private final int numWindows;
-  private final LinkedList<Map<TaskError, Integer>> errorCountsQueue;
-  private final LinkedList<Long> startTimeQueue;
+  private final LinkedList<Map<TaskError, Integer>> errorCountsQueue =
+    new LinkedList<Map<TaskError, Integer>>();
+  private final LinkedList<Long> startTimeQueue = new LinkedList<Long>();
   private final Map<TaskError, Integer> sinceStartErrorCounts;
 
-  
   // Used by metrics
-  private final Map<TaskError, MetricsTimeVaryingLong> errorCountsMetrics;
+  private final Map<TaskError, MetricsTimeVaryingLong> errorCountsMetrics =
+    new HashMap<TaskError, MetricsTimeVaryingLong>();
+  // Cumulative counters
+  private final Counters errorCounters = new Counters();
 
   public TaskErrorCollector(Configuration conf) {
-    errorCountsQueue = new LinkedList<Map<TaskError, Integer>>();
-    startTimeQueue = new LinkedList<Long>();
-    errorCountsMetrics = new HashMap<TaskError, MetricsTimeVaryingLong>();
+    this(
+      conf,
+      conf.getInt(WINDOW_LENGTH_KEY, WINDOW_LENGTH),
+      conf.getInt(NUM_WINDOWS_KEY, NUM_WINDOWS));
+  }
+
+  public TaskErrorCollector(
+    Configuration conf, int windowLength, int numWindows) {
+    this.windowLength = windowLength;
+    this.numWindows = numWindows;
+
     MetricsContext context = MetricsUtil.getContext("mapred");
     metricsRecord = MetricsUtil.createRecord(context, "taskerror");
     registry = new MetricsRegistry();
-    windowLength = conf.getInt(WINDOW_LENGTH_KEY, WINDOW_LENGTH);
-    numWindows = conf.getInt(NUM_WINDOWS_KEY, NUM_WINDOWS);
 
     context.registerUpdater(this);
 
+    URL configURL = null;
     String configFilePath = conf.get(CONFIG_FILE_KEY);
     if (configFilePath == null) {
       // Search the class path if it is not configured
-      URL u = TaskErrorCollector.class.getClassLoader().getResource(ERROR_XML);
-      if (u != null) {
-        configFilePath = u.getPath();
+      configURL =
+        TaskErrorCollector.class.getClassLoader().getResource(ERROR_XML);
+    } else {
+      try {
+        configURL = new URL("file://" +
+          new File(configFilePath).getAbsolutePath());
+      } catch (MalformedURLException e) {
+        LOG.error("Error in creating config URL", e);
       }
     }
-    if (configFilePath == null) {
-      LOG.warn("No " + CONFIG_FILE_KEY + " given in conf. " +
+
+    if (configURL == null) {
+      LOG.warn("Could not get error collector configuration. " +
            TaskErrorCollector.class.getSimpleName() +
            " will see every error as UNKNOWN_ERROR.");
       knownErrors = Collections.emptyMap();
     } else {
-      knownErrors = parseConfigFile(configFilePath);
+      LOG.info("Parsing configuration from " + configURL);
+      knownErrors = parseConfigFile(configURL);
     }
     createMetrics();
     sinceStartErrorCounts = createErrorCountsMap();
@@ -116,7 +135,7 @@ public class TaskErrorCollector implements Updater {
 
   private void createMetrics() {
     for (TaskError error : knownErrors.values()) {
-      System.out.println("metricsKey:" + error.metricsKey);
+      LOG.info("metricsKey:" + error.metricsKey);
       errorCountsMetrics.put(error, new MetricsTimeVaryingLong(
           error.metricsKey, registry, error.description));
     }
@@ -127,18 +146,21 @@ public class TaskErrorCollector implements Updater {
   private Map<TaskError, Integer> createErrorCountsMap() {
     Map<TaskError, Integer> errorCountsMap =
         new LinkedHashMap<TaskError, Integer>();
+    Counters.Group grp = errorCounters.getGroup(COUNTER_GROUP_NAME);
     for (TaskError error : knownErrors.values()) {
       errorCountsMap.put(error, 0);
+      // Make sure counter is present with value 0.
+      grp.getCounterForName(error.name).increment(0);
     }
     errorCountsMap.put(UNKNOWN_ERROR, 0);
     return errorCountsMap;
   }
 
   public synchronized void collect(TaskInProgress tip, TaskAttemptID taskId,
-      TaskTracker taskTracker, long now) {
+      long now) {
     List<String> diagnostics = tip.getDiagnosticInfo(taskId);
     if (diagnostics == null || diagnostics.isEmpty()) {
-      incErrorCounts(UNKNOWN_ERROR, taskTracker, now);
+      incErrorCounts(UNKNOWN_ERROR, now);
       return;
     }
     String latestDiagnostic = diagnostics.get(diagnostics.size() - 1);
@@ -147,14 +169,14 @@ public class TaskErrorCollector implements Updater {
     for (TaskError error : knownErrors.values()) {
       String p = error.pattern.toString();
       if (error.pattern.matcher(latestDiagnostic).matches()) {
-        incErrorCounts(error, taskTracker, now);
+        incErrorCounts(error, now);
         found = true;
         break;
       }
     }
     if (!found) {
       LOG.info("Undefined diagnostic info:" + latestDiagnostic);
-      incErrorCounts(UNKNOWN_ERROR, taskTracker, now);
+      incErrorCounts(UNKNOWN_ERROR, now);
     }
   }
 
@@ -185,12 +207,15 @@ public class TaskErrorCollector implements Updater {
     return Collections.unmodifiableMap(sinceStartErrorCounts);
   }
 
-  private void incErrorCounts(TaskError error, TaskTracker tt, long now) {
+  private void incErrorCounts(TaskError error, long now) {
 
     Map<TaskError, Integer> current = getCurrentErrorCounts(now);
     current.put(error, current.get(error) + 1); 
 
     errorCountsMetrics.get(error).inc();
+    Counters.Group grp = errorCounters.getGroup(COUNTER_GROUP_NAME);
+    Counters.Counter ctr = grp.getCounterForName(error.name);
+    ctr.increment(1);
 
     sinceStartErrorCounts.put(error, sinceStartErrorCounts.get(error) + 1);
 
@@ -208,6 +233,10 @@ public class TaskErrorCollector implements Updater {
       }
     }
     return errorCountsQueue.getFirst();
+  }
+
+  public Counters getErrorCountsCounters() {
+    return errorCounters;
   }
 
   public class TaskError {
@@ -274,14 +303,14 @@ public class TaskErrorCollector implements Updater {
  *     <description>Cannot find disk space on the TaskTracker</description>
  *   </error>
  * </configuration>
- * @param configFilePath 
+ * @param configURL
  * @throws IOException 
  * 
  */
-  private Map<String, TaskError> parseConfigFile(String configFilePath) {
+  private Map<String, TaskError> parseConfigFile(URL configURL) {
     Map<String, TaskError> knownErrors = new LinkedHashMap<String, TaskError>();
     try {
-      Element root = getRootElement(configFilePath);
+      Element root = getRootElement(configURL);
       NodeList elements = root.getChildNodes();
       for (int i = 0; i < elements.getLength(); ++i) {
         Node node = elements.item(i);
@@ -312,22 +341,22 @@ public class TaskErrorCollector implements Updater {
         }
       }
     } catch (IOException ie) {
-      LOG.error("Error parsing config file " + configFilePath, ie);
+      LOG.error("Error parsing config file " + configURL, ie);
     }
     return knownErrors;
   }
 
-  private Element getRootElement(String configFileName) throws IOException {
+  private Element getRootElement(URL configURL) throws IOException {
     Element root = null;
     try {
       DocumentBuilderFactory docBuilderFactory =
           DocumentBuilderFactory.newInstance();
       docBuilderFactory.setIgnoringComments(true);
       DocumentBuilder builder = docBuilderFactory.newDocumentBuilder();
-      Document doc = builder.parse(new File(configFileName));
+      Document doc = builder.parse(configURL.openStream());
       root = doc.getDocumentElement();
       if (!matched(root, "configuration")) {
-        throw new IOException("Bad " + configFileName);
+        throw new IOException("Bad task error config at " + configURL);
       }
     } catch (SAXException se) {
       throw new IOException(se);

@@ -155,6 +155,7 @@ public class TestDFSPermission extends TestCase {
       FsPermission permission) throws IOException {
     // set umask in configuration, converting to padded octal
     conf.set(FsPermission.UMASK_LABEL, String.format("%1$03o", umask));
+    FileSystem fs = FileSystem.newInstance(conf);
 
     // create the file/directory
     switch (op) {

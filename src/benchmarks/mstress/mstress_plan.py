@@ -1,0 +1,185 @@
+#!/usr/bin/env python
+
+# $Id$
+#
+# Author: Thilee Subramaniam
+#
+# Copyright 2012 Quantcast Corp.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not
+# use this file except in compliance with the License. You may obtain a copy
+# of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations
+# under the License.
+#
+# This code is used to generate a plan file for metaserver vs namenode
+# benchmarking.
+#
+import optparse
+import sys
+import subprocess
+import time
+import os
+import os.path
+import math
+import getpass
+
+"""
+This program is used to create the directory/file layout to be used
+in metaserver/namenode stress test.
+
+You basically specify the depth of the directory tree and the number
+of elements (files or directories) per level, along with the list of
+client-hosts you want to use and the number of clients per client-host
+that you want to use.
+
+This script will generate the plan file, and copy it to the /tmp on the
+given list of client hosts.
+
+Thereafter, you can execute the mstress.py with this plan file.
+"""
+
+class Globals:
+  PATH_PREFIX = 'Dir_'
+  PLAN_OUTPUT = './planfile.txt'
+
+def ParseCommandline():
+  currentDirName = os.path.basename(os.path.dirname(os.path.realpath(sys.argv[0])))
+
+  epi = ('Example: "%s -c h1,h2 -n 3 -l 4 -i 3 -s 100" would create 4 levels of 3 inodes ' % sys.argv[0] +
+         '(3+9+27+81=120) per client process. Since there are 3 ' +
+         'processes on 2 hosts, we create 120x6=720 inodes. We will attempt ' +
+         'to stat 100 random leaf paths using all client processes. We will do a readdir ' +
+         'all through the directory tree.')
+
+  parser = optparse.OptionParser(epilog=epi)
+
+  parser.add_option('-c', '--client-hosts',
+                    action='store',
+                    default='localhost',
+                    type='string',
+                    help='Comma-separated list of client host names.')
+  parser.add_option('-f', '--client-hosts-file',
+                    action='store',
+                    default=None,
+                    type='string',
+                    help='File containing Comma-separated list of client host names.')
+  parser.add_option('-n', '--clients-per-host',
+                    action='store',
+                    default=1,
+                    type='int',
+                    help='Number of clients per client host.')
+  parser.add_option('-l', '--levels',
+                    action='store',
+                    default=1,
+                    type='int',
+                    help='File-tree depth on each client.')
+  parser.add_option('-i', '--inodes-per-level',
+                    action='store',
+                    default=100,
+                    type='int',
+                    help='Inodes per each level on each client.')
+  parser.add_option('-t', '--path-type',
+                    action='store',
+                    default='dir',
+                    type='string',
+                    help='Whether to create "dir" or "file" inodes.')
+  parser.add_option('-s', '--num-to-stat',
+                    action='store',
+                    default=100,
+                    type='int',
+                    help='Number of inodes to stat (<=total leaf inodes).')
+  parser.add_option('-o', '--output-file',
+                    action='store',
+                    default='/tmp/%s/plan/plan' % currentDirName,
+                    type='string',
+                    help='Location to upload the plan file on the clients.')
+  parser.add_option('-x', '--local-file',
+                    action='store',
+                    default='plan/plan',
+                    type='string',
+                    help='Location to store the plan file locally.')
+  opts, args = parser.parse_args()
+  if args:
+    sys.exit('Unexpected arguments: %s.' % str(args))
+
+  if opts.output_file is None:
+    opts.output_file = '/tmp/mstress_%s_%s.plan' % (getpass.getuser(), time.strftime("%F-%H-%M-%S", time.gmtime()))
+
+  if opts.client_hosts_file is not None:
+    opts.client_hosts = open(opts.client_hosts_file, 'r').read().strip()
+
+  return opts
+
+def main():
+
+
+  opts = ParseCommandline()
+  hostlist = opts.client_hosts.split(',')
+
+  numClientProcesses = float(len(hostlist) * opts.clients_per_host)
+  if numClientProcesses == 0.0:
+    sys.exit('Invalid client processes')
+
+  #get the smallest number larger than 'opts.num_to_stat' that is a multiple of opts.num_to_stat
+  statPerClient = int(math.ceil(float(opts.num_to_stat) / numClientProcesses))
+
+  #print opts
+  outfile = open(opts.local_file, 'w')
+  outfile.write('# *** DO NOT EDIT THIS FILE BY HAND *** \n# USE mstress_plan.py TO MODIFY INSTEAD\n#\n')
+  outfile.write('#List of hosts taking part in the plan\nhostslist=%s\n' % opts.client_hosts)
+  outfile.write('#Number of mstress cliends per client host\nclientsperhost=%d\n' % opts.clients_per_host)
+  outfile.write('#File or directory\ntype=%s\n' % opts.path_type)
+  outfile.write('#Number of levels in created tree\nlevels=%d\n' % opts.levels)
+  outfile.write('#Number of inodes per level\ninodes=%d\n' % opts.inodes_per_level)
+  outfile.write('#Number of random paths to stat, per client\nnstat=%d\n' % statPerClient)
+  
+  """ old code
+  begin_tree_delta = 0
+  for level in range(0,opts.levels):
+    begin_tree_delta = begin_tree_delta + pow(opts.inodes_per_level, level + 1)
+    #print "delta = ", begin_tree_delta
+
+  outfile.write('#host\tclient\tlevel\tdistribution\n')
+  begin_tree_idx = 0
+  for host_no in range(0,len(hostlist)):
+    host = hostlist[host_no]
+    for client_no in range(0,opts.clients_per_host):
+      # tree for this level
+      begin_idx = begin_tree_idx
+      for level in range(0,opts.levels):
+        prefix = '%s\tproc_%02d\t%d\t' % (host, client_no, level)
+        # print '-- h=%d, c=%d level=%d, begin idx = %d' % (host_no, client_no, level, begin_idx)
+        suffix = ''
+        for ranges in range(0, pow(opts.inodes_per_level, level)):
+          if len(suffix) != 0:
+            suffix = suffix + ','
+          suffix = suffix + '%d-%d'%(begin_idx, begin_idx + opts.inodes_per_level - 1)
+          begin_idx = begin_idx + opts.inodes_per_level
+        outfile.write('%s\t%s\n' % (prefix, suffix))
+      begin_tree_idx = begin_tree_idx + begin_tree_delta
+      #print "next begin tree idx = ", begin_tree_idx
+  """
+
+  outfile.close()
+  print '==> Created planfile: %s' % opts.local_file
+#  print 'copying file %s to all client hosts' % opts.output_file
+#  for client in hostlist:
+#    p = subprocess.Popen(['/usr/bin/scp', os.path.abspath(opts.output_file), '%s:%s' % (client, opts.output_file)])
+#    while 1:
+#      ret = p.poll()
+#      if ret == None:
+#        time.sleep(0.5)
+#      else:
+#        print 'transfered %s to %s' % (opts.output_file, client)
+#        break
+
+if __name__ == '__main__':
+  main()
+

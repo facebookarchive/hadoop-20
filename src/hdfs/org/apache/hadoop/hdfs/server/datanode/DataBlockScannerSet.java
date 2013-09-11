@@ -30,6 +30,7 @@ import javax.servlet.http.HttpServletResponse;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.server.datanode.metrics.DatanodeThreadLivenessReporter.BackgroundThread;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
@@ -41,6 +42,9 @@ import org.apache.commons.logging.LogFactory;
  */
 public class DataBlockScannerSet implements Runnable {
   public static final Log LOG = LogFactory.getLog(DataBlockScannerSet.class);
+  
+  public static long TIME_SLEEP_BETWEEN_SCAN = 5000;
+  
   private final DataNode datanode;
   private final FSDataset dataset;
   private final Configuration conf;
@@ -60,37 +64,53 @@ public class DataBlockScannerSet implements Runnable {
   }
 
   public void run() {
-    int currentNamespaceId = -1;
-    boolean firstRun = true;
-    while (datanode.shouldRun && !Thread.interrupted()) {
-      // Sleep everytime except in the first interation.
-      if (!firstRun) {
-        try {
-          Thread.sleep(5000);
-        } catch (InterruptedException ex) {
-          // Interrupt itself again to set the interrupt status
-          blockScannerThread.interrupt();
+    try {
+      int currentNamespaceId = -1;
+      boolean firstRun = true;
+      while (datanode.shouldRun && !Thread.interrupted()) {
+        datanode.updateAndReportThreadLiveness(BackgroundThread.BLOCK_SCANNER);
+        
+        // Sleep everytime except in the first interation.
+        if (!firstRun) {
+          try {
+            if (LOG.isDebugEnabled()) {
+              LOG.debug("Sleep " + TIME_SLEEP_BETWEEN_SCAN
+                  + " ms before next round of scanning");
+            }
+            Thread.sleep(TIME_SLEEP_BETWEEN_SCAN);
+          } catch (InterruptedException ex) {
+            // Interrupt itself again to set the interrupt status
+            blockScannerThread.interrupt();
+            continue;
+          }
+        } else {
+          firstRun = false;
+        }
+
+        DataBlockScanner nsScanner = getNextNamespaceSliceScanner(currentNamespaceId);
+        if (nsScanner == null) {
+          // Possible if thread is interrupted
           continue;
         }
-      } else {
-        firstRun = false;
-      }
+        currentNamespaceId = nsScanner.getNamespaceId();
+        waitForUpgradeDone(currentNamespaceId);
 
-      DataBlockScanner nsScanner = getNextNamespaceSliceScanner(currentNamespaceId);
-      if (nsScanner == null) {
-        // Possible if thread is interrupted
-        continue;
+        if (!datanode.isNamespaceAlive(currentNamespaceId)) {
+          LOG.warn("Namespace: " + currentNamespaceId + " is not alive");
+          // Remove in case NS service died abruptly without proper shutdown
+          removeNamespace(currentNamespaceId);
+          continue;
+        }
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Start scan namespace " + currentNamespaceId);
+        }
+        nsScanner.scanNamespace();
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Finish scan namespace " + currentNamespaceId);
+        }
       }
-      currentNamespaceId = nsScanner.getNamespaceId();
-      waitForUpgradeDone(currentNamespaceId);
-
-      if (!datanode.isNamespaceAlive(currentNamespaceId)) {
-        LOG.warn("Namespace: " + currentNamespaceId + " is not alive");
-        // Remove in case NS service died abruptly without proper shutdown
-        removeNamespace(currentNamespaceId);
-        continue;
-      }
-      nsScanner.scanNamespace();
+    } finally {
+      LOG.info("DataBlockScannerSet exited...");
     }
   }
 
@@ -111,6 +131,7 @@ public class DataBlockScannerSet implements Runnable {
     UpgradeManagerDatanode um = datanode.getUpgradeManager(namespaceId);
     while (!um.isUpgradeCompleted()) {
       try {
+        datanode.updateAndReportThreadLiveness(BackgroundThread.BLOCK_SCANNER);
         Thread.sleep(5000);
         LOG.info("sleeping ............");
       } catch (InterruptedException e) {

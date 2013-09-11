@@ -22,6 +22,7 @@ import java.io.OutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 
+import org.apache.hadoop.mapreduce.Mapper.Context;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -29,32 +30,53 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.raid.StripeStore.StripeInfo;
 import org.apache.hadoop.util.Progressable;
+import java.util.zip.CRC32;
 
 public class XORDecoder extends Decoder {
   public static final Log LOG = LogFactory.getLog(
                                   "org.apache.hadoop.raid.XORDecoder");
 
+  private int stripeSize;
   public XORDecoder(
-    Configuration conf, int stripeSize) {
-    super(conf, stripeSize, 1);
+    Configuration conf) {
+    super(conf, Codec.getCodec("xor"));
+    stripeSize = this.codec.stripeLength;
   }
 
   @Override
-  protected void fixErasedBlockImpl(
+  protected long fixErasedBlockImpl(
       FileSystem fs, Path srcFile, FileSystem parityFs, Path parityFile,
-      long blockSize, long errorOffset, long limit,
-      OutputStream out, Progressable reporter) throws IOException {
+      boolean fixSource,
+      long blockSize, long errorOffset, long limit, boolean partial, 
+      OutputStream out, Context context, CRC32 crc, StripeInfo si,
+      boolean recoverFromStripeStore, Block lostBlock)
+          throws IOException {
+    
+    Progressable reporter = context;
+    if (reporter == null) {
+      reporter = RaidUtils.NULL_PROGRESSABLE;
+    }
+    
+    if (partial) {
+      throw new IOException ("We don't support partial reconstruction");
+    }
     LOG.info("Fixing block at " + srcFile + ":" + errorOffset +
              ", limit " + limit);
+    if (crc != null) {
+      crc.reset();
+    }
     FileStatus srcStat = fs.getFileStatus(srcFile);
-    FSDataInputStream[] inputs = new FSDataInputStream[stripeSize + paritySize];
+    FSDataInputStream[] inputs = new FSDataInputStream[stripeSize 
+                                                       + this.codec.parityLength];
 
     try {
       long errorBlockOffset = (errorOffset / blockSize) * blockSize;
-      long[] srcOffsets = stripeOffsets(errorOffset, blockSize);
+      long[] srcOffsets = stripeOffsets(errorOffset, blockSize, fixSource);
       for (int i = 0; i < srcOffsets.length; i++) {
-        if (srcOffsets[i] == errorBlockOffset) {
+        if (fixSource && srcOffsets[i] == errorBlockOffset) {
           inputs[i] = new FSDataInputStream(
             new RaidUtils.ZeroInputStream(blockSize));
           LOG.info("Using zeros at " + srcFile + ":" + errorBlockOffset);
@@ -70,9 +92,16 @@ public class XORDecoder extends Decoder {
           LOG.info("Using zeros at " + srcFile + ":" + errorBlockOffset);
         }
       }
-      FSDataInputStream parityFileIn = parityFs.open(parityFile);
-      parityFileIn.seek(parityOffset(errorOffset, blockSize));
-      inputs[inputs.length - 1] = parityFileIn;
+
+      if (fixSource) {
+        FSDataInputStream parityFileIn = parityFs.open(parityFile);
+        parityFileIn.seek(parityOffset(errorOffset, blockSize));
+        inputs[inputs.length - 1] = parityFileIn;
+      } else {
+        inputs[inputs.length - 1] = new FSDataInputStream(
+            new RaidUtils.ZeroInputStream(blockSize));
+        LOG.info("Using zeros at " + parityFile + ":" + errorBlockOffset);
+      }
     } catch (IOException e) {
       RaidUtils.closeStreams(inputs);
       throw e;
@@ -84,7 +113,8 @@ public class XORDecoder extends Decoder {
     parallelReader.start();
     try {
       // Loop while the number of skipped + written bytes is less than the max.
-      for (long written = 0; written < limit; ) {
+      long written;
+      for (written = 0; written < limit; ) {
         ParallelStreamReader.ReadResult readResult;
         try {
           readResult = parallelReader.getReadResult();
@@ -102,17 +132,27 @@ public class XORDecoder extends Decoder {
         XOREncoder.xor(readResult.readBufs, writeBufs[0]);
 
         out.write(writeBufs[0], 0, toWrite);
+        if (crc != null) {
+          crc.update(writeBufs[0], 0, toWrite);
+        }
         written += toWrite;
       }
+      return written;
     } finally {
       // Inputs will be closed by parallelReader.shutdown().
       parallelReader.shutdown();
     }
   }
 
-  protected long[] stripeOffsets(long errorOffset, long blockSize) {
+  protected long[] stripeOffsets(long errorOffset, long blockSize, 
+                                 boolean fixSource) {
     long[] offsets = new long[stripeSize];
-    long stripeIdx = errorOffset / (blockSize * stripeSize);
+    long stripeIdx;
+    if (fixSource) {
+      stripeIdx = errorOffset / (blockSize * stripeSize);
+    } else {
+      stripeIdx = errorOffset / blockSize;
+    }
     long startOffsetOfStripe = stripeIdx * stripeSize * blockSize;
     for (int i = 0; i < stripeSize; i++) {
       offsets[i] = startOffsetOfStripe + i * blockSize;

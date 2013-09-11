@@ -17,25 +17,24 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.Collection;
 
-import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
-import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
 
 public class TestNNStorageFailures {
 
@@ -44,19 +43,17 @@ public class TestNNStorageFailures {
   private int editsPerformed = 0;
   private MiniDFSCluster cluster;
   private FileSystem fs;
-  private Configuration conf;
 
   @Before
   public void setUpMiniCluster() throws IOException {
-    conf = new Configuration();
+    Configuration conf = new Configuration();
     File baseDir = MiniDFSCluster.getBaseDirectory(conf);
     File editDir1 = new File(baseDir, "edit1");
     File editDir2 = new File(baseDir, "edit2");
     conf.set("dfs.name.edits.dir",
         editDir1.getPath() + "," + editDir2.getPath());
-    conf.set("dfs.secondary.http.address", "0.0.0.0:0");
 
-    cluster = new MiniDFSCluster(conf, 1, true, null);
+    cluster = new MiniDFSCluster(conf, 0, true, null);
     cluster.waitActive();
     fs = cluster.getFileSystem();
   }
@@ -67,7 +64,6 @@ public class TestNNStorageFailures {
       fs.close();
     if (cluster != null)
       cluster.shutdown();
-    InjectionHandler.clear();
   }
 
   /**
@@ -81,44 +77,58 @@ public class TestNNStorageFailures {
 
   // check if exception is thrown when all image dirs fail
   @Test
-  public void testAllImageDirsFailOnRoll() throws IOException {    
+  public void testAllImageDirsFailOnRoll() throws IOException {
     assertTrue(doAnEdit());
     Collection<File> namedirs = cluster.getNameDirs();
-    TestNNStorageFailuresInjectionHandler h = new TestNNStorageFailuresInjectionHandler(namedirs);
-    InjectionHandler.set(h);
-    SecondaryNameNode sn = new SecondaryNameNode(conf);
-
+    for (File f : namedirs) {
+      LOG.info("Changing permissions for directory " + f);
+      f.setExecutable(false);
+    }
     try {
-      sn.doCheckpoint();
+      cluster.getNameNode().getNamesystem().rollEditLog();
       fail("Should get an exception here");
     } catch (IOException e) {
       LOG.info(e);
       assertTrue(e.toString()
-          .contains("No more image storage directories left"));
+          .contains("No image locations are available"));
+      // image dirs are not writable
+      assertEquals(2, NameNode.getNameNodeMetrics().imagesFailed.get());
+      // journals are separate, and accessible
+      assertEquals(0, NameNode.getNameNodeMetrics().journalsFailed.get());
     } finally {
       for (File f : namedirs) {
         LOG.info("Changing permissions for directory " + f);
         f.setExecutable(true);
       }
-      if(sn != null)
-        sn.shutdown();
     }
   }
   
-  class TestNNStorageFailuresInjectionHandler extends InjectionHandler {
-    
-    Collection<File> nameDirs;   
-    TestNNStorageFailuresInjectionHandler(Collection<File> dirs) {
-      nameDirs = dirs;
+  // check if image directories are restored at two consecutive SN, 
+  // when one fails
+  @Test
+  public void testImageDirsRemainValidOnInodeMismatch() throws IOException {
+    for (int i = 0; i < 10; i++) {
+      assertTrue(doAnEdit());
     }
-     
-    public void _processEvent(InjectionEvent event, Object... args) {
-      if(event == InjectionEvent.FSIMAGE_RENAME) {
-        for (File f : nameDirs) {
-          LOG.info("Changing permissions for directory " + f);
-          f.setExecutable(false);
-        }
-      }
+
+    // replace root dir with a spy
+    FSDirectory spyDir = spy(cluster.getNameNode().getNamesystem().dir);
+    long originalCount = spyDir.totalInodes();
+    cluster.getNameNode().getNamesystem().dir = spyDir;
+
+    doReturn(new Long(originalCount + 1)).when(spyDir).totalInodes();
+    // save namespace should fail, but not evict image directories
+    try {
+      cluster.getNameNode().getNamesystem().saveNamespace(true, false);
+      fail("Should get an exception here");
+    } catch (IOException e) {
+      LOG.info(e);
     }
+    doReturn(new Long(originalCount)).when(spyDir).totalInodes();
+    cluster.getNameNode().getNamesystem().saveNamespace(true, false);
+    assertTrue(cluster.getNameNode().getNamesystem().getFSImage().storage.removedStorageDirs
+        .isEmpty());
+    assertEquals(0, NameNode.getNameNodeMetrics().imagesFailed.get());
+    assertEquals(0, NameNode.getNameNodeMetrics().journalsFailed.get());
   }
 }

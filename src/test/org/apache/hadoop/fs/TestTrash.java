@@ -18,15 +18,17 @@
 package org.apache.hadoop.fs;
 
 
-import junit.framework.TestCase;
 import java.io.File;
 import java.io.IOException;
 import java.io.DataOutputStream;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.URI;
 
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
+
+import junit.framework.TestCase;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -34,15 +36,31 @@ import org.apache.hadoop.fs.FsShell;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.Trash;
 import org.apache.hadoop.fs.LocalFileSystem;
+import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
+import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.junit.Before;
+import org.junit.Test;
+
+import static org.junit.Assert.*;
 
 /**
  * This class tests commands from Trash.
  */
-public class TestTrash extends TestCase {
-
-  private final static Path TEST_DIR =
+public class TestTrash {
+  
+  public final static Path TEST_DIR =
     new Path(new File(System.getProperty("test.build.data","/tmp")
           ).toString().replace(' ', '+'), "testTrash");
+  
+  @Before
+  public void setUp() throws Exception {
+    File testDir = new File(TEST_DIR.toUri().getPath());
+    if (testDir.exists()) {
+      FileUtil.fullyDelete(testDir);
+      testDir.mkdirs();
+    }
+  }
 
   protected static Path writeFile(FileSystem fs, Path f) throws IOException {
     DataOutputStream out = fs.create(f);
@@ -345,13 +363,15 @@ public class TestTrash extends TestCase {
       }
     }
   }
-
+  
+  @Test
   public void testTrash() throws IOException {
     Configuration conf = new Configuration();
     conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
     trashShell(FileSystem.getLocal(conf), TEST_DIR);
   }
 
+  @Test
   public void testPluggableTrash() throws IOException {
     Configuration conf = new Configuration();
 
@@ -361,7 +381,7 @@ public class TestTrash extends TestCase {
     assertTrue(trash.getTrashPolicy().getClass().equals(TestTrashPolicy.class));
   }
 
-
+  @Test
   public void testNonDefaultFS() throws IOException {
     Configuration conf = new Configuration();
     conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
@@ -369,11 +389,40 @@ public class TestTrash extends TestCase {
     trashNonDefaultFS(conf);
   }
 
+  @Test
   public void testTrashEmptier() throws Exception {
     Configuration conf = new Configuration();
     conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
     trashEmptier(FileSystem.getLocal(conf), conf);
   }
+
+  @Test
+  public void testTrashPatternEmptier() throws Exception {
+    Configuration conf = new Configuration();
+    conf.setClass("fs.file.impl", TestLFS.class, FileSystem.class);
+    trashPatternEmptier(FileSystem.getLocal(conf), conf);
+    trashPatternEmptierTwoPatterns(FileSystem.getLocal(conf), conf);
+  }
+
+  protected int cmdUsingShell(String cmd, FsShell shell, Path myFile) {
+    // Delete the file to trash
+    String[] args = new String[2];
+    args[0] = cmd;
+    args[1] = myFile.toString();
+    try {
+      return shell.run(args);
+    } catch (Exception e) {
+      System.err.println("Exception raised from Trash.run " +
+                         e.getLocalizedMessage());
+    }
+    return -1;
+  }
+
+  
+  protected int rmUsingShell(FsShell shell, Path myFile) {
+    return cmdUsingShell("-rm", shell, myFile);
+  }
+  
   
   protected void trashEmptier(FileSystem fs, Configuration conf) throws Exception {
     // Trash with 12 second deletes and 6 seconds checkpoints
@@ -402,17 +451,7 @@ public class TestTrash extends TestCase {
       writeFile(fs, myFile);
 
       // Delete the file to trash
-      String[] args = new String[2];
-      args[0] = "-rm";
-      args[1] = myFile.toString();
-      int val = -1;
-      try {
-        val = shell.run(args);
-      } catch (Exception e) {
-        System.err.println("Exception raised from Trash.run " +
-                           e.getLocalizedMessage());
-      }
-      assertTrue(val == 0);
+      assertTrue(rmUsingShell(shell, myFile) == 0);
 
       Path trashDir = shell.getCurrentTrashDir();
       FileStatus files[] = fs.listStatus(trashDir.getParent());
@@ -433,7 +472,286 @@ public class TestTrash extends TestCase {
     emptierThread.interrupt();
     emptierThread.join();
   }
+  
+  private void deleteAndCheckTrash(FileSystem fs, FsShell shell,
+      String srcPath, String trashPath) throws IOException {
+    Path myPath = new Path(TEST_DIR, srcPath);
+    mkdir(fs, myPath.getParent());
+    writeFile(fs, myPath);
+    assertTrue(rmUsingShell(shell, myPath) == 0);
+    Path trashmyPath = new Path(TEST_DIR, trashPath);
+    assertTrue(fs.exists(trashmyPath));
+  }
 
+  /**
+   * @param fs
+   * @param conf
+   * @throws Exception
+   */
+  protected void trashPatternEmptier(FileSystem fs, Configuration conf) throws Exception {
+    // Trash with 12 second deletes and 6 seconds checkpoints
+    conf.set("fs.trash.interval", "0.2"); // 12 seconds
+    conf.set("fs.trash.checkpoint.interval", "0.1"); // 6 seconds
+    conf.setClass("fs.trash.classname", TrashPolicyPattern.class, TrashPolicy.class);
+    conf.set("fs.trash.base.paths", TEST_DIR + "/my_root/*/");
+    conf.set("fs.trash.unmatched.paths", TEST_DIR + "/unmatched/");
+    Trash trash = new Trash(conf);
+    // clean up trash can
+    fs.delete(new Path(TEST_DIR + "/my_root/*/"), true);
+    fs.delete(new Path(TEST_DIR + "/my_root_not/*/"), true);
+
+
+    FsShell shell = new FsShell();
+    shell.setConf(conf);
+    shell.init();
+    // First create a new directory with mkdirs
+    deleteAndCheckTrash(fs, shell, "my_root/sub_dir1/sub_dir1_1/myFile",
+        "my_root/sub_dir1/.Trash/Current/" + TEST_DIR
+            + "/my_root/sub_dir1/sub_dir1_1");
+    deleteAndCheckTrash(fs, shell, "my_root/sub_dir2/sub_dir2_1/myFile",
+        "my_root/sub_dir2/.Trash/Current/" + TEST_DIR
+            + "/my_root/sub_dir2/sub_dir2_1");
+    deleteAndCheckTrash(fs, shell, "my_root_not/", "unmatched/.Trash/Current"
+        + TEST_DIR + "/my_root_not");
+    deleteAndCheckTrash(fs, shell, "my_root/file", "unmatched/.Trash/Current"
+        + TEST_DIR + "/my_root/file");
+
+    Path currentTrash = new Path(TEST_DIR, "my_root/sub_dir1/.Trash/Current/");
+    fs.mkdirs(currentTrash);
+    cmdUsingShell("-rmr", shell, currentTrash);
+    assertTrue(!fs.exists(currentTrash));
+
+    cmdUsingShell("-rmr", shell, new Path(TEST_DIR, "my_root"));
+    assertTrue(fs.exists(new Path(TEST_DIR,
+        "unmatched/.Trash/Current/" + TEST_DIR + "/my_root")));
+    
+    // Test Emplier
+    // Start Emptier in background
+    Runnable emptier = trash.getEmptier();
+    Thread emptierThread = new Thread(emptier);
+    emptierThread.start();
+
+    int fileIndex = 0;
+    Set<String> checkpoints = new HashSet<String>();
+    while (true)  {
+      // Create a file with a new name
+      Path myFile = new Path(TEST_DIR, "my_root/sub_dir1/sub_dir2/myFile" + fileIndex++);
+      writeFile(fs, myFile);
+
+      // Delete the file to trash
+      String[] args = new String[2];
+      args[0] = "-rm";
+      args[1] = myFile.toString();
+      int val = -1;
+      try {
+        val = shell.run(args);
+      } catch (Exception e) {
+        System.err.println("Exception raised from Trash.run " +
+                           e.getLocalizedMessage());
+      }
+      assertTrue(val == 0);
+
+      Path trashDir = new Path(TEST_DIR, "my_root/sub_dir1/.Trash/Current/");
+      FileStatus files[] = fs.listStatus(trashDir.getParent());
+      // Scan files in .Trash and add them to set of checkpoints
+      for (FileStatus file : files) {
+        String fileName = file.getPath().getName();
+        checkpoints.add(fileName);
+      }
+      // If checkpoints has 5 objects it is Current + 4 checkpoint directories
+      if (checkpoints.size() == 5) {
+        // The actual contents should be smaller since the last checkpoint
+        // should've been deleted and Current might not have been recreated yet
+        assertTrue(5 > files.length);
+        break;
+      }
+      Thread.sleep(5000);
+    }
+    emptierThread.interrupt();
+    emptierThread.join();
+  }
+
+  /**
+   * @param fs
+   * @param conf
+   * @throws Exception
+   */
+  protected void trashPatternEmptierTwoPatterns(FileSystem fs, Configuration conf) throws Exception {
+    // Trash with 12 second deletes and 6 seconds checkpoints
+    conf.set("fs.trash.interval", "0.2"); // 12 seconds
+    conf.set("fs.trash.checkpoint.interval", "0.1"); // 6 seconds
+    conf.setClass("fs.trash.classname", TrashPolicyPattern.class, TrashPolicy.class);
+    conf.set("fs.trash.base.paths", "{" + TEST_DIR + "/my_root1/*/," + TEST_DIR
+        + "/2my_root/*/}");
+    conf.set("fs.trash.unmatched.paths", TEST_DIR + "/unmatched/");
+    Trash trash = new Trash(conf);
+    // clean up trash can
+    fs.delete(new Path(TEST_DIR + "/my_root1/*/"), true);
+    fs.delete(new Path(TEST_DIR + "/2my_root/*/"), true);
+    fs.delete(new Path(TEST_DIR + "/my_root_not/*/"), true);
+
+
+    FsShell shell = new FsShell();
+    shell.setConf(conf);
+    shell.init();
+    // First create a new directory with mkdirs
+    deleteAndCheckTrash(fs, shell, "my_root1/sub_dir1/sub_dir1_1/myFile",
+        "my_root1/sub_dir1/.Trash/Current/" + TEST_DIR
+            + "/my_root1/sub_dir1/sub_dir1_1");
+    deleteAndCheckTrash(fs, shell, "2my_root/sub_dir2/sub_dir2_1/myFile",
+        "2my_root/sub_dir2/.Trash/Current/" + TEST_DIR
+            + "/2my_root/sub_dir2/sub_dir2_1");
+    deleteAndCheckTrash(fs, shell, "my_root_not/", "unmatched/.Trash/Current"
+        + TEST_DIR + "/my_root_not");
+    deleteAndCheckTrash(fs, shell, "my_root1/file", "unmatched/.Trash/Current"
+        + TEST_DIR + "/my_root1/file");
+    deleteAndCheckTrash(fs, shell, "2my_root/file", "unmatched/.Trash/Current"
+        + TEST_DIR + "/2my_root/file");
+
+    // Test rmr
+    Path currentTrash = new Path(TEST_DIR, "2my_root/sub_dir1/.Trash/Current/");
+    fs.mkdirs(currentTrash);
+    cmdUsingShell("-rmr", shell, currentTrash);
+    assertTrue(!fs.exists(currentTrash));
+
+    cmdUsingShell("-rmr", shell, new Path(TEST_DIR, "2my_root"));
+    assertTrue(fs.exists(new Path(TEST_DIR,
+        "unmatched/.Trash/Current/" + TEST_DIR + "/2my_root")));
+    
+    // Test rmr from another directory pattern
+    currentTrash = new Path(TEST_DIR, "my_root1/sub_dir1/.Trash/Current/");
+    fs.mkdirs(currentTrash);
+    cmdUsingShell("-rmr", shell, currentTrash);
+    assertTrue(!fs.exists(currentTrash));
+
+    cmdUsingShell("-rmr", shell, new Path(TEST_DIR, "my_root1"));
+    assertTrue(fs.exists(new Path(TEST_DIR,
+        "unmatched/.Trash/Current/" + TEST_DIR + "/my_root1")));
+    
+    // Test Emplier
+    // Start Emptier in background
+    Runnable emptier = trash.getEmptier();
+    Thread emptierThread = new Thread(emptier);
+    emptierThread.start();
+
+    int fileIndex = 0;
+    Set<String> checkpoints = new HashSet<String>();
+    while (true)  {
+      // Create a file with a new name
+      Path myFile = new Path(TEST_DIR, "2my_root/sub_dir1/sub_dir2/myFile" + fileIndex++);
+      writeFile(fs, myFile);
+
+      if (checkpoints.size() > 2) {
+        fs.mkdirs(new Path(TEST_DIR + "/my_root1"));
+      }
+      
+      // Delete the file to trash
+      String[] args = new String[2];
+      args[0] = "-rm";
+      args[1] = myFile.toString();
+      int val = -1;
+      try {
+        val = shell.run(args);
+      } catch (Exception e) {
+        System.err.println("Exception raised from Trash.run " +
+                           e.getLocalizedMessage());
+      }
+      assertTrue(val == 0);
+
+      Path trashDir = new Path(TEST_DIR, "2my_root/sub_dir1/.Trash/Current/");
+      FileStatus files[] = fs.listStatus(trashDir.getParent());
+      // Scan files in .Trash and add them to set of checkpoints
+      for (FileStatus file : files) {
+        String fileName = file.getPath().getName();
+        checkpoints.add(fileName);
+      }
+      // If checkpoints has 5 objects it is Current + 4 checkpoint directories
+      if (checkpoints.size() == 5) {
+        // The actual contents should be smaller since the last checkpoint
+        // should've been deleted and Current might not have been recreated yet
+        assertTrue(5 > files.length);
+        break;
+      }
+      Thread.sleep(5000);
+    }
+    // Another base path pattern
+    checkpoints.clear();
+    while (true)  {
+      // Create a file with a new name
+      Path myFile = new Path(TEST_DIR, "my_root1/sub_dir1/sub_dir2/myFile" + fileIndex++);
+      writeFile(fs, myFile);
+
+      // Delete the file to trash
+      String[] args = new String[2];
+      args[0] = "-rm";
+      args[1] = myFile.toString();
+      int val = -1;
+      try {
+        val = shell.run(args);
+      } catch (Exception e) {
+        System.err.println("Exception raised from Trash.run " +
+                           e.getLocalizedMessage());
+      }
+      assertTrue(val == 0);
+
+      Path trashDir = new Path(TEST_DIR, "my_root1/sub_dir1/.Trash/Current/");
+      FileStatus files[] = fs.listStatus(trashDir.getParent());
+      // Scan files in .Trash and add them to set of checkpoints
+      for (FileStatus file : files) {
+        String fileName = file.getPath().getName();
+        checkpoints.add(fileName);
+      }
+      // If checkpoints has 5 objects it is Current + 4 checkpoint directories
+      if (checkpoints.size() == 5) {
+        // The actual contents should be smaller since the last checkpoint
+        // should've been deleted and Current might not have been recreated yet
+        assertTrue(5 > files.length);
+        break;
+      }
+      Thread.sleep(5000);
+    }
+
+    // default trash path
+    checkpoints.clear();
+    while (true) {
+      // Create a file with a new name
+      Path myFile = new Path(TEST_DIR, "sub_dir1/sub_dir2/myFile" + fileIndex++);
+      writeFile(fs, myFile);
+
+      // Delete the file to trash
+      String[] args = new String[2];
+      args[0] = "-rm";
+      args[1] = myFile.toString();
+      int val = -1;
+      try {
+        val = shell.run(args);
+      } catch (Exception e) {
+        System.err.println("Exception raised from Trash.run " +
+                           e.getLocalizedMessage());
+      }
+      assertTrue(val == 0);
+
+      Path trashDir = new Path(TEST_DIR, "unmatched/.Trash/Current/");
+      FileStatus files[] = fs.listStatus(trashDir.getParent());
+      // Scan files in .Trash and add them to set of checkpoints
+      for (FileStatus file : files) {
+        String fileName = file.getPath().getName();
+        checkpoints.add(fileName);
+      }
+      // If checkpoints has 5 objects it is Current + 4 checkpoint directories
+      if (checkpoints.size() == 5) {
+        // The actual contents should be smaller since the last checkpoint
+        // should've been deleted and Current might not have been recreated yet
+        assertTrue(5 > files.length);
+        break;
+      }
+      Thread.sleep(5000);
+    }
+    emptierThread.interrupt();
+    emptierThread.join();
+  }
+
+  
   static class TestLFS extends LocalFileSystem {
     Path home;
     TestLFS() throws IOException {

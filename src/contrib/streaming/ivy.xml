@@ -80,6 +80,10 @@
       name="json"
       rev="${json.version}"
       conf="common->default"/>
+    <dependency org="org.mockito"
+      name="mockito-all"
+      rev="${mockito-all.version}"
+      conf="common->master"/>
 <!--    <dependency org="net.java.dev.jets3t"
       name="jets3t"
       rev="${jets3t.version}"

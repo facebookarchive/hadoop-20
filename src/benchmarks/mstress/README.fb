@@ -1,0 +1,93 @@
+MStress
+The MStress benchmarks are imported and modified from QFS (see
+https://github.com/quantcast/qfs/tree/master/benchmarks/mstress). This benchmark
+performs operations through the DFSClient interface; they involve roundtrips
+over the network to the NameNode and back, along with Datanode. However, most of
+the operations performed are through the NameNode.
+
+The benchmarks are located under the hadoop VENDOR at
+hadoop-0.20/src/benchmarks/mstress.
+
+ The Setup
+======================
+The benchmark allows you to use a set of hosts for generating the RPC calls.
+Additionally, you can specify the number of clients per host. Each of these
+clients then executes the MStress_Client benchmark. The benchmark consists of 5
+tests:
+
+create & write files and directories
+stat a random subset of the created files
+get all the directory listings
+read each of the files
+delete all the files and directories
+Before running these tests a "plan" file needs to be generated which specifies
+things like number of clients per host, number of levels of directories to
+generate, number of directories to generate per level, number of files to
+generate per directory.
+
+ Runbook
+======================
+Note that each of the scripts used in this run book have a --help option if you
+ever need to figure out what a parameter does or needs.
+
+ Setting up the client JARS
+======================
+First, you must copy over the jars necessary for the MStress_Client to compile
+and run. These jars should be placed in mstress_hdfs_client_jars/ directory. I
+found that copying hadoop-0.20/build/*.jar and
+hadoop-0.20/build/ivy/lib/Hadoop/common/*.jar does the trick. After having
+already built hadoop using 'ant jar', you can copy these over:
+
+$ cd hadoop-0.20/src/benchmarks/mstress
+mstress$ cp ~/hadoop-0.20/build/*.jar mstress_hdfs_client_jars/
+mstress$ cp ~/hadoop-0.20/build/ivy/lib/Hadoop/common/*.jar
+mstress_hdfs_client_jars/
+
+ Compiling the benchmark
+======================
+The benchmark code is in MStress_Client.java. First, compile it. Make sure the
+client jars are in mstress_hdfs_client_jars/ before doing so!
+
+mstress$ make javaclient
+ Generating the plan
+======================
+Now we generate a plan file -- this file contains configuration items such as:
+number of clients to launch, number of levels of directories and files to make.
+This plan file is then later scp'd into the client hosts.
+
+The set of client hosts we're going to be using for the benchmarking needs to be
+generated at this point. We need to store these hosts in a file, where each host
+(in the form of user@hostname) is separated by a comma. For instance, a host
+file could be:
+
+mstress$ cat hosts
+myuser@myhost,myuser2@myhost2
+
+mstress$ ./mstress_plan.py \
+--clients-per-host 8 \
+--path-type file \
+--levels 2 \
+--inodes-per-level 25 \
+--client-hosts-file hosts
+
+ Installing the client hosts
+======================
+Now, we send the mstress directory to each of the hosts we want to use to
+generate the load to the nameserver. This is done using the
+mstress_prepare_master_clients.sh script; it uses scp, so make sure that the
+hosts you wish to use have a password ssh-login. For instance:
+
+mstress$ ./mstress_prepare_master_clients.sh hosts
+.
+.
+
+This will tar up and scp the current mstress directory over to each of these
+hosts in their /tmp directory, and untars them as /tmp/mstress.
+
+ Running the benchmark
+======================
+Now, we can run the benchmark itself. We must specify the Namenode's hostname,
+and port. By default, it looks for the plan file stored locally in the mstress
+directory at mstress/plan/plan.
+
+mstress$ ./mstress.py -f hdfs -s `hostname` -p 9000

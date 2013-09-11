@@ -53,12 +53,12 @@ public class TestFileStatusExtended {
   @Test
   public void testRandomFiles() throws Exception {
     String topDir = "testRandomFiles";
-    DFSTestUtil util = new DFSTestUtil(topDir, 50, 10, MAX_FILE_SIZE);
+    DFSTestUtil util = new DFSTestUtil(topDir, 100, 10, MAX_FILE_SIZE);
     util.createFiles(fs, topDir);
     NameNode nn = cluster.getNameNode();
-    List<FileStatusExtended> stats = nn.getRandomFiles(20);
+    List<FileStatusExtended> stats = nn.getRandomFilesSample(0.4);
     assertNotNull(stats);
-    assertTrue(20 >= stats.size());
+    assertTrue(stats.size() >= 10);
     for (FileStatusExtended stat : stats) {
       fs.exists(stat.getPath());
       assertEquals("", stat.getHolder());
@@ -77,8 +77,8 @@ public class TestFileStatusExtended {
   }
 
   private List<FileStatusExtended> dumpRandomFileInfo(String fileName,
-      int maxFiles, NameNode nn) throws IOException {
-    List<FileStatusExtended> stats = nn.getRandomFiles(maxFiles);
+      double percentage, NameNode nn) throws IOException {
+    List<FileStatusExtended> stats = nn.getRandomFilesSample(percentage);
     DataOutputStream out = new DataOutputStream(new FileOutputStream(fileName));
     try {
       // Write the number of entries.
@@ -100,7 +100,7 @@ public class TestFileStatusExtended {
     File fileName = new File(cluster.getBaseDataDir(), "dumpMeta");
     NameNode nn = cluster.getNameNode();
     List<FileStatusExtended> stats = dumpRandomFileInfo(
-        fileName.getAbsolutePath(), 20, nn);
+        fileName.getAbsolutePath(), 0.4, nn);
     DataInputStream in = new DataInputStream(new FileInputStream(
         fileName.getAbsolutePath()));
     int nFiles = in.readInt();
@@ -113,23 +113,13 @@ public class TestFileStatusExtended {
   }
 
   @Test
-  public void testMaxVisit() throws Exception {
-    String topDir = "testMaxVisit";
-    DFSTestUtil util = new DFSTestUtil(topDir, 5, 10, MAX_FILE_SIZE);
-    util.createFiles(fs, topDir);
-    NameNode nn = cluster.getNameNode();
-    List<FileStatusExtended> stats = nn.getRandomFiles(10);
-    assertEquals(5, stats.size());
-  }
-
-  @Test
   public void testPercentBasedSample() throws Exception {
     String topDir = "testPercentBasedSample";
-    DFSTestUtil util = new DFSTestUtil(topDir, 100, 10, MAX_FILE_SIZE);
+    DFSTestUtil util = new DFSTestUtil(topDir, 200, 10, MAX_FILE_SIZE);
     util.createFiles(fs, topDir);
     NameNode nn = cluster.getNameNode();
-    List<FileStatusExtended> stats = nn.getRandomFilesSample(0.1f);
-    assertTrue(10 >= stats.size());
+    List<FileStatusExtended> stats = nn.getRandomFilesSample(0.1);
+    assertTrue(stats.size() >= 5);
   }
 
   @Test
@@ -138,14 +128,14 @@ public class TestFileStatusExtended {
     DFSTestUtil util = new DFSTestUtil(topDir, 15, 10, MAX_FILE_SIZE);
     util.createFiles(fs, topDir);
     NameNode nn = cluster.getNameNode();
-    List<FileStatusExtended> stats = nn.getRandomFilesSample(1.0f);
+    List<FileStatusExtended> stats = nn.getRandomFilesSample(1.0);
     assertTrue(15 >= stats.size());
   }
 
   @Test
   public void testInvalidPercentBasedSample1() throws Exception {
     try {
-      cluster.getNameNode().getRandomFilesSample(0.0f);
+      cluster.getNameNode().getRandomFilesSample(0.0);
       fail("Did not throw : " + IllegalArgumentException.class);
     } catch (IllegalArgumentException e) {
       LOG.info("Expected exception : ", e);
@@ -155,7 +145,7 @@ public class TestFileStatusExtended {
   @Test
   public void testInvalidPercentBasedSample2() throws Exception {
     try {
-      cluster.getNameNode().getRandomFilesSample(1.1f);
+      cluster.getNameNode().getRandomFilesSample(1.1);
       fail("Did not throw : " + IllegalArgumentException.class);
     } catch (IllegalArgumentException e) {
       LOG.info("Expected exception : ", e);
@@ -165,7 +155,7 @@ public class TestFileStatusExtended {
   @Test
   public void testInvalidPercentBasedSample3() throws Exception {
     try {
-      cluster.getNameNode().getRandomFilesSample(-0.5f);
+      cluster.getNameNode().getRandomFilesSample(-0.5);
       fail("Did not throw : " + IllegalArgumentException.class);
     } catch (IllegalArgumentException e) {
       LOG.info("Expected exception : ", e);
@@ -182,7 +172,7 @@ public class TestFileStatusExtended {
     out.sync();
 
     NameNode nn = cluster.getNameNode();
-    List<FileStatusExtended> stats = nn.getRandomFiles(1);
+    List<FileStatusExtended> stats = nn.getRandomFilesSample(1);
     assertEquals(1, stats.size());
     assertEquals(((DistributedFileSystem) fs).getClient().clientName, stats
         .get(0).getHolder());

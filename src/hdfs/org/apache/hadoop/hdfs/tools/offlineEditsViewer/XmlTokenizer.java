@@ -129,6 +129,12 @@ public class XmlTokenizer implements Tokenizer {
    * @return token that was just read
    */
   public Token read(Token t) throws IOException {
+    if (t.e == EditsElement.OPCODE) {
+      // read the offset first
+      LongToken offsetToken = new LongToken(EditsElement.OFFSET);
+      offsetToken.fromString(getNextElementsValue(EditsElement.OFFSET.name()));
+      t.offset = offsetToken.value;
+    }
     t.fromString(getNextElementsValue(t.getEditsElement().toString()));
     return t;
   }

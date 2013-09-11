@@ -28,7 +28,6 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
   
   /**
    *  The canonical URI representing the cluster we are connecting to
-   *  dfs1.data.xxx.com:9000 for example
    */
   URI logicalName;
   Configuration conf;
@@ -79,7 +78,16 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
 
   public void initialize(URI name, Configuration conf) throws IOException {
     // The actual name of the filesystem e.g. dfs.data.xxx.com:9000
-    this.logicalName = name;
+    try {
+      if (conf.getBoolean("client.configuration.lookup.done", false)) {
+        // In case of client configuration lookup, use the default name retrieved.
+        this.logicalName = new URI(conf.get("fs.default.name"));
+      } else {
+        this.logicalName = name;
+      }
+    } catch (URISyntaxException urie) {
+      throw new IOException(urie);
+    }
     this.conf = conf;
     failoverHandler = new FailoverClientHandler(conf, logicalName, this);
     // default interval between standbyFS initialization attempts is 10 mins
@@ -201,12 +209,12 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
             failoverFS.initialize(primaryURI, conf);
 
             newNamenode(failoverFS.dfs.namenode);
+            // Update the namenode address if DFSClient tries to recreate the NN
+            // connection.
+            this.dfs.nameNodeAddr = failoverFS.dfs.nameNodeAddr;
 
           } else {
             super.initialize(primaryURI, conf);
-            failoverClient = new FailoverClientProtocol(this.dfs.namenode,
-                failoverHandler);
-            this.dfs.namenode = failoverClient;
           }
         } catch (IOException ex) {
           if (firstAttempt && failoverHandler.isZKCacheEnabled()) {
@@ -227,13 +235,30 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
         failoverFS = null;
         return false;
       } else {
-        LOG.error("Ecxeption initializing DAFS. " +
-      		"Falling back to using DFS instead", ex);
+        LOG.error("Exception initializing DAFS. for " + this.getUri() +
+		" .Falling back to using DFS instead. Exception: " + ex.getMessage());
         fallback = true;
         super.initialize(logicalName, conf);
       }
     }
     return true;
+  }
+
+  /**
+   * This method ensures that when {@link DFSClient#getNewNameNodeIfNeeded(int)}
+   * runs, it still keeps the {@link DFSClient#namenode} object a type of
+   * {@link FailoverClientProtocol}
+   */
+  @Override
+  ClientProtocol getNewNameNode(ClientProtocol rpcNamenode, Configuration conf)
+      throws IOException {
+    ClientProtocol namenode = DFSClient.createNamenode(rpcNamenode, conf);
+    if (failoverClient == null) {
+      failoverClient = new FailoverClientProtocol(namenode,
+          failoverHandler);
+    }
+    failoverClient.setNameNode(namenode);
+    return failoverClient;
   }
 
   @Override
@@ -314,20 +339,20 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
           // release read lock, grab write lock
           failoverHandler.readUnlock();
           failoverHandler.writeLock();
-          boolean failover = failoverHandler.zkCheckFailover();
-          if (failover) {
-            LOG.info("DAFS failover has happened");
-            nameNodeDown();
-          } else {
-            LOG.debug("DAFS failover has not happened");
+          try {
+            boolean failover = failoverHandler.zkCheckFailover(null);
+            if (failover) {
+              LOG.info("DAFS failover has happened");
+              nameNodeDown();
+            } else {
+              LOG.debug("DAFS failover has not happened");
+            }
+            standbyFSCheckRequestCount.set(0);
+            lastStandbyFSCheck = System.currentTimeMillis();
+          } finally {
+            // release write lock
+            failoverHandler.writeUnLock();
           }
-        
-          standbyFSCheckRequestCount.set(0);
-          lastStandbyFSCheck = System.currentTimeMillis();
-
-          // release write lock
-          failoverHandler.writeUnLock();
-
           // now check for failover
           failoverHandler.readLock();
         } else if (standbyFS == null && (System.currentTimeMillis() >
@@ -338,9 +363,11 @@ public class DistributedAvatarFileSystem extends DistributedFileSystem
           // release read lock, grab write lock
           failoverHandler.readUnlock();
           failoverHandler.writeLock();
-          initStandbyFS();
-
-          failoverHandler.writeUnLock();
+          try {
+            initStandbyFS();
+          } finally {
+            failoverHandler.writeUnLock();
+          }
           failoverHandler.readLockSimple();
         }
 

@@ -23,6 +23,7 @@ import org.apache.hadoop.util.StringUtils;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * The MetricsTimeVaryingLong class is for a metric that naturally
@@ -42,6 +43,7 @@ public class MetricsTimeVaryingLong extends MetricsBase{
  
   private long currentValue;
   private long previousIntervalValue;
+  final private ReentrantLock lock;
   
   /**
    * Constructor - create a new metric
@@ -52,8 +54,9 @@ public class MetricsTimeVaryingLong extends MetricsBase{
     super(nam, description);
     currentValue = 0;
     previousIntervalValue = 0;
+    lock = new ReentrantLock(false); 
     registry.add(nam, this);
-  }
+}
   
   
   /**
@@ -70,20 +73,35 @@ public class MetricsTimeVaryingLong extends MetricsBase{
    * Inc metrics for incr vlaue
    * @param incr - number of operations
    */
-  public synchronized void inc(final long incr) {
-    currentValue += incr;
+  public void inc(final long incr) {
+    lock.lock();
+    try {
+      currentValue += incr;
+    } finally {
+      lock.unlock();
+    }
   }
   
   /**
    * Inc metrics by one
    */
-  public synchronized void inc() {
-    currentValue++;
+  public void inc() {
+    lock.lock();
+    try {
+      currentValue++;
+    } finally {
+      lock.unlock();
+    }
   }
 
-  private synchronized void intervalHeartBeat() {
+  private void intervalHeartBeat() {
+    lock.lock();
+    try {
      previousIntervalValue = currentValue;
      currentValue = 0;
+    } finally {
+      lock.unlock();
+    }
   }
   
   /**
@@ -95,13 +113,18 @@ public class MetricsTimeVaryingLong extends MetricsBase{
    *
    * @param mr
    */
-  public synchronized void pushMetric(final MetricsRecord mr) {
-    intervalHeartBeat();
+  public void pushMetric(final MetricsRecord mr) {
+    lock.lock();
     try {
-      mr.incrMetric(getName(), getPreviousIntervalValue());
-    } catch (Exception e) {
-      LOG.info("pushMetric failed for " + getName() + "\n" +
-          StringUtils.stringifyException(e));
+      intervalHeartBeat();
+      try {
+        mr.incrMetric(getName(), getPreviousIntervalValue());
+      } catch (Exception e) {
+        LOG.info("pushMetric failed for " + getName() + "\n" +
+            StringUtils.stringifyException(e));
+      }
+    } finally {
+      lock.unlock();
     }
   }
   
@@ -110,8 +133,13 @@ public class MetricsTimeVaryingLong extends MetricsBase{
    * The Value at the Previous interval
    * @return prev interval value
    */
-  public synchronized long getPreviousIntervalValue() { 
-    return previousIntervalValue;
+  public long getPreviousIntervalValue() { 
+    lock.lock();
+    try {
+      return previousIntervalValue;
+    } finally {
+      lock.unlock();
+    }
   } 
   
   /**
@@ -119,6 +147,11 @@ public class MetricsTimeVaryingLong extends MetricsBase{
    * @return prev interval value
    */
   public synchronized long getCurrentIntervalValue() { 
-    return currentValue;
+    lock.lock();
+    try {
+      return currentValue;
+    } finally {
+      lock.unlock();
+    }
   } 
 }

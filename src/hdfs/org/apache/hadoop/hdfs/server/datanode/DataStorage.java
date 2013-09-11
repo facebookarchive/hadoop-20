@@ -146,6 +146,12 @@ public class DataStorage extends Storage {
             continue;
           case NOT_FORMATTED: // format
             LOG.info("Storage directory " + dataDir + " is not formatted.");
+            if (!sd.isEmpty()) {
+              LOG.error("Storage directory " + dataDir
+                + " is not empty, and will not be formatted! Exiting.");
+              throw new IOException(
+                "Storage directory " + dataDir + " is not empty!");
+            }
             LOG.info("Formatting ...");
             format(sd, nsInfo);
             break;
@@ -197,8 +203,12 @@ public class DataStorage extends Storage {
       return;
     }
 
-    assert FSConstants.LAYOUT_VERSION == nsInfo.getLayoutVersion() :
-      "Data-node and name-node layout versions must be the same.";
+    if (FSConstants.LAYOUT_VERSION != nsInfo.getLayoutVersion()) {
+      throw new IOException(
+          "Data-node and name-node layout versions must be the same. Namenode LV: "
+              + nsInfo.getLayoutVersion() + ", current LV: "
+              + FSConstants.LAYOUT_VERSION);
+    }
     
     // 1. For each data directory calculate its state and 
     // check whether all is consistent before transitioning.
@@ -1028,7 +1038,7 @@ public class DataStorage extends Storage {
     Matcher matcher = PRE_GENSTAMP_META_FILE_PATTERN.matcher(oldFileName);
     if (matcher.matches()) {
       //return the current metadata file name
-      return FSDataset.getMetaFileName(matcher.group(1),
+      return BlockWithChecksumFileWriter.getMetaFileName(matcher.group(1),
                                        Block.GRANDFATHER_GENERATION_STAMP);
     }
     return oldFileName;

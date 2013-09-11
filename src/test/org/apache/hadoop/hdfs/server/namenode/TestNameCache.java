@@ -25,13 +25,53 @@ import org.junit.Test;
  * Test for {@link NameCache} class
  */
 public class TestNameCache {
+  
+  String[] matching = {"part1", "part10000000", "fileabc", "abc", "filepart"};
+  String[] notMatching = {"spart1", "apart", "abcd", "def"};
+  
+  @Test
+  public void testFSDirectoryNameCache() throws Exception {
+    // Create dictionary with useThreshold 2
+    FSDirectoryNameCache cache = 
+      new FSDirectoryNameCache(2);
+
+    for (String s : matching) {
+      // Add useThreshold times so the names are promoted to dictionary
+      cache.cacheName(getINode(s));
+      cache.cacheName(getINode(s));
+    }
+    for (String s : notMatching) {
+      // Add < useThreshold times so the names are not promoted to dictionary
+      cache.cacheName(getINode(s));
+    }
+    
+    // make sure the executor joins
+    cache.imageLoaded();
+    // Mark dictionary as initialized
+    cache.initialized();
+    
+    for (String s : matching) {
+      verifyNameReuse(cache, s, true);
+    }
+    // Check dictionary size
+    assertEquals(matching.length, cache.size());
+    
+    for (String s : notMatching) {
+      verifyNameReuse(cache, s, false);
+    }
+  }
+  
+  private INode getINode(String s) {
+    INode inode = new INodeFile();
+    inode.setLocalName(s.getBytes());
+    return inode;
+  }
+  
   @Test
   public void testDictionary() throws Exception {
     // Create dictionary with useThreshold 2
     NameCache<String> cache = 
       new NameCache<String>(2);
-    String[] matching = {"part1", "part10000000", "fileabc", "abc", "filepart"};
-    String[] notMatching = {"spart1", "apart", "abcd", "def"};
 
     for (String s : matching) {
       // Add useThreshold times so the names are promoted to dictionary
@@ -54,6 +94,20 @@ public class TestNameCache {
     
     for (String s : notMatching) {
       verifyNameReuse(cache, s, false);
+    }
+  }
+  
+  private void verifyNameReuse(FSDirectoryNameCache cache, String s, boolean reused) {
+    cache.cacheName(getINode(s));
+    int lookupCount = cache.getLookupCount();
+    if (reused) {
+      cache.cacheName(getINode(s));
+      // Successful lookup increments lookup count
+      assertEquals(lookupCount + 1, cache.getLookupCount());
+    } else {
+      cache.cacheName(getINode(s));
+      // Lookup count remains the same
+      assertEquals(lookupCount, cache.getLookupCount());
     }
   }
 

@@ -26,6 +26,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants.StartupOption;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
+import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil;
 
 import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.NAME_NODE;
 import static org.apache.hadoop.hdfs.server.common.HdfsConstants.NodeType.DATA_NODE;
@@ -157,9 +158,9 @@ public class TestDFSStorageStateRecovery extends TestCase {
         for (int i = 0; i < baseDirs.length; i++) {
           assertTrue(new File(baseDirs[i],"current").isDirectory());
           assertTrue(new File(baseDirs[i],"current/VERSION").isFile());
-          assertTrue(new File(baseDirs[i],"current/edits").isFile());
-          assertTrue(new File(baseDirs[i],"current/fsimage").isFile());
-          assertTrue(new File(baseDirs[i],"current/fstime").isFile());
+          assertNotNull(FSImageTestUtil.findNewestImageFile(
+              baseDirs[i] + "/current"));
+          assertTrue(new File(baseDirs[i],"current/seen_txid").isFile());
         }
       }
       break;

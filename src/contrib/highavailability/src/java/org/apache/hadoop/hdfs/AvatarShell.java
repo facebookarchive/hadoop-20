@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.hdfs;
 
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
@@ -32,14 +34,15 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.InstanceId;
+import org.apache.hadoop.hdfs.protocol.AvatarConstants.StartupOption;
 import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
 import org.apache.hadoop.hdfs.protocol.AvatarConstants.Avatar;
-import org.apache.hadoop.hdfs.protocol.AvatarConstants.StartupOption;
+import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
 import org.apache.hadoop.hdfs.server.namenode.AvatarNode;
 import org.apache.hadoop.hdfs.server.namenode.NameNode;
+import org.apache.hadoop.hdfs.server.namenode.StandbyStateException;
 import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
 import org.apache.hadoop.io.retry.RetryPolicies;
 import org.apache.hadoop.io.retry.RetryPolicy;
@@ -77,6 +80,10 @@ public class AvatarShell extends Configured implements Tool {
   // We need to keep the default configuration around with 
   // Avatar specific fields unmodified
   private Configuration originalConf;
+  
+  // used when waiting for last txid from primary, 
+  // by default polling zk every second
+  public static long retrySleep = 1 * 1000;
 
   /**
    * Start AvatarShell.
@@ -103,15 +110,24 @@ public class AvatarShell extends Configured implements Tool {
     this.conf = this.originalConf = conf;
   }
 
-  public void initAvatarRPC() throws IOException {
+  public void initAvatarRPC(String address) throws IOException {
+    InetSocketAddress addr = null;
+    if (address != null) {
+      // addressed is passed directly
+      String host = address.substring(0, address.indexOf(":"));
+      int port = Integer.valueOf(address.substring(address.indexOf(":") + 1));
+      addr = new InetSocketAddress(host, port);
+    } else {
+      addr = AvatarNode.getAddress(conf);
+    }
+    
     try {
       this.ugi = UnixUserGroupInformation.login(conf, true);
     } catch (LoginException e) {
       throw (IOException) (new IOException().initCause(e));
     }
 
-    this.rpcAvatarnode = createRPCAvatarnode(AvatarNode.getAddress(conf), conf,
-        ugi);
+    this.rpcAvatarnode = createRPCAvatarnode(addr, conf, ugi);
     this.avatarnode = createAvatarnode(rpcAvatarnode);
   }
 
@@ -173,37 +189,20 @@ public class AvatarShell extends Configured implements Tool {
   /**
    * Displays format of commands.
    */
-  private static void printUsage(String cmd) {
-    if ("-showAvatar".equals(cmd)) {
-      System.err.println("Usage: java AvatarShell"
-          + " [-{zero|one} -showAvatar] [-service serviceName]");
-    } else if ("-setAvatar".equals(cmd)) {
-      System.err.println("Usage: java AvatarShell"
-              + " [-{zero|one} -setAvatar {primary|standby}] [-force] [-service serviceName]");
-    } else if ("-shutdownAvatar".equals(cmd)) {
-      System.err.println("Usage: java AvatarShell" +
-          " [-{zero|one} -shutdownAvatar] [-service serviceName]");
-    } else if ("-failover".equals(cmd)) {
-      System.err.println("Usage: java AvatarShell" +
-          " [-failover] [-service serviceName]");
-    }  else if ("-isInitialized".equals(cmd)) {
-        System.err.println("Usage: java AvatarShell" +
-            " [-{zero|one} -isInitialized] [-service serviceName]");
-    } else if ("-waittxid".equals(cmd)) {
-      System.err.println("Usage: java AvatarShell"
-          + " [-waittxid] [-service serviceName]");
-    } else {
-      System.err.println("Usage: java AvatarShell");
-      System.err.println("           [-{zero|one} -showAvatar] [-service serviceName]");
-      System.err.println("           [-{zero|one} -setAvatar {primary|standby}] [-force] [-service serviceName]");
-      System.err.println("           [-{zero|one} -shutdownAvatar] [-service serviceName]");
-      System.err.println("           [-{zero|one} -safemode get|leave] [-service serviceName]");
-      System.err.println("           [-failover] [-service serviceName]");
-      System.err.println("           [-{zero|one} -isInitialized] [-service serviceName]");
-      System.err.println("           [-waittxid] [-service serviceName]");
-      System.err.println();
-      ToolRunner.printGenericCommandUsage(System.err);
-    }
+  static void printUsage() {
+    System.err.println("Usage: java AvatarShell");
+    System.err.println("           [-waittxid] [-service serviceName]");
+    System.err.println("           [-failover] [-service serviceName]");
+    System.err.println("           [-prepfailover] [-service serviceName]");
+    System.err.println("           [-{zero|one} -showAvatar] [-service serviceName]");
+    System.err.println("           [-{zero|one} -setAvatar primary [force]] [-service serviceName]");
+    System.err.println("           [-{zero|one} -shutdownAvatar] [-service serviceName]");
+    System.err.println("           [-{zero|one} -safemode enter|leave|get|wait|initqueues] [-service serviceName]");
+    System.err.println("           [-{zero|one} -metasave filename] [-service serviceName]");    
+    System.err.println("           [-{zero|one} -isInitialized] [-service serviceName]");
+    System.err.println("           [-{zero|one} -saveNamespace [force] [uncompressed]] [-service serviceName]");
+    System.err.println();
+    ToolRunner.printGenericCommandUsage(System.err);
   }
 
   private boolean isPrimary(Configuration conf, String zkRegistration) {
@@ -231,18 +230,18 @@ public class AvatarShell extends Configured implements Tool {
         throw new IOException("No valid last txid znode found");
       }
       try {
-        long sessionId = zk.getPrimarySsId(address);
-        ZookeeperTxId zkTxId = zk.getPrimaryLastTxId(address);
+        long sessionId = zk.getPrimarySsId(address, false);
+        ZookeeperTxId zkTxId = zk.getPrimaryLastTxId(address, false);
         if (sessionId != zkTxId.getSessionId()) {
           LOG.warn("Session Id in the ssid node : " + sessionId
               + " does not match the session Id in the txid node : "
               + zkTxId.getSessionId() + " retrying...");
-          Thread.sleep(10000);
+          Thread.sleep(retrySleep);
           continue;
         }
       } catch (Throwable e) {
         LOG.warn("Caught exception : " + e + " retrying ...");
-        Thread.sleep(10000);
+        Thread.sleep(retrySleep);
         continue;
       }
       break;
@@ -261,7 +260,7 @@ public class AvatarShell extends Configured implements Tool {
     return cmdlist.toArray(new String[cmdlist.size()]);
   }
 
-  private int failover(String serviceName) throws Exception {
+  private int failover(String serviceName, boolean prepareOnly) throws Exception {
     AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
     try {
       InetSocketAddress defaultAddr = NameNode.getClientProtocolAddress(conf);
@@ -288,42 +287,54 @@ public class AvatarShell extends Configured implements Tool {
       }
 
       AvatarShell shell = new AvatarShell(originalConf);
-
       String[] cmd = null;
-      if (zeroPrimary) {
-        cmd = getAvatarCommand(serviceName, "-one", "-isInitialized");
-        if (shell.run(cmd) != 0) {
-          throw new IOException("-one is not initialized");
-        }
-        cmd = getAvatarCommand(serviceName, "-zero", "-shutdownAvatar");
-        if (shell.run(cmd) != 0) {
-          throw new IOException("-zero shutdownAvatar failed");
-        }
+      
+      // perform pre-failover health check
+      cmd = getAvatarCommand(serviceName, "-zero", "-isInitialized");
+      runCommand(shell, cmd, "-zero is not initialized");
+      cmd = getAvatarCommand(serviceName, "-one", "-isInitialized");
+      runCommand(shell, cmd, "-one is not initialized");
+      
+      String primary = zeroPrimary ? "-zero" : "-one";
+      String standby = zeroPrimary ? "-one" : "-zero";
+      
+      if (prepareOnly) {
+        // instruct standby that we are about to failover
+        cmd = getAvatarCommand(serviceName, standby, "-safemode", "prepfailover");
+        runCommand(shell, cmd, standby + " prepare failover failed");
+        // initialize replication queues on standby
+        cmd = getAvatarCommand(serviceName, standby, "-safemode", "initqueues");
+        runCommand(shell, cmd, standby
+            + " standby replication queues initialization failed");
+        return 0;
+      } else {      
+        // perform actual failover
+        cmd = getAvatarCommand(serviceName, primary, "-shutdownAvatar");
+        runCommand(shell, cmd, primary + " shutdownAvatar failed");
         waitForLastTxIdNode(zk, originalConf);
-        cmd = getAvatarCommand(serviceName, "-one", "-setAvatar", "primary");
-        return shell.run(cmd);
-      } else {
-        cmd = getAvatarCommand(serviceName, "-zero", "-isInitialized");
-        if (shell.run(cmd) != 0) {
-          throw new IOException("-zero is not initialized");
-        }
-        cmd = getAvatarCommand(serviceName, "-one", "-shutdownAvatar");
-        if (shell.run(cmd) != 0) {
-          throw new IOException("-one shutdownAvatar failed");
-        }
-        waitForLastTxIdNode(zk, originalConf);
-        cmd = getAvatarCommand(serviceName, "-zero", "-setAvatar", "primary");
+        cmd = getAvatarCommand(serviceName, standby, "-setAvatar", "primary");
         return shell.run(cmd);
       }
     } finally {
       zk.shutdown();
     }
   }
+  
+  private void runCommand(AvatarShell shell, String[] cmd, String failureMessage)
+      throws Exception {
+    if (shell.run(cmd) != 0) {
+      throw new IOException(failureMessage);
+    }
+  }
 
-  private boolean processServiceName(String serviceName) {
+  private boolean processServiceName(String serviceName, boolean failOnError)
+      throws IOException {
     // validate service name
     if (serviceName != null) {
       if (!AvatarNode.validateServiceName(conf, serviceName)) {
+        if (failOnError) {
+          throw new IOException("Wrong service name");
+        }
         return false;
       }
 
@@ -332,34 +343,48 @@ public class AvatarShell extends Configured implements Tool {
     }
     return true;
   }
+  
+  private void printError(Throwable e) {
+    System.err.println(e.getLocalizedMessage());
+  }
 
   /**
    * run
    */
   public int run(String argv[]) throws Exception {
-
     if (argv.length < 1) {
-      printUsage("");
+      printUsage();
+      return -1;
+    }
+    
+    AvatarShellCommand cmd = AvatarShellCommand.parseCommand(argv);
+    if (cmd == null) {
+      printUsage();
       return -1;
     }
     
     int exitCode = 0;
+  
+    if (conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES) != null
+        && (!cmd.isServiceCommand) && (!cmd.isAddressCommand)) {
+      printServiceErrorMessage("AvatarShell", conf);
+      return -1;
+    }
     
-    if ("-waittxid".equals(argv[0])) {
+    String serviceName = null;
+    if (cmd.isServiceCommand) {
+      serviceName = cmd.serviceArgs[0];
+    }
+    
+    // commands without -{zero|one} prefix
+    if (cmd.isWaitTxIdCommand) {
       AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
       try {
-        String serviceName = null;
-        if (argv.length == 3 && "-service".equals(argv[1])) {
-          serviceName = argv[2];
-        }
-        if (!processServiceName(serviceName)) {
-          return -1;
-        }
+        processServiceName(serviceName, true);
         waitForLastTxIdNode(zk, originalConf);
       } catch (Exception e) {
         exitCode = -1;
-        System.err.println(argv[0].substring(1) + ": "
-            + e.getLocalizedMessage());
+        printError(e);
       } finally {
         zk.shutdown();
       }
@@ -369,98 +394,78 @@ public class AvatarShell extends Configured implements Tool {
       return exitCode;
     }
 
-    if ("-failover".equals(argv[0])) {
+    if (cmd.isFailoverCommand || cmd.isPrepfailoverCommand) {
+      boolean prep = cmd.isPrepfailoverCommand;
       try {
-        String serviceName = null;
-        if (argv.length == 3 && "-service".equals(argv[1])) {
-          serviceName = argv[2];
-        }
-        if (!processServiceName(serviceName)) {
-          return -1;
-        }
-        exitCode = failover(serviceName);
+        processServiceName(serviceName, true);
+        exitCode = failover(serviceName, prep);
       } catch (Exception e) {
         exitCode = -1;
-        System.err.println(argv[0].substring(1) + ": "
-            + e.getLocalizedMessage());
+        printError(e);
       }
+      String prefix = prep ? "Prep" : "";
       if (exitCode == 0) {
-        LOG.info("Failover was successful!");
+        LOG.info(prefix + "Failover was successful!");
+        if (prep) {
+          System.out
+              .println("WARNING: Standby is in pre-failover state! If the failover "
+                  + "is not performed, the standby needs to be restarted to "
+                  + "continue checkpointing.");
+        }
       } else {
-        LOG.error("Failover failed!");
+        LOG.error(prefix + "Failover failed!");
+        if (prep) {
+          System.out
+              .println("WARNING: Standby is in bad state! Restart the standby node!");
+        }
       }
       return exitCode;
     }
     
-    int i = 0;
-    String instance = argv[i++];
-    String cmd = argv[i++];
-
-    // Get the role
-    String role = null;
-    boolean forceSetAvatar = false;
-    if ("-setAvatar".equals(cmd)) {
-      if (argv.length < 3) {
-        printUsage(cmd);
-        return -1;
-      }
-      role = argv[i++];
-      if (i != argv.length && "-force".equals(argv[i])) {
-        forceSetAvatar = true;
-        i++;
-      }
-    }
-    String safeModeAction = null;
-    if ("-safemode".equals(cmd)) {
-      if (argv.length < 3) {
-        printUsage(cmd);
-        return -1;
-      }
-      safeModeAction = argv[i++];
-    }
-
-    String serviceName = null;
-    if (i != argv.length) {
-      if (i+2 != argv.length || !"-service".equals(argv[i])) {
-        printUsage(cmd);
-        return -1;
-      }
-      serviceName = argv[i+1];
-    }
+    /////////////////////// direct commands (-zero -one -address)
     
-    if (!processServiceName(serviceName)) {
+    String address = cmd.isAddressCommand ? cmd.addressArgs[0] : null;
+    String instance = cmd.isZeroCommand ? StartupOption.NODEZERO.getName()
+        : (cmd.isOneCommand ? StartupOption.NODEONE.getName() : null);
+
+    if (!processServiceName(serviceName, false)) {
       return -1;
     }
 
     // remove 0/1 suffix
-    if ((conf = AvatarZKShell.updateConf(instance, originalConf)) == null) {
-      printUsage(cmd);
-      return -1;
-    }
-
-    initAvatarRPC();
+    if (instance != null) {
+      if ((conf = AvatarZKShell.updateConf(instance, originalConf)) == null) {
+        printUsage();
+        return -1;
+      }
+    } 
+    initAvatarRPC(address);
 
     try {
-      if ("-showAvatar".equals(cmd)) {
+      if (cmd.isShowAvatarCommand) {
         exitCode = showAvatar();
-      } else if ("-setAvatar".equals(cmd)) {
-        exitCode = setAvatar(role, forceSetAvatar);
-      } else if ("-isInitialized".equals(cmd)) {
+      } else if (cmd.isSetAvatarCommand) {
+        exitCode = setAvatar("primary", contains(cmd.setAvatarArgs, "force"));
+      } else if (cmd.isIsInitializedCommand) {
         exitCode = isInitialized();
-      } else if ("-shutdownAvatar".equals(cmd)) {
+      } else if (cmd.isMetasaveCommand) {
+        exitCode = metasave(cmd.metasageArgs[0]);
+      } else if (cmd.isSaveNamespaceCommand) {
+        exitCode = saveNamespace(cmd.getSaveNamespaceArgs());
+      } else if (cmd.isShutdownAvatarCommand) {
         shutdownAvatar();
-      } else if ("-safemode".equals(cmd)) {
-        processSafeMode(safeModeAction);
+      } else if (cmd.isSafemodeCommand) {
+        processSafeMode(cmd.safemodeArgs[0]);
       } else {
         exitCode = -1;
-        System.err.println(cmd.substring(1) + ": Unknown command");
-        printUsage("");
+        System.err.println("Unknown command");
+        printUsage();
       }
     } catch (IllegalArgumentException arge) {
       exitCode = -1;
       arge.printStackTrace();
-      System.err.println(cmd.substring(1) + ": " + arge.getLocalizedMessage());
-      printUsage(cmd);
+      printError(arge);
+      printUsage();
     } catch (RemoteException e) {
       //
       // This is a error returned by avatarnode server. Print
@@ -469,25 +474,35 @@ public class AvatarShell extends Configured implements Tool {
       try {
         String[] content;
         content = e.getLocalizedMessage().split("\n");
-        System.err.println(cmd.substring(1) + ": " + content[0]);
+        System.err.println(content[0]);
       } catch (Exception ex) {
-        System.err.println(cmd.substring(1) + ": " + ex.getLocalizedMessage());
+        System.err.println(ex.getLocalizedMessage());
       }
     } catch (IOException e) {
       //
       // IO exception encountered locally.
       // 
       exitCode = -1;
-      System.err.println(cmd.substring(1) + ": " + e.getLocalizedMessage());
+      printError(e);
     } catch (Throwable re) {
       exitCode = -1;
-      System.err.println(cmd.substring(1) + ": " + re.getLocalizedMessage());
+      printError(re);
     } finally {
     }
     if (exitCode == 0) {
-      LOG.info(cmd.substring(1) + " was successful!");
+      LOG.info("Command was successful!");
     }
     return exitCode;
+  }
+  
+  private boolean contains(String[] args, String arg) {
+    if (args == null)
+      return false;
+    for(String s : args) {
+      if (s.equalsIgnoreCase(arg))
+        return true;
+    }
+    return false;
   }
 
   /**
@@ -513,11 +528,62 @@ public class AvatarShell extends Configured implements Tool {
     }
     return exitCode;
   }
+  
+  private int metasave(String filename)
+      throws IOException {
+    try {
+      avatarnode.metaSave(filename);
+      return 0;
+    } catch (Exception e) {
+      LOG.error("Exception when saving metadata", e);
+      return 1;
+    }
+  }
+  
+  public int saveNamespace(List<String> args) throws IOException {
+    int exitCode = -1;
+    boolean force = false;
+    boolean uncompressed = false;
+    for(String arg : args) {
+      if (arg.equals("force")) {
+        force = true;
+      } else if (arg.equals("uncompressed")) {
+        uncompressed = true;
+      } else {
+        printUsage();
+        return exitCode;
+      }
+    }
+    avatarnode.saveNamespace(force, uncompressed);
+    return 0;
+  }
+
+  public static void handleRemoteException(RemoteException re) throws IOException {
+    IOException ie = re.unwrapRemoteException();
+    if (!(ie instanceof StandbyStateException)) {
+      throw re;
+    }
+    BufferedReader in = new BufferedReader(new InputStreamReader(
+          System.in));
+    String input = null;
+    do {
+      System.out.println("The Standby's state is incorrect : " + ie
+          + "\n. You can still force a failover after some manual "
+          + "verification. This is an EXTEREMELY DANGEROUS operation if "
+          + "you don't know what you are doing. Do you wish to "
+          + "continue with forcing the failover ? (Y/N)");
+      input = in.readLine();
+    } while (input == null || (!input.equalsIgnoreCase("Y") && !input
+          .equalsIgnoreCase("N")));
+    if (input.equalsIgnoreCase("N")) {
+      throw re;
+    }
+  }
 
   /**
    * Sets the avatar to the specified value
    */
-  public int setAvatar(String role, boolean forceSetAvatar)
+  public int setAvatar(String role, boolean noverification)
       throws IOException {
     Avatar dest;
     if (Avatar.ACTIVE.toString().equalsIgnoreCase(role)) {
@@ -532,7 +598,12 @@ public class AvatarShell extends Configured implements Tool {
     if (current == dest) {
       System.out.println("This instance is already in " + current + " avatar.");
     } else {
-      avatarnode.setAvatar(dest, forceSetAvatar);
+      try {
+        avatarnode.quiesceForFailover(noverification);
+      } catch (RemoteException re) {
+        handleRemoteException(re);
+      }
+      avatarnode.performFailover();
       updateZooKeeper();
     }
     return 0;
@@ -544,14 +615,48 @@ public class AvatarShell extends Configured implements Tool {
   }
   
   public void processSafeMode(String safeModeAction) throws IOException {
+    SafeModeAction action = null;
+    boolean waitExitSafe = false;
+    
     if (safeModeAction.equals("leave")) {
-      avatarnode.setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
+      action = SafeModeAction.SAFEMODE_LEAVE;
     } else if (safeModeAction.equals("get")) {
-      boolean safemode = avatarnode.setSafeMode(SafeModeAction.SAFEMODE_GET);
-      System.out.println("Safe mode is " + (safemode ? "ON" : "OFF"));
-    } else {
-      throw new IOException("Invalid safemode action : " + safeModeAction);
+      action = SafeModeAction.SAFEMODE_GET;
+    } else if (safeModeAction.equals("enter")) {
+      action = SafeModeAction.SAFEMODE_ENTER; 
+    } else if (safeModeAction.equals("initqueues")) {
+      action = SafeModeAction.SAFEMODE_INITQUEUES; 
+    } else if (safeModeAction.equals("prepfailover")) {
+      action = SafeModeAction.SAFEMODE_PREP_FAILOVER;
+    } else if (safeModeAction.equals("wait")) {
+      action = SafeModeAction.SAFEMODE_GET; 
+      waitExitSafe = true;
     }
+    
+    if (action == null) {
+      System.err.println("Invalid safemode action : " + safeModeAction);
+      printUsage();
+      return;
+    }
+    
+    boolean inSafeMode = avatarnode.setSafeMode(action);
+    
+    //
+    // If we are waiting for safemode to exit, then poll and
+    // sleep till we are out of safemode.
+    //
+    while (inSafeMode && waitExitSafe) {
+      System.out.println("Safe mode is " + (inSafeMode ? "ON" : "OFF")
+          + ". Waiting for safemode to be OFF.");
+      try {
+        Thread.sleep(5000);
+      } catch (java.lang.InterruptedException e) {
+        throw new IOException("Wait Interrupted");
+      }
+      inSafeMode = avatarnode.setSafeMode(action);
+    }
+
+    System.out.println("Safe mode is " + (inSafeMode ? "ON" : "OFF"));
   }
 
   public void clearZooKeeper() throws IOException {
@@ -656,11 +761,11 @@ public class AvatarShell extends Configured implements Tool {
 
     String defaultName = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
-    zk.registerPrimary(defaultName, primaryAddress);
+    zk.registerPrimary(defaultName, primaryAddress, true);
     aliases = conf.getStrings("fs.default.name.aliases");
     if (aliases != null) {
       for (String alias : aliases) {
-        zk.registerPrimary(alias, primaryAddress);
+        zk.registerPrimary(alias, primaryAddress, true);
       }
     }
     LOG.info("Update Service Address information in ZooKeeper");
@@ -672,13 +777,13 @@ public class AvatarShell extends Configured implements Tool {
       String primaryServiceAddress = addr.getHostName() + ":" + addr.getPort();
       String defaultServiceName = defaultAddr.getHostName() + ":"
           + defaultAddr.getPort();
-      zk.registerPrimary(defaultServiceName, primaryServiceAddress);
+      zk.registerPrimary(defaultServiceName, primaryServiceAddress, true);
     }
     aliases = conf.getStrings("dfs.namenode.dn-address.aliases");
     if (aliases != null) {
       String primaryServiceAddress = addr.getHostName() + ":" + addr.getPort();
       for (String alias : aliases) {
-        zk.registerPrimary(alias, primaryServiceAddress);
+        zk.registerPrimary(alias, primaryServiceAddress, true);
       }
     }
     LOG.info("Update Http Address information in ZooKeeper");
@@ -691,17 +796,42 @@ public class AvatarShell extends Configured implements Tool {
 
     String defaultHttpAddress = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
-    zk.registerPrimary(defaultHttpAddress, primaryHttpAddress);
+    zk.registerPrimary(defaultHttpAddress, primaryHttpAddress, true);
 
     aliases = conf.getStrings("dfs.http.address.aliases");
     if (aliases != null) {
       for (String alias : aliases) {
-        zk.registerPrimary(alias, primaryHttpAddress);
+        zk.registerPrimary(alias, primaryHttpAddress, true);
       }
     }
   }
-
   
+  public static void printServiceErrorMessage(String command, Configuration conf) {
+    System.err.println(command
+        + " must specify a service to operate on when "
+        + "dfs.federation.nameservices is set in the cluster config\n"
+        + "Nameservices available: "
+        + conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES));
+  }
+  
+  /**
+   * Checks if the service argument is specified in the command arguments.
+   */
+  public static boolean isServiceSpecified(String command, Configuration conf,
+      String[] argv) {
+    if (conf.get(FSConstants.DFS_FEDERATION_NAMESERVICES) != null) {
+      for (int i = 0; i < argv.length; i++) {
+        if (argv[i].equals("-service")) {
+          // found service specs
+          return true;
+        }
+      }
+      // no service specs
+      printServiceErrorMessage(command, conf);
+      return false;
+    }
+    return true;
+  }
 
   public static class DummyWatcher implements Watcher {
 
@@ -710,10 +840,11 @@ public class AvatarShell extends Configured implements Tool {
       // This is a dummy watcher since we are only doing creates and deletes
     }
   }
+
   /**
    * main() has some simple utility methods
    */
-  public static void main(String argv[]) throws Exception {
+  public static void main(String argv[]) throws Exception {      
     AvatarShell shell = null;
     try {
       shell = new AvatarShell();

@@ -1,0 +1,64 @@
+<?xml version="1.0"?>
+<configuration>
+  <error name="Failing high-memory">
+    <pattern>Failing high-memory.*</pattern>
+    <description>TaskTrackerMemoryManager fails the task for exceeding memory limit</description>
+  </error>
+  <error name="Killing high-memory">
+    <pattern>Killing high-memory.*</pattern>
+    <description>TaskTrackerMemoryManager kills the task for exceeding memory limit</description>
+  </error>
+  <error name="Killing CGroup_high_memory">
+    <pattern>Killing CGroup_high_memory.*</pattern>
+    <description>CGroupMemoryWatcher kills the task for exceeding memory limit</description>
+  </error>
+  <error name="Hive Runtime Error">
+    <pattern>.*Hive Runtime Error while processing row.*</pattern>
+    <description>Error from processing a row in Hive</description>
+  </error>
+  <error name="Lost task tracker">
+    <pattern>.*Lost task tracker.*</pattern>
+    <description>TaskTracker has no heartbeat. The tasks it tracks and maps has output on it failed.</description>
+  </error>
+  <error name="Too many fetch-failures">
+    <pattern>Too many fetch-failures.*</pattern>
+    <description>A finished map failed because its map output cannot be fetched for many times.</description>
+  </error>
+  <error name="Map output lost">
+    <pattern>Map output lost.*</pattern>
+    <description>TaskTracker cannot find the map output file of a map finished on it.</description>
+  </error>
+  <error name="failed to report">
+    <pattern>.*failed to report status for.*</pattern>
+    <description>Task failed to report its status back to TaskTracker for a long time</description>
+  </error>
+  <error name="Error launching task">
+    <pattern>Error launching task.*</pattern>
+    <description>TaskTracker cannot localize and launch the task</description>
+  </error>
+  <error name="TaskTracker is dead">
+    <pattern>TaskTracker is dead.*</pattern>
+    <description>TaskTracker is dead</description>
+  </error>
+  <error name="Java heap space OOM">
+    <pattern>Error: java.lang.OutOfMemoryError.*</pattern>
+    <description>Task tries to use more java heap space than configured Xmx</description>
+  </error>
+  <error name="No space left on device">
+    <pattern>.*No space left on device.*</pattern>
+    <description>TaskTracker cannot find a disk with enough space for the task</description>
+  </error>
+  <error name="No space left on device">
+    <pattern>.*No space left on device.*</pattern>
+    <description>TaskTracker cannot find a disk with enough space for the task</description>
+  </error>
+  <error name="Error: java.lang.NullPointerException">
+    <pattern>Error: java.lang.NullPointerException.*</pattern>
+  </error>
+  <error name="java.io.IOException">
+    <pattern>java.io.IOException.*</pattern>
+  </error>
+  <error name="Child Error">
+    <pattern>.*Child Error.*</pattern>
+  </error>
+</configuration>

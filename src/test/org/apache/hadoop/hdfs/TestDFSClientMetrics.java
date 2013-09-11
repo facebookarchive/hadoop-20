@@ -7,7 +7,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.DFSClient.DFSDataInputStream;
-import org.apache.hadoop.hdfs.DFSClient.DFSInputStream;
+import org.apache.hadoop.hdfs.DFSInputStream;
 import org.apache.hadoop.hdfs.metrics.DFSClientMetrics;
 import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
 import org.apache.hadoop.conf.Configuration;
@@ -28,6 +28,7 @@ public class TestDFSClientMetrics extends TestCase {
 	}
 	@Override
 	protected void setUp() throws Exception{
+	  CONF.setBoolean("dfs.client.metrics.enable", true);
 		cluster = new MiniDFSCluster(CONF, 1, true, null);
 		cluster.waitActive();
 		fs = (DistributedFileSystem) cluster.getFileSystem();

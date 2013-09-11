@@ -26,8 +26,11 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.ReconfigurationException;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.DFSTestUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.*;
+import org.apache.hadoop.hdfs.protocol.*;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -43,6 +46,7 @@ public class TestDataNodeVolumeRefresh {
   public void setUp() throws Exception {
     Configuration conf = new Configuration();
     conf.setLong("dfs.block.size", block_size);
+    conf.setInt("dfs.datanode.failed.volumes.tolerated", 1);
     cluster = new MiniDFSCluster(conf, 1, true, null);
     cluster.waitActive();
   }
@@ -112,5 +116,74 @@ public class TestDataNodeVolumeRefresh {
     File dir4current2 = new File(new File(dir4current, "NS-" + namespaceId), "current");
     assertTrue("data4NS was not formatted successfully, no current dir.",
         dir4current2.isDirectory());
+  }
+
+  @Test
+  public void testVolumeRemoveRefresh() throws Exception,ReconfigurationException {
+    System.out.println("Now checking if a volume can be removed from the datanode.");
+    FileSystem fs = cluster.getFileSystem();
+    DistributedFileSystem dfs = (DistributedFileSystem) fs;
+    short REPLICATION_FACTOR = (short)1;
+    long blocksize =  dfs.getDefaultBlockSize();
+    dataDir = new File(cluster.getDataDirectory());
+    System.out.println("==Data dir: is " +  dataDir.getPath());
+    DataNode datanode = cluster.getDataNodes().get(0);
+    //get the list of valid mounts from the datanode.
+    String origDataDir = datanode.getConf().get("dfs.data.dir");
+    String[] listOfDataDirs = datanode.getConf().getStrings("dfs.data.dir");
+    File dir1 = new File(listOfDataDirs[0] + "/current");
+    File dir2 = new File(listOfDataDirs[1] + "/current");
+    boolean nodeDirectories = 
+        ((FSDataset)datanode.data).isValidVolume(dir1) && 
+        ((FSDataset)datanode.data).isValidVolume(dir2);
+    assertTrue("Dir 1 and Dir 2 are not both originally valid volumes", nodeDirectories);
+    Path file1 = new Path("/tfile1");
+    Path file2 = new Path("/tfile2");
+    Path file3 = new Path("/tfile3");
+    Path file4 = new Path("/tfile4");
+    DFSTestUtil.createFile(fs, file1, blocksize, REPLICATION_FACTOR, 0);
+    DFSTestUtil.waitReplication(fs, file1, REPLICATION_FACTOR);
+    DFSTestUtil.createFile(fs, file2, blocksize, REPLICATION_FACTOR, 0);
+    DFSTestUtil.waitReplication(fs, file2, REPLICATION_FACTOR);
+    assertEquals("There are currently no unreplicated blocks", 
+                        dfs.getMissingBlocksCount(), 0);
+    System.out.println("==Reconfigure Data dir from " +  origDataDir + " to " + 
+
+                                                                listOfDataDirs[0]);
+    datanode.reconfigureProperty("dfs.data.dir", listOfDataDirs[0]);
+    System.out.println("==Done Reconfiguration");
+    System.out.println("==Namespaces:");
+    assertTrue("Dir 2 should not be a directory but is: " + dir2, 
+        !((FSDataset)datanode.data).isValidVolume(dir2));
+    assertTrue("Dir 1 should be a directory but it is not: " + dir1,
+        ((FSDataset)datanode.data).isValidVolume(dir1));
+    System.out.println("===First-Reconfiguration passed ===");
+    Thread.sleep(3000);
+    long urBlocks = dfs.getMissingBlocksCount();
+    assertEquals("There should be missing blocks but the value is : " + urBlocks, 1, urBlocks);
+    System.out.println("===Missing blocks after a successful refresh===");
+    System.out.println("Writing another block to the datanode");
+    DFSTestUtil.createFile(fs, file3, blocksize, REPLICATION_FACTOR, 0);
+    DFSTestUtil.waitReplication(fs, file3, REPLICATION_FACTOR);
+    //make new test dir
+    File dir3 = new File(dataDir, "data3");
+    dir3.mkdir();
+    String newDirectory = dataDir.getAbsolutePath() + "/data3";
+    System.out.println("==Reconfigure Data dir from " + listOfDataDirs[0] + 
+                                                    " to " + listOfDataDirs[1] + ',' + newDirectory);
+    datanode.reconfigureProperty("dfs.data.dir", listOfDataDirs[1] + "," + newDirectory);
+    System.out.println("==Done with Second Reconfiguration==");
+    Thread.sleep(3000);
+    urBlocks = dfs.getMissingBlocksCount();
+    assertEquals("There should be three missing blocks but the value is : " + urBlocks, 2, urBlocks);
+    datanode.reconfigureProperty("dfs.data.dir", newDirectory);
+    // make the datanode report blocks to namespace
+    datanode.scheduleNSBlockReport(0L);
+    Thread.sleep(3000);
+    urBlocks = dfs.getMissingBlocksCount();
+    DFSTestUtil.createFile(fs, file4, blocksize, REPLICATION_FACTOR, 0);
+    DFSTestUtil.waitReplication(fs, file4, REPLICATION_FACTOR);
+    assertEquals("There should still be missing blocks", 3, urBlocks);
+    System.out.println("Volume Removal was successful");
   }
 }

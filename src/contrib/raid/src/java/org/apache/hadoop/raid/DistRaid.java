@@ -1,5 +1,6 @@
 package org.apache.hadoop.raid;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -13,6 +14,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.io.SequenceFile;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.WritableComparable;
@@ -49,8 +51,18 @@ public class DistRaid {
   static final int   OP_LIST_BLOCK_SIZE = 32 * 1024 * 1024; // block size of control file
   static final short OP_LIST_REPLICATION = 10; // replication factor of control file
 
-  private static final long OP_PER_MAP = 100;
-  private static final int MAX_MAPS_PER_NODE = 20;
+  private static final long DEFAULT_OP_PER_MAP = 50;
+  public static final String OP_PER_MAP_KEY = "hdfs.raid.op.per.map";
+  private static final int DEFAULT_MAX_MAPS_PER_NODE = 20;
+  public static final String MAX_MAPS_PER_NODE_KEY = "hdfs.raid.max.maps.per.node";
+  public static final int DEFAULT_MAX_FAILURE_RETRY = 3;
+  public static final String MAX_FAILURE_RETRY_KEY = "hdfs.raid.max.failure.retry";
+  public static final String SLEEP_TIME_BETWEEN_RETRY_KEY =
+      "hdfs.raid.sleep.time.between.retry";
+  public static final long DEFAULT_SLEEP_TIME_BETWEEN_RETRY = 1000L;
+  private static long opPerMap = DEFAULT_OP_PER_MAP;
+  private static int maxMapsPerNode = DEFAULT_MAX_MAPS_PER_NODE;
+  
   private static final int SYNC_FILE_MAX = 10;
   private static final SimpleDateFormat dateForm = new SimpleDateFormat("yyyy-MM-dd HH:mm");
   private static String jobName = NAME;
@@ -76,12 +88,96 @@ public class DistRaid {
 
   public DistRaid(Configuration conf) {
     setConf(createJobConf(conf));
+    opPerMap = conf.getLong(OP_PER_MAP_KEY, DEFAULT_OP_PER_MAP);
+    maxMapsPerNode = conf.getInt(MAX_MAPS_PER_NODE_KEY,
+        DEFAULT_MAX_MAPS_PER_NODE);
   }
 
   private static final Random RANDOM = new Random();
 
   protected static String getRandomId() {
     return Integer.toString(RANDOM.nextInt(Integer.MAX_VALUE), 36);
+  }
+  
+  /*
+   * This class denotes the unit of encoding for a mapper task
+   * The key in the map function is formated as:
+   * "startStripeId encodingId encodingUnit path"
+   * Given a file path /user/dhruba/1 with 13 blocks
+   * Suppose codec's stripe length is 3 and encoding unit is 2
+   * RaidNode.splitPaths will split the raiding task into 3 tasks
+   * "0 1 2 /user/dhruba/1": will raid the stripe 0 and 1 (blocks 0-5)
+   * "2 2 2 /user/dhruba/1": will raid the stripe 2 and 3 (blocks 6-11)
+   * "4 3 2 /user/dhruba/1": will raid the stripe 4 (blocks 12-13)
+   * encodingId is unique for each task and it's used to construct a temporary
+   * directory to store the partial parity file
+   * modificationTime is the modification time of candidate when job is submitted
+   * it's used for checking if candidate changes after the job submit.  
+   */
+  
+  public static class EncodingCandidate {
+    public final static int DEFAULT_GET_SRC_STAT_RETRY = 5;
+    public FileStatus srcStat;
+    public long startStripe = 0;
+    public long encodingUnit = 0;
+    public String encodingId = null;
+    final static public String delim = " ";
+    public long modificationTime = 0L;
+    public boolean isEncoded = false;
+    public boolean isRenamed = false;
+    public boolean isConcated = false;
+    public List<List<Block>> srcStripes = null;
+    
+    EncodingCandidate(FileStatus newStat, long newStartStripe,
+        String newEncodingId, long newEncodingUnit, long newModificationTime) {
+      this.srcStat = newStat;
+      this.startStripe = newStartStripe;
+      this.encodingId = newEncodingId;
+      this.encodingUnit = newEncodingUnit;
+      this.modificationTime = newModificationTime;
+    }
+    
+    public String toString() {
+      return startStripe + delim + encodingId + delim + encodingUnit 
+          + delim + modificationTime + delim + this.srcStat.getPath().toString();
+    }
+    
+    public static EncodingCandidate getEncodingCandidate(String key,
+        Configuration jobconf) throws IOException {
+      String[] keys = key.split(delim, 5);
+      Path p = new Path(keys[4]);
+      long startStripe = Long.parseLong(keys[0]);
+      long modificationTime = Long.parseLong(keys[3]);
+      FileStatus srcStat = getSrcStatus(jobconf, p);
+      long encodingUnit = Long.parseLong(keys[2]);
+      return new EncodingCandidate(srcStat, startStripe, keys[1],
+          encodingUnit, modificationTime);
+    }
+    
+    public static FileStatus getSrcStatus(Configuration jobconf, Path p)
+        throws IOException {
+      for (int i = 0; i < DEFAULT_GET_SRC_STAT_RETRY; i++) {
+        try {
+          return p.getFileSystem(jobconf).getFileStatus(p); 
+        } catch (FileNotFoundException fnfe) {
+          return null;
+        } catch (IOException ioe) {
+          LOG.warn("Get exception ", ioe);
+          if (i == DEFAULT_GET_SRC_STAT_RETRY - 1) {
+            throw ioe;
+          }
+          try {
+            Thread.sleep(3000);
+          } catch (InterruptedException ignore) {
+          }
+        }
+      }
+      throw new IOException("couldn't getFileStatus " + p);
+    }
+    
+    public void refreshFile(Configuration jobconf) throws IOException {
+      srcStat = getSrcStatus(jobconf, srcStat.getPath());
+    }
   }
 
   /**
@@ -91,9 +187,9 @@ public class DistRaid {
    */
   public static class RaidPolicyPathPair {
     public PolicyInfo policy;
-    public List<FileStatus> srcPaths;
+    public List<EncodingCandidate> srcPaths;
 
-    RaidPolicyPathPair(PolicyInfo policy, List<FileStatus> srcPaths) {
+    RaidPolicyPathPair(PolicyInfo policy, List<EncodingCandidate> srcPaths) {
       this.policy = policy;
       this.srcPaths = srcPaths;
     }
@@ -105,6 +201,7 @@ public class DistRaid {
   private RunningJob runningJob;
   private int jobEventCounter = 0;
   private String lastReport = null;
+  private long startTime = System.currentTimeMillis();
 
   private long totalSaving;
 
@@ -177,6 +274,7 @@ public class DistRaid {
       Mapper<Text, PolicyInfo, WritableComparable, Text> {
     private JobConf jobconf;
     private boolean ignoreFailures;
+    private int retryNum;
 
     private int failcount = 0;
     private int succeedcount = 0;
@@ -191,7 +289,44 @@ public class DistRaid {
     public void configure(JobConf job) {
       this.jobconf = job;
       ignoreFailures = jobconf.getBoolean(IGNORE_FAILURES_OPTION_LABEL, true);
+      retryNum = jobconf.getInt(DistRaid.MAX_FAILURE_RETRY_KEY,
+          DistRaid.DEFAULT_MAX_FAILURE_RETRY);
       st = new Statistics();
+    }
+    
+    public static boolean doRaid(int retryNum, String key, Configuration jobconf,
+        PolicyInfo policy, Statistics st, Reporter reporter)
+            throws IOException {
+      String s = "FAIL: " + policy + ", " + key + " ";
+      long sleepTimeBetwRetry = jobconf.getLong(SLEEP_TIME_BETWEEN_RETRY_KEY,
+                                            DEFAULT_SLEEP_TIME_BETWEEN_RETRY);
+      EncodingCandidate ec = EncodingCandidate.getEncodingCandidate(key, jobconf);
+      for (int i = 0; i < retryNum; i++) {
+        LOG.info("The " + i + "th attempt: " + s);
+        if (ec.srcStat == null) {
+          LOG.info("Raiding Candidate doesn't exist, NO_ACTION");
+          return false;
+        }
+        if (ec.modificationTime != ec.srcStat.getModificationTime()) {
+          LOG.info("Raiding Candidate was changed, NO_ACTION");
+          return false;
+        }
+        try {
+          return RaidNode.doRaid(jobconf, policy, ec, st, reporter);
+        } catch (IOException e) {
+          LOG.info(s, e);
+          if (i == retryNum - 1) {
+            throw new IOException(s, e);
+          }
+          ec.refreshFile(jobconf);
+          try {
+            Thread.sleep(sleepTimeBetwRetry);
+          } catch (InterruptedException ie) {
+            throw new IOException(ie);
+          }
+        }
+      }
+      throw new IOException(s);
     }
 
     /** Run a FileOperation */
@@ -200,29 +335,24 @@ public class DistRaid {
         throws IOException {
       this.reporter = reporter;
       try {
+        Codec.initializeCodecs(jobconf);
         LOG.info("Raiding file=" + key.toString() + " policy=" + policy);
-        Path p = new Path(key.toString());
-        FileStatus fs = p.getFileSystem(jobconf).getFileStatus(p);
-        st.clear();
-        RaidNode.doRaid(jobconf, policy, fs, st, reporter);
-
-        ++succeedcount;
-
-        reporter.incrCounter(Counter.PROCESSED_BLOCKS, st.numProcessedBlocks);
-        reporter.incrCounter(Counter.PROCESSED_SIZE, st.processedSize);
-        reporter.incrCounter(Counter.META_BLOCKS, st.numMetaBlocks);
-        reporter.incrCounter(Counter.META_SIZE, st.metaSize);
-        reporter.incrCounter(Counter.SAVING_SIZE,
-            st.processedSize - st.remainingSize - st.metaSize);
-        reporter.incrCounter(Counter.FILES_SUCCEEDED, 1);
+        boolean result = doRaid(retryNum, key.toString(), jobconf, policy, st, reporter);
+        if (result) {
+          ++succeedcount;
+          
+          reporter.incrCounter(Counter.PROCESSED_BLOCKS, st.numProcessedBlocks);
+          reporter.incrCounter(Counter.PROCESSED_SIZE, st.processedSize);
+          reporter.incrCounter(Counter.META_BLOCKS, st.numMetaBlocks);
+          reporter.incrCounter(Counter.META_SIZE, st.metaSize);
+          reporter.incrCounter(Counter.SAVING_SIZE,
+              st.processedSize - st.remainingSize - st.metaSize);
+          reporter.incrCounter(Counter.FILES_SUCCEEDED, 1);
+        }
       } catch (IOException e) {
         ++failcount;
         reporter.incrCounter(Counter.FILES_FAILED, 1);
-
-        String s = "FAIL: " + policy + ", " + key + " "
-            + StringUtils.stringifyException(e);
-        out.collect(null, new Text(s));
-        LOG.info(s);
+        out.collect(null, new Text(e.getMessage()));
       } finally {
         reporter.setStatus(getCountString());
       }
@@ -262,15 +392,14 @@ public class DistRaid {
   }
 
   /** Add paths to be raided */
-  public void addRaidPaths(PolicyInfo info, List<FileStatus> paths) {
+  public void addRaidPaths(PolicyInfo info, List<EncodingCandidate> paths) {
     raidPolicyPathPairList.add(new RaidPolicyPathPair(info, paths));
   }
 
   /** Calculate how many maps to run. */
-  private static int getMapCount(int srcCount, int numNodes) {
-    int numMaps = (int) (srcCount / OP_PER_MAP);
-    numMaps = Math.min(numMaps, numNodes * MAX_MAPS_PER_NODE);
-    return Math.max(numMaps, MAX_MAPS_PER_NODE);
+  private static int getMapCount(int srcCount) {
+    int numMaps = (int) (srcCount / opPerMap);
+    return Math.max(numMaps, maxMapsPerNode);
   }
 
   /** Invokes a map-reduce job do parallel raiding.
@@ -282,11 +411,22 @@ public class DistRaid {
       this.jobClient = new JobClient(jobconf);
       this.runningJob = this.jobClient.submitJob(jobconf);
       LOG.info("Job Started: " + runningJob.getID());
+      this.startTime = System.currentTimeMillis();
       return true;
     }
     return false;
   }
 
+  /**
+   * Get the URL of the current running job
+   * @return the tracking URL
+   */
+  public String getJobTrackingURL() {
+    if (runningJob == null)
+      return null;
+    return runningJob.getTrackingURL();
+  }
+  
    /** Checks if the map-reduce job has completed.
     *
     * @return true if the job completed, false otherwise.
@@ -342,6 +482,20 @@ public class DistRaid {
    public void killJob() throws IOException {
      runningJob.killJob();
    }
+   
+   public void cleanUp() {
+     for (Codec codec: Codec.getCodecs()) {
+       Path tmpdir = new Path(codec.tmpParityDirectory, this.getJobID());
+       try {
+         FileSystem fs = tmpdir.getFileSystem(jobconf);
+         if (fs.exists(tmpdir)) {
+           fs.delete(tmpdir, true);
+         }
+       } catch (IOException ioe) {
+         LOG.error("Fail to delete " + tmpdir, ioe);
+       }
+     }
+   }
 
    public boolean successful() throws IOException {
      return runningJob.isSuccessful();
@@ -349,12 +503,12 @@ public class DistRaid {
 
    private void estimateSavings() {
      for (RaidPolicyPathPair p : raidPolicyPathPairList) {
-       ErasureCodeType code = p.policy.getErasureCode();
-       int stripeSize = RaidNode.getStripeLength(jobconf);
-       int paritySize = RaidNode.parityLength(code, jobconf);
+       Codec codec = Codec.getCodec(p.policy.getCodecId());
+       int stripeSize = codec.stripeLength;
+       int paritySize = codec.parityLength;
        int targetRepl = Integer.parseInt(p.policy.getProperty("targetReplication"));
        int parityRepl = Integer.parseInt(p.policy.getProperty("metaReplication"));
-       for (FileStatus st : p.srcPaths) {
+       for (EncodingCandidate st : p.srcPaths) {
          long saving = RaidNode.savingFromRaidingFile(
              st, stripeSize, paritySize, targetRepl, parityRepl);
          totalSaving += saving;
@@ -402,8 +556,8 @@ public class DistRaid {
         // with the same map. This shuffle mixes things up, allowing a better
         // mix of files.
         java.util.Collections.shuffle(p.srcPaths);
-        for (FileStatus st : p.srcPaths) {
-          opWriter.append(new Text(st.getPath().toString()), p.policy);
+        for (EncodingCandidate ec : p.srcPaths) {
+          opWriter.append(new Text(ec.toString()), p.policy);
           opCount++;
           if (++synCount > SYNC_FILE_MAX) {
             opWriter.sync();
@@ -422,11 +576,14 @@ public class DistRaid {
     
     jobconf.setInt(OP_COUNT_LABEL, opCount);
     LOG.info("Number of files=" + opCount);
-    jobconf.setNumMapTasks(getMapCount(opCount, new JobClient(jobconf)
-        .getClusterStatus().getTaskTrackers()));
+    jobconf.setNumMapTasks(getMapCount(opCount));
     LOG.info("jobName= " + jobName + " numMapTasks=" + jobconf.getNumMapTasks());
     return opCount != 0;
 
+  } 
+  
+  public long getStartTime() {
+    return this.startTime;
   }
 
   public String toHtmlRow() {

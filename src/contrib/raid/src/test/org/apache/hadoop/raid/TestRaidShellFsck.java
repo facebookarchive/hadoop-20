@@ -21,47 +21,27 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.PrintWriter;
-import java.net.URI;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.GregorianCalendar;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Properties;
 import java.util.Random;
-import java.util.zip.CRC32;
-
 import org.junit.Test;
 import org.junit.After;
 import static org.junit.Assert.assertTrue;
-
+import static org.junit.Assert.assertEquals;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
-
-import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
-import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FSDataOutputStream;
-import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
-import org.apache.hadoop.hdfs.protocol.ClientProtocol;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
-import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
-import org.apache.hadoop.hdfs.DistributedRaidFileSystem;
 import org.apache.hadoop.hdfs.TestRaidDfs;
 import org.apache.hadoop.hdfs.DFSUtil;
 import org.apache.hadoop.raid.RaidNode;
 import org.apache.hadoop.raid.HarIndex;
-
 
 public class TestRaidShellFsck {
   final static Log LOG =
@@ -83,9 +63,9 @@ public class TestRaidShellFsck {
     new Path("/user/pkling/raidtest/raidfsck.test");
   final static Path FILE_PATH1 =
     new Path("/user/pkling/raidtest/raidfsck2.test");
-  final static Path RAID_PATH = new Path("/destraid/user/pkling/raidtest");
+  final static Path RAID_PATH = new Path("/raid/user/pkling/raidtest");
   final static String HAR_NAME = "raidtest_raid.har";
-  final static String RAID_DIR = "/destraid";
+  final static String RAID_DIR = "/raid";
 
   Configuration conf = null;
   Configuration raidConf = null;
@@ -98,12 +78,10 @@ public class TestRaidShellFsck {
   RaidShell shell = null;
   String[] args = null;
 
-
   /**
    * creates a MiniDFS instance with a raided file in it
    */
   private void setUp(boolean doHar) throws IOException, ClassNotFoundException {
-
     final int timeBeforeHar;
     if (doHar) {
       timeBeforeHar = 0;
@@ -114,6 +92,8 @@ public class TestRaidShellFsck {
 
     new File(TEST_DIR).mkdirs(); // Make sure data directory exists
     conf = new Configuration();
+
+    Utils.loadTestCodecs(conf, 3, 1, 3, "/raid", "/raidrs");
 
     conf.set("raid.config.file", CONFIG_FILE);
     conf.setBoolean("raid.config.reload", true);
@@ -128,9 +108,8 @@ public class TestRaidShellFsck {
     conf.set("raid.blockfix.classname", 
              "org.apache.hadoop.raid.LocalBlockIntegrityMonitor");
 
-    conf.set("raid.server.address", "localhost:0");
-    conf.setInt("hdfs.raid.stripeLength", STRIPE_BLOCKS);
-    conf.set("hdfs.raid.locations", RAID_DIR);
+    conf.set("raid.server.address", "localhost:" + MiniDFSCluster.getFreePort());
+    conf.set("mapred.raid.http.address", "localhost:0");
 
     conf.setInt("dfs.corruptfilesreturned.max", 500);
 
@@ -149,7 +128,7 @@ public class TestRaidShellFsck {
       "<configuration> " +
       "    <policy name = \"RaidTest1\"> " +
       "      <srcPath prefix=\"" + DIR_PATH + "\"/> " +
-      "      <erasureCode>xor</erasureCode> " +
+      "      <codecId>xor</codecId> " +
       "      <destPath> " + RAID_DIR + " </destPath> " +
       "      <property> " +
       "        <name>targetReplication</name> " +
@@ -232,7 +211,6 @@ public class TestRaidShellFsck {
     throws IOException, ClassNotFoundException {
     // create RaidNode
     raidConf = new Configuration(conf);
-    raidConf.set(RaidNode.RAID_LOCATION_KEY, RAID_DIR);
     raidConf.setInt(RaidNode.RAID_PARITY_HAR_THRESHOLD_DAYS_KEY, 0);
     raidConf.setInt("raid.blockfix.interval", 1000);
     // the RaidNode does the raiding inline (instead of submitting to MR node)
@@ -311,31 +289,16 @@ public class TestRaidShellFsck {
    * sleeps for up to 20s until the number of corrupt files 
    * in the file system is equal to the number specified
    */
-  private void waitUntilCorruptFileCount(DistributedFileSystem dfs,
+  static public void waitUntilCorruptFileCount(DistributedFileSystem dfs,
                                          int corruptFiles)
-    throws IOException {
-    int initialCorruptFiles = DFSUtil.getCorruptFiles(dfs).length;
+    throws IOException, InterruptedException {
     long waitStart = System.currentTimeMillis();
-    while (DFSUtil.getCorruptFiles(dfs).length != corruptFiles) {
-      try {
-        Thread.sleep(1000);
-      } catch (InterruptedException ignore) {
-        
-      }
-
-      if (System.currentTimeMillis() > waitStart + 20000L) {
-        break;
-      }
+    while (DFSUtil.getCorruptFiles(dfs).length != corruptFiles &&
+        System.currentTimeMillis() < waitStart + 20000L) {
+      Thread.sleep(1000);
     }
-    
-    long waited = System.currentTimeMillis() - waitStart;
-
-    int corruptFilesFound = DFSUtil.getCorruptFiles(dfs).length;
-    if (corruptFilesFound != corruptFiles) {
-      throw new IOException("expected " + corruptFiles + 
-                            " corrupt files but got " +
-                            corruptFilesFound);
-    }
+    assertEquals("expected " + corruptFiles + " corrupt files", 
+        corruptFiles, DFSUtil.getCorruptFiles(dfs).length);
   }
 
   /**
@@ -381,9 +344,11 @@ public class TestRaidShellFsck {
    * removes a parity block in the specified stripe
    */
   private void removeParityBlock(Path filePath, int stripe) throws IOException {
+    FileStatus srcStat = 
+        filePath.getFileSystem(raidConf).getFileStatus(filePath);
     // find parity file
     ParityFilePair ppair =
-        ParityFilePair.getParityFile(ErasureCodeType.XOR, filePath, conf);
+        ParityFilePair.getParityFile(Codec.getCodec("xor"), srcStat, conf);
     String parityPathStr = ppair.getPath().toUri().getPath();
     LOG.info("parity path: " + parityPathStr);
     FileSystem parityFS = ppair.getFileSystem();
@@ -462,28 +427,6 @@ public class TestRaidShellFsck {
     }
   }
 
-
-  /**
-   * returns the data directories for a data node
-   */
-  private File[] getDataDirs(int datanode) throws IOException{
-    File data_dir = new File(System.getProperty("test.build.data"), 
-                             "dfs/data/");
-    File dir1 = new File(data_dir, "data"+(2 * datanode + 1));
-    File dir2 = new File(data_dir, "data"+(2 * datanode + 2));
-    if (!(dir1.isDirectory() && dir2.isDirectory())) {
-      throw new IOException("data directories not found for data node " + 
-                            datanode + ": " + dir1.toString() + " " + 
-                            dir2.toString());
-    }
-
-    File[] dirs = new File[2];
-    dirs[0] = new File(dir1, "current");
-    dirs[1] = new File(dir2, "current");
-    return dirs;
-  }
-
-
   /**
    * checks fsck with no missing blocks
    */
@@ -491,7 +434,7 @@ public class TestRaidShellFsck {
   public void testClean() throws Exception {
     LOG.info("testClean");
     setUp(false);
-    ToolRunner.run(shell, args);
+    assertEquals(0, ToolRunner.run(shell, args));
     int result = shell.getCorruptCount();
 
     assertTrue("fsck should return 0, but returns " +
@@ -510,7 +453,7 @@ public class TestRaidShellFsck {
     removeFileBlock(FILE_PATH0, 0, 0);
     waitUntilCorruptFileCount(dfs, 1);
 
-    ToolRunner.run(shell, args);
+    assertEquals(0, ToolRunner.run(shell, args));
     int result = shell.getCorruptCount();
 
     assertTrue("fsck should return 0, but returns " + 
@@ -528,7 +471,7 @@ public class TestRaidShellFsck {
     removeParityBlock(FILE_PATH0, 0);
     waitUntilCorruptFileCount(dfs, 1);
 
-    ToolRunner.run(shell, args);
+    assertEquals(0, ToolRunner.run(shell, args));
     int result = shell.getCorruptCount();
 
     assertTrue("fsck should return 0, but returns " +
@@ -550,7 +493,7 @@ public class TestRaidShellFsck {
     removeParityBlock(FILE_PATH0, 1);
     waitUntilCorruptFileCount(dfs, 2);
 
-    ToolRunner.run(shell, args);
+    assertEquals(0, ToolRunner.run(shell, args));
     int result = shell.getCorruptCount();
 
     assertTrue("fsck should return 0, but returns " + 
@@ -572,7 +515,7 @@ public class TestRaidShellFsck {
     removeFileBlock(FILE_PATH0, 1, 0);
     waitUntilCorruptFileCount(dfs, 2);
 
-    ToolRunner.run(shell, args);
+    assertEquals(0, ToolRunner.run(shell, args));
     int result = shell.getCorruptCount();
 
     assertTrue("fsck should return 1, but returns " + 
@@ -593,7 +536,7 @@ public class TestRaidShellFsck {
     removeFileBlock(FILE_PATH0, 1, 0);
     waitUntilCorruptFileCount(dfs, 1);
 
-    ToolRunner.run(shell, args);
+    assertEquals(0, ToolRunner.run(shell, args));
     int result = shell.getCorruptCount();
 
     assertTrue("fsck should return 1, but returns " + 
@@ -614,7 +557,7 @@ public class TestRaidShellFsck {
     removeFileBlock(FILE_PATH0, 0, 0);
     waitUntilCorruptFileCount(dfs, 1);
 
-    ToolRunner.run(shell, args);
+    assertEquals(0, ToolRunner.run(shell, args));
     int result = shell.getCorruptCount();
 
     assertTrue("fsck should return 0, but returns " +
@@ -643,7 +586,7 @@ public class TestRaidShellFsck {
     removeFileBlock(FILE_PATH1, 1, 1);
     waitUntilCorruptFileCount(dfs, 2);
 
-    ToolRunner.run(shell, args);
+    assertEquals(0, ToolRunner.run(shell, args));
     int result = shell.getCorruptCount();
 
     assertTrue("fsck should return 0, but returns " +
@@ -680,7 +623,7 @@ public class TestRaidShellFsck {
     removeHarParityBlock(2);
     waitUntilCorruptFileCount(dfs, 3);
 
-    ToolRunner.run(shell, args);
+    assertEquals(0, ToolRunner.run(shell, args));
     int result = shell.getCorruptCount();
 
     assertTrue("fsck should return 1, but returns " +
@@ -705,7 +648,7 @@ public class TestRaidShellFsck {
     String[] otherArgs = new String[2];
     otherArgs[0] = "-fsck";
     otherArgs[1] = "/user/pkling/other";
-    ToolRunner.run(shell, otherArgs);
+    assertEquals(0, ToolRunner.run(shell, otherArgs));
     int result = shell.getCorruptCount();
 
     assertTrue("fsck should return 0, but returns " + 

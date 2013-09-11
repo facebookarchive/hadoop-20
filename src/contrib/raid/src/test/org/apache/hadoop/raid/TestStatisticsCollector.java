@@ -39,18 +39,145 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.raid.Statistics.Counters;
 import org.apache.hadoop.raid.protocol.PolicyInfo;
+import org.apache.hadoop.raid.Utils.Builder;
 
 /**
  * Verifies {@link Statistics} collects raid statistics
  */
 public class TestStatisticsCollector extends TestCase {
+  public TestStatisticsCollector(String name) {
+    super(name);
+  }
+
   final static Log LOG = LogFactory.getLog(TestStatisticsCollector.class);
   final static Random rand = new Random();
   final Configuration conf = new Configuration();
   final FakeConfigManager fakeConfigManager = new FakeConfigManager();
   final FakeRaidNode fakeRaidNode = new FakeRaidNode();
+  
+  // Test scenario with mixed file-level raid and dir-level raid 
+  public void testCollectMixedRaid() throws Exception {
+    MiniDFSCluster dfs = null;
+    try {
+      conf.setLong(RaidNode.MINIMUM_RAIDABLE_FILESIZE_KEY, 0L);
+      dfs = new MiniDFSCluster(conf, 3, true, null);
+      dfs.waitActive();
+      FileSystem fs = dfs.getFileSystem();
+      TestDirectoryRaidDfs.setupStripeStore(conf, fs);
+      // load the test directory codecs.
+      Utils.loadTestCodecs(conf, new Builder[] {Utils.getDirXORBuilder(), 
+          Utils.getDirRSBuilder(), Utils.getRSBuilder(),
+          Utils.getXORBuilder()});
+      List<PolicyInfo> allPolicies = new ArrayList<PolicyInfo>();
+      for (Codec codec: Codec.getCodecs()) {
+        PolicyInfo info = new PolicyInfo(codec.id, conf);
+        info.setSrcPath("/a");
+        info.setProperty("modTimePeriod", "0");
+        info.setProperty("targetReplication", "1");
+        info.setCodecId(codec.id);
+        allPolicies.add(info);
+      }
+      createFile(fs, new Path("/a/dir-xor/RAIDED1"), 1, 3, 512L);
+      createFile(fs, new Path("/a/dir-xor/RAIDED2"), 1, 3, 512L);
+      doRaid(fs, new Path("/a/dir-xor"), Codec.getCodec("dir-xor"), 1, 1);
+      
+      createFile(fs, new Path("/a/dir-rs/RAIDED1"), 1, 3, 512L);
+      createFile(fs, new Path("/a/dir-rs/RAIDED2"), 1, 3, 512L);
+      doRaid(fs, new Path("/a/dir-rs"), Codec.getCodec("dir-rs"), 1, 1);
+      
+      createFile(fs, new Path("/a/xor/RAIDED1"), 1, 3, 512L);
+      createFile(fs, new Path("/a/xor/RAIDED2"), 1, 3, 512L);
+      doRaid(fs, new Path("/a/xor/RAIDED1"), Codec.getCodec("xor"), 1, 1);
+      doRaid(fs, new Path("/a/xor/RAIDED2"), Codec.getCodec("xor"), 1, 1);
+      
+      createFile(fs, new Path("/a/rs/RAIDED1"), 1, 3, 512L);
+      createFile(fs, new Path("/a/rs/RAIDED2"), 1, 3, 512L);
+      doRaid(fs, new Path("/a/rs/RAIDED1"), Codec.getCodec("rs"), 1, 1);
+      doRaid(fs, new Path("/a/rs/RAIDED2"), Codec.getCodec("rs"), 1, 1);
+      
+      StatisticsCollector collector =
+          new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
+      collector.collect(allPolicies);
+      for (Codec codec : Codec.getCodecs()) {
+        Statistics st = collector.getRaidStatistics(codec.id);
+        Counters raided = st.getSourceCounters(RaidState.RAIDED);
+        if (codec.isDirRaid) {
+          assertCounters(raided, 1, 2, 6, 6 * 512L, 6 * 512L);
+        } else {
+          assertCounters(raided, 2, 6, 6 * 512L, 6 * 512L);
+        }
+      }
+    } finally {
+      if (dfs != null) {
+        dfs.shutdown();
+      }
+    }
+  }
+  
+  // Test the case that raided files are counted for low-priority policies
+  public void testLowPriorityRaidedPolicy() throws Exception {
+    MiniDFSCluster dfs = null;
+    try {
+      conf.setLong(RaidNode.MINIMUM_RAIDABLE_FILESIZE_KEY, 0L);
+      dfs = new MiniDFSCluster(conf, 3, true, null);
+      dfs.waitActive();
+      FileSystem fs = dfs.getFileSystem();
+      TestDirectoryRaidDfs.setupStripeStore(conf, fs);
+      Utils.loadTestCodecs(conf, new Builder[] {Utils.getDirXORBuilder(), 
+          Utils.getDirRSBuilder(), Utils.getXORBuilder(),
+          Utils.getRSBuilder()});
+      verifyLowPrioritySourceCollect("xor", "rs", fs);
+      verifyLowPrioritySourceCollect("dir-xor", "dir-rs", fs);
+    } finally {
+      if (dfs != null) {
+        dfs.shutdown();
+      }
+    }
+  }
+  
+  public void verifyLowPrioritySourceCollect(String lpId, String hpId, 
+      FileSystem fs) throws IOException {
+    PolicyInfo lpInfo = new PolicyInfo("Test-Low-Pri-" + lpId, conf);
+    lpInfo.setSrcPath("/a");
+    lpInfo.setProperty("modTimePeriod", "0");
+    lpInfo.setProperty("targetReplication", "1");
+    lpInfo.setCodecId(lpId);
 
-
+    PolicyInfo hpInfo = new PolicyInfo("Test-High-Pri-" + hpId, conf);
+    hpInfo.setSrcPath("/a");
+    hpInfo.setProperty("modTimePeriod", "0");
+    hpInfo.setProperty("targetReplication", "2");
+    hpInfo.setCodecId(hpId);
+    
+    Codec lpCodec = Codec.getCodec(lpId);
+    createFile(fs, new Path("/a/b/f/g/RAIDED"), 1, 3, 1024L);
+    doRaid(fs, new Path("/a/b/f/g/RAIDED"), lpCodec, 1, 1);
+    createFile(fs, new Path("/a/b/f/h/RAIDED"), 1, 4, 1024L);
+    doRaid(fs, new Path("/a/b/f/h/RAIDED"), lpCodec, 1, 1);
+    createFile(fs, new Path("/a/b/f/i/NOT_RAIDED"), 3, 5, 1024L);
+    
+    StatisticsCollector collector =
+        new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
+    List<PolicyInfo> allPolicies = Arrays.asList(lpInfo, hpInfo);
+    collector.collect(allPolicies);
+    Statistics lpSt = collector.getRaidStatistics(lpId);
+    LOG.info("Statistics collected " + lpSt);
+    LOG.info("Statistics html:\n " + lpSt.htmlTable());
+    Counters raided = lpSt.getSourceCounters(RaidState.RAIDED);
+    Counters tooSmall = lpSt.getSourceCounters(RaidState.NOT_RAIDED_TOO_SMALL);
+    Counters tooNew = lpSt.getSourceCounters(RaidState.NOT_RAIDED_TOO_NEW);
+    Counters otherPolicy = lpSt.getSourceCounters(RaidState.NOT_RAIDED_OTHER_POLICY);
+    Counters notRaided = lpSt.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);
+    assertCounters(raided, lpCodec.isDirRaid? 2 : 0, 2, 7, 7 * 1024L, 7 * 1024L);
+    assertCounters(tooSmall, 0, 0, 0, 0L, 0L);
+    assertCounters(tooNew, 0, 0, 0, 0L, 0L);
+    // the NOT_RAIDED files could be raided by high priority policy 
+    assertCounters(otherPolicy, lpCodec.isDirRaid? 1 : 0, 1, 5, 15 * 1024L,
+        5 * 1024L);
+    assertCounters(notRaided, 0, 0, 0, 0L, 0L);
+    fs.delete(new Path("/a"), true);
+  }
+  
   public void testExcludes() throws IOException {
     conf.set("raid.exclude.patterns", "/exclude/,/df_mf/");
     RaidState.Checker checker = new RaidState.Checker(
@@ -80,17 +207,19 @@ public class TestStatisticsCollector extends TestCase {
       -1,
       RaidState.Checker.mtimeFromName("/a/b/c/d/e/f"));
   }
-
+  
   public void testCollect() throws Exception {
     MiniDFSCluster dfs = null;
     try {
       dfs = new MiniDFSCluster(conf, 3, true, null);
       dfs.waitActive();
       FileSystem fs = dfs.getFileSystem();
-      verifySourceCollect(ErasureCodeType.RS, fs, false);
-      verifySourceCollect(ErasureCodeType.XOR, fs, false);
-      verifyParityCollect(ErasureCodeType.RS, fs);
-      verifyParityCollect(ErasureCodeType.XOR, fs);
+      TestDirectoryRaidDfs.setupStripeStore(conf, fs);
+      Utils.loadTestCodecs(conf);
+      verifySourceCollect("rs", fs, false);
+      verifySourceCollect("xor", fs, false);
+      verifyParityCollect("rs", fs);
+      verifyParityCollect("xor", fs);
       verifyLongPrefixOverride(fs);
       verifyRsCodeOverride(fs);
     } finally {
@@ -99,16 +228,41 @@ public class TestStatisticsCollector extends TestCase {
       }
     }
   }
-
+  
+  public void testCollectDirRaid() throws Exception {
+    
+    MiniDFSCluster dfs = null;
+    try {
+      conf.setLong(RaidNode.MINIMUM_RAIDABLE_FILESIZE_KEY, 0L);
+      dfs = new MiniDFSCluster(conf, 3, true, null);
+      dfs.waitActive();
+      FileSystem fs = dfs.getFileSystem();
+      TestDirectoryRaidDfs.setupStripeStore(conf, fs);
+      // load the test directory codecs.
+      Utils.loadTestCodecs(conf, new Builder[] {Utils.getDirXORBuilder(), 
+          Utils.getDirRSBuilder()});
+      verifyDirRaidSourceCollect("dir-rs", fs, false);
+      verifyDirRaidSourceCollect("dir-xor", fs, false);
+      verifyParityCollect("dir-rs", fs);
+      verifyParityCollect("dir-xor", fs);
+    } finally {
+      if (dfs != null) {
+        dfs.shutdown();
+      }
+    }
+  }
+  
   public void testSnapshot() throws Exception {
     conf.set(StatisticsCollector.STATS_SNAPSHOT_FILE_KEY,
              "/tmp/raidStatsSnapshot");
     MiniDFSCluster dfs = null;
     try {
+      Utils.loadTestCodecs(conf);
       dfs = new MiniDFSCluster(conf, 3, true, null);
       dfs.waitActive();
       FileSystem fs = dfs.getFileSystem();
-      verifySourceCollect(ErasureCodeType.RS, fs, true);
+      TestDirectoryRaidDfs.setupStripeStore(conf, fs);
+      verifySourceCollect("rs", fs, true);
     } finally {
       if (dfs != null) {
         dfs.shutdown();
@@ -116,25 +270,81 @@ public class TestStatisticsCollector extends TestCase {
     }
   }
 
-  public void verifySourceCollect(ErasureCodeType code, FileSystem fs,
+  public void verifyDirRaidSourceCollect(String codecId, FileSystem fs,
+                                         boolean writeAndRestoreSnapshot) 
+                                             throws IOException {
+    PolicyInfo info = new PolicyInfo("Test-Dir-Raid-" + codecId, conf);
+    info.setSrcPath("/a");
+    info.setProperty("modTimePeriod", "0");
+    info.setProperty("targetReplication", "1");
+    info.setCodecId(codecId);
+    
+    PolicyInfo infoTooNew = new PolicyInfo("Test-Too-New-" + codecId, conf);
+    infoTooNew.setSrcPath("/new");
+    infoTooNew.setProperty("modTimePeriod", "" + Long.MAX_VALUE);
+    infoTooNew.setProperty("targetReplication", "1");
+    infoTooNew.setCodecId(codecId);
+    
+    Codec curCodec = Codec.getCodec(codecId);
+    
+    createFile(fs, new Path("/a/b/NOT_RAIDED1"), 1, 1, 1024L);
+    createFile(fs, new Path("/a/b/NOT_RAIDED2"), 2, 2, 1024L);
+    createFile(fs, new Path("/a/b/NOT_RAIDED3"), 1, 3, 1024L);
+    
+    createFile(fs, new Path("/a/c/RAIDED1"), 1, 1, 1024L);
+    createFile(fs, new Path("/a/c/RAIDED2"), 1, 2, 1024L);
+    createFile(fs, new Path("/a/c/RAIDED3"), 1, 3, 1024L);
+    createFile(fs, new Path("/a/c/RAIDED4"), 1, 4, 1024L);
+    createFile(fs, new Path("/a/c/RAIDED5"), 1, 5, 1024L);
+    doRaid(fs, new Path("/a/c"), curCodec, 1, 1);
+    
+    createFile(fs, new Path("/a/d/TOO_SMALL1"), 1, 1, 1024L);
+    createFile(fs, new Path("/a/d/TOO_SMALL2"), 2, 1, 1024L);
+
+    createFile(fs, new Path("/new/TOO_NEW1"), 3, 4, 1024L);
+    createFile(fs, new Path("/new/TOO_NEW2"), 3, 5, 1024L);
+    
+    StatisticsCollector collector =
+        new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
+    List<PolicyInfo> allPolicies = Arrays.asList(info, infoTooNew);
+    collector.collect(allPolicies);
+    Statistics st = collector.getRaidStatistics(codecId);
+    
+    LOG.info("Dir Statistics collected " + st);
+    LOG.info("Dir Statistics html:\n " + st.htmlTable());
+    Counters raided = st.getSourceCounters(RaidState.RAIDED);
+    Counters tooSmall = st.getSourceCounters(RaidState.NOT_RAIDED_TOO_SMALL);
+    Counters tooNew = st.getSourceCounters(RaidState.NOT_RAIDED_TOO_NEW);
+    Counters notRaided = st.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);
+    
+    assertCounters(raided, 1, 5, 15, 15 * 1024L, 15 * 1024L);
+    assertCounters(tooSmall, 1, 2, 2, 3 * 1024L, 2 * 1024L);
+    assertCounters(tooNew, 1, 2, 9, 27 * 1024L, 9 * 1024L);
+    assertCounters(notRaided, 1, 3, 6, 8 * 1024L, 6 * 1024L);
+  }
+  
+  public void verifySourceCollect(String codecId, FileSystem fs,
                                   boolean writeAndRestoreSnapshot)
       throws Exception {
-    PolicyInfo info = new PolicyInfo("Test-Raided-" + code, conf);
+    PolicyInfo info = new PolicyInfo("Test-Raided-" + codecId, conf);
     info.setSrcPath("/a/b");
     info.setProperty("modTimePeriod", "0");
     info.setProperty("targetReplication", "1");
-    info.setErasureCode(code.toString());
+    info.setCodecId(codecId);
 
-    PolicyInfo infoTooNew = new PolicyInfo("Test-Too-New-" + code, conf);
+    PolicyInfo infoTooNew = new PolicyInfo("Test-Too-New-" + codecId, conf);
     infoTooNew.setSrcPath("/a/new");
     infoTooNew.setProperty("modTimePeriod", "" + Long.MAX_VALUE);
     infoTooNew.setProperty("targetReplication", "1");
-    infoTooNew.setErasureCode(code.toString());
-
+    infoTooNew.setCodecId(codecId);
+    
+    Codec curCodec = Codec.getCodec(codecId);
     createFile(fs, new Path("/a/b/TOO_SMALL"), 1, 1, 1024L);
     createFile(fs, new Path("/a/b/d/TOO_SMALL"), 2, 2, 1024L);
     createFile(fs, new Path("/a/b/f/g/RAIDED"), 1, 3, 1024L);
+    doRaid(fs, new Path("/a/b/f/g/RAIDED"), curCodec, 1, 1);
     createFile(fs, new Path("/a/b/f/g/h/RAIDED"), 1, 4, 1024L);
+    doRaid(fs, new Path("/a/b/f/g/h/RAIDED"), curCodec, 1, 1);
     createFile(fs, new Path("/a/b/f/g/NOT_RAIDED"), 3, 5, 1024L);
 
     createFile(fs, new Path("/a/new/i/TOO_NEW"), 3, 4, 1024L);
@@ -144,7 +354,7 @@ public class TestStatisticsCollector extends TestCase {
         new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
     List<PolicyInfo> allPolicies = Arrays.asList(info, infoTooNew);
     collector.collect(allPolicies);
-    Statistics st = collector.getRaidStatistics(code);
+    Statistics st = collector.getRaidStatistics(codecId);
     LOG.info("Statistics collected " + st);
     LOG.info("Statistics html:\n " + st.htmlTable());
     Counters raided = st.getSourceCounters(RaidState.RAIDED);
@@ -158,22 +368,26 @@ public class TestStatisticsCollector extends TestCase {
     fs.delete(new Path("/a"), true);
 
     if (writeAndRestoreSnapshot) {
-      Map<ErasureCodeType, Statistics> stats = collector.getRaidStatisticsMap();
+      Map<String, Statistics> stats = collector.getRaidStatisticsMap();
       assertTrue(collector.writeStatsSnapshot());
       collector.clearRaidStatisticsMap();
       assertEquals(null, collector.getRaidStatisticsMap());
 
       assertTrue(collector.readStatsSnapshot());
-      Map<ErasureCodeType, Statistics> diskStats =
+      Map<String, Statistics> diskStats =
         collector.getRaidStatisticsMap();
       assertEquals(stats, diskStats);
     }
   }
 
-  public void verifyParityCollect(ErasureCodeType code, FileSystem fs)
+  public void verifyParityCollect(String codecId, FileSystem fs)
       throws Exception {
-    LOG.info("Start testing parity collect for " + code);
-    Path parityPath = RaidNode.getDestinationPath(code, conf);
+    LOG.info("Start testing parity collect for " + codecId);
+    Codec codec = Codec.getCodec(codecId);
+    Path parityPath = new Path(codec.parityDirectory);
+    if (fs.exists(parityPath)) {
+      fs.delete(parityPath, true);
+    }
     fs.mkdirs(parityPath);
     createFile(fs, new Path(parityPath+ "/a"), 1, 1, 1024L);
     createFile(fs, new Path(parityPath + "/b/c"), 2, 2, 1024L);
@@ -182,7 +396,7 @@ public class TestStatisticsCollector extends TestCase {
     StatisticsCollector collector =
         new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
     collector.collect(empty);
-    Statistics st = collector.getRaidStatistics(code);
+    Statistics st = collector.getRaidStatistics(codecId);
     assertCounters(st.getParityCounters(), 3, 6, 14 * 1024L, 6 * 1024L);
     LOG.info("Statistics collected " + st);
     LOG.info("Statistics html:\n " + st.htmlTable());
@@ -194,13 +408,13 @@ public class TestStatisticsCollector extends TestCase {
     info.setSrcPath("/a/b");
     info.setProperty("modTimePeriod", "0");
     info.setProperty("targetReplication", "1");
-    info.setErasureCode("RS");
+    info.setCodecId("rs");
 
     PolicyInfo infoLongPrefix = new PolicyInfo("Long-Prefix", conf);
     infoLongPrefix.setSrcPath("/a/b/c");
     infoLongPrefix.setProperty("modTimePeriod", "0");
     infoLongPrefix.setProperty("targetReplication", "2");
-    infoLongPrefix.setErasureCode("XOR");
+    infoLongPrefix.setCodecId("xor");
 
     createFile(fs, new Path("/a/b/k"), 3, 4, 1024L);
     createFile(fs, new Path("/a/b/c/d"), 3, 5, 1024L);
@@ -208,8 +422,8 @@ public class TestStatisticsCollector extends TestCase {
         new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
     List<PolicyInfo> allPolicies = Arrays.asList(info, infoLongPrefix);
     collector.collect(allPolicies);
-    Statistics xorSt = collector.getRaidStatistics(ErasureCodeType.XOR);
-    Statistics rsSt = collector.getRaidStatistics(ErasureCodeType.RS);
+    Statistics xorSt = collector.getRaidStatistics("xor");
+    Statistics rsSt = collector.getRaidStatistics("rs");
     Counters xorShouldRaid = xorSt.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);
     Counters rsShouldRaid = rsSt.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);
     Counters rsOther = rsSt.getSourceCounters(RaidState.NOT_RAIDED_OTHER_POLICY);
@@ -224,13 +438,13 @@ public class TestStatisticsCollector extends TestCase {
     info.setSrcPath("/a/b/*");
     info.setProperty("modTimePeriod", "0");
     info.setProperty("targetReplication", "1");
-    info.setErasureCode("XOR");
+    info.setCodecId("xor");
 
     PolicyInfo infoLongPrefix = new PolicyInfo("Long-Prefix", conf);
     infoLongPrefix.setSrcPath("/a/b/c");
     infoLongPrefix.setProperty("modTimePeriod", "0");
     infoLongPrefix.setProperty("targetReplication", "2");
-    infoLongPrefix.setErasureCode("RS");
+    infoLongPrefix.setCodecId("rs");
 
     createFile(fs, new Path("/a/b/k"), 3, 4, 1024L);
     createFile(fs, new Path("/a/b/c/d"), 3, 5, 1024L);
@@ -238,8 +452,8 @@ public class TestStatisticsCollector extends TestCase {
         new StatisticsCollector(fakeRaidNode, fakeConfigManager, conf);
     List<PolicyInfo> allPolicies = Arrays.asList(info, infoLongPrefix);
     collector.collect(allPolicies);
-    Statistics xorSt = collector.getRaidStatistics(ErasureCodeType.XOR);
-    Statistics rsSt = collector.getRaidStatistics(ErasureCodeType.RS);
+    Statistics xorSt = collector.getRaidStatistics("xor");
+    Statistics rsSt = collector.getRaidStatistics("rs");
     Counters xorShouldRaid = xorSt.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);
     Counters xorOther = xorSt.getSourceCounters(RaidState.NOT_RAIDED_OTHER_POLICY);
     Counters rsShouldRaid = rsSt.getSourceCounters(RaidState.NOT_RAIDED_BUT_SHOULD);
@@ -256,6 +470,27 @@ public class TestStatisticsCollector extends TestCase {
     assertEquals(numBlocks, counters.getNumBlocks());
     assertEquals(numBytes, counters.getNumBytes());
     assertEquals(numLogicalBytes, counters.getNumLogical());
+  }
+  
+  private void assertCounters(Counters counters, long numDirs, long numFiles,
+      long numBlocks, long numBytes, long numLogicalBytes) {
+    assertEquals(numDirs, counters.getNumDirs());
+    assertCounters(counters, numFiles, numBlocks, numBytes, numLogicalBytes);
+  }
+  
+  private static void doRaid(FileSystem fileSys, Path name, Codec codec, 
+      int targetRepl, int metaRepl) throws IOException {
+    FileStatus fileStat = fileSys.getFileStatus(name);
+    if (codec.isDirRaid && !fileStat.isDir()) {
+      // raid its parent
+      fileStat = fileSys.getFileStatus(name.getParent());
+    }
+    assertTrue(RaidNode.doRaid(fileSys.getConf(),
+        fileStat,
+        new Path(codec.parityDirectory), codec,
+        new RaidNode.Statistics(),
+        RaidUtils.NULL_PROGRESSABLE,
+        false, targetRepl, metaRepl));
   }
 
   private static long createFile(

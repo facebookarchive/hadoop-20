@@ -42,7 +42,9 @@
   <property name="conf.dir" location="${hadoop.root}/conf"/>
   <property name="test.junit.output.format" value="plain"/>
   <property name="test.output" value="no"/>
+  <property name="test.include" value="Test*"/>
   <property name="test.timeout" value="900000"/>
+  <property name="test.junit.maxmemory" value="1024m" />
   <property name="build.dir" location="${hadoop.root}/build/contrib/${name}"/>
   <property name="build.classes" location="${build.dir}/classes"/>
   <property name="build.test" location="${build.dir}/test"/>
@@ -103,6 +105,7 @@
   <!-- the normal classpath -->
   <path id="contrib-classpath">
     <pathelement location="${hadoop.root}/build/contrib/raid/classes"/>
+    <pathelement location="${hadoop.root}/build/contrib/highavailability/classes"/>
     <pathelement location="${build.classes}"/>
     <pathelement location="${hadoop.root}/build/tools"/>
     <pathelement location="${hadoop.root}/build/examples"/>
@@ -110,9 +113,6 @@
     <pathelement location="${hadoop.root}/build/classes"/>
     <pathelement location="${hadoop.root}/build/tools"/>
     <fileset dir="${hadoop.root}/lib">
-      <include name="**/*.jar" />
-    </fileset>
-    <fileset dir="${hadoop.root}/build/contrib">
       <include name="**/*.jar" />
     </fileset>
     <path refid="${ant.project.name}.common-classpath"/>
@@ -123,6 +123,7 @@
     <pathelement location="${build.test}" />
     <pathelement location="${hadoop.root}/build/test/classes"/>
     <pathelement location="${hadoop.root}/src/contrib/test"/>
+    <pathelement location="${hadoop.root}/build/contrib/highavailability/test"/>
     <pathelement location="${conf.dir}"/>
     <pathelement location="${hadoop.root}/build"/>
     <pathelement location="${build.examples}"/>
@@ -164,6 +165,19 @@
      deprecation="${javac.deprecation}">
      <classpath refid="contrib-classpath"/>
     </javac>
+  </target>
+
+  <target name="jar-source" unless="skip.contrib">
+    <jar jarfile="${build.dir}/hadoop-${version}-${name}-sources.jar">
+      <manifest>
+        <section name="org/apache/hadoop">
+          <attribute name="Implementation-Title" value="hadoop-${name}"/>
+          <attribute name="Implementation-Version" value="${version}"/>
+          <attribute name="Implementation-Vendor" value="Facebook"/>
+        </section>
+      </manifest>
+      <fileset dir="${src.dir}" includes="*/**"/>
+    </jar>
   </target>
 
 
@@ -261,9 +275,10 @@
 
     <junit
       printsummary="yes" showoutput="${test.output}"
-      haltonfailure="no" fork="yes" maxmemory="384m"
+      haltonfailure="no" fork="yes" 
       errorProperty="tests.failed" failureProperty="tests.failed"
-      timeout="${test.timeout}">
+      timeout="${test.timeout}"
+      maxmemory="${test.junit.maxmemory}">
 
       <sysproperty key="test.build.data" value="${build.test}/data"/>
       <sysproperty key="build.test" value="${build.test}"/>
@@ -290,7 +305,7 @@
       <formatter type="${test.junit.output.format}" />
       <batchtest todir="${build.test}" unless="testcase">
         <fileset dir="${src.test}"
-                 includes="**/Test*.java" excludes="**/${test.exclude}.java" />
+          includes="**/${test.include}.java" excludes="**/${test.exclude}.java" />
       </batchtest>
       <batchtest todir="${build.test}" if="testcase">
         <fileset dir="${src.test}" includes="**/${testcase}.java"/>

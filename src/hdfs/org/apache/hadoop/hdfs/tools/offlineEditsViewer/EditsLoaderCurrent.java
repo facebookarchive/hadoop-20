@@ -22,8 +22,8 @@ import java.io.IOException;
 
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion.Feature;
-import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+import org.apache.hadoop.hdfs.server.namenode.FSEditLogOpCodes;
+import org.mortbay.log.Log;
 
 import static org.apache.hadoop.hdfs.tools.offlineEditsViewer.Tokenizer.ByteToken;
 import static org.apache.hadoop.hdfs.tools.offlineEditsViewer.Tokenizer.IntToken;
@@ -38,7 +38,8 @@ import static org.apache.hadoop.hdfs.tools.offlineEditsViewer.Tokenizer.VIntToke
 class EditsLoaderCurrent implements EditsLoader {
 
   private static int[] supportedVersions = { -18, -19, -20, -21, -22, -23, -24,
-      -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37};
+      -25, -26, -27, -28, -30, -31, -32, -33, -34, -35, -36, -37, -38, -39,
+      -40, -41 };
 
   private EditsVisitor v;
   private int editsVersion = 0;
@@ -82,39 +83,17 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_ADD
    */
   private void visit_OP_ADD() throws IOException {
-    visit_OP_ADD_or_OP_CLOSE(FSEditLog.OP_ADD);
+    visit_OP_ADD_or_OP_CLOSE(FSEditLogOpCodes.OP_ADD);
   }
 
   /**
    * Visit OP_CLOSE
    */
   private void visit_OP_CLOSE() throws IOException {
-    visit_OP_ADD_or_OP_CLOSE(FSEditLog.OP_CLOSE);
+    visit_OP_ADD_or_OP_CLOSE(FSEditLogOpCodes.OP_CLOSE);
   }
-
-  /**
-   * Visit OP_ADD and OP_CLOSE, they are almost the same
-   *
-   * @param editsOpCode op code to visit
-   */
-  private void visit_OP_ADD_or_OP_CLOSE(byte editsOpCode)
-    throws IOException {
-    visitTxId();
-    
-    IntToken opAddLength = v.visitInt(EditsElement.LENGTH);
-    // this happens if the edits is not properly ended (-1 op code),
-    // it is padded at the end with all zeros, OP_ADD is zero so
-    // without this check we would treat all zeros as empty OP_ADD)
-    if(opAddLength.value == 0) {
-      throw new IOException("OpCode " + editsOpCode +
-        " has zero length (corrupted edits)");
-    }        
-    v.visitStringUTF8(EditsElement.PATH);
-    v.visitStringUTF8(EditsElement.REPLICATION);
-    v.visitStringUTF8(EditsElement.MTIME);
-    v.visitStringUTF8(EditsElement.ATIME);
-    v.visitStringUTF8(EditsElement.BLOCKSIZE);
-    // now read blocks
+  
+  private void visit_Blocks() throws IOException {
     IntToken numBlocksToken = v.visitInt(EditsElement.NUMBLOCKS);
     for (int i = 0; i < numBlocksToken.value; i++) {
       v.visitEnclosingElement(EditsElement.BLOCK);
@@ -125,29 +104,96 @@ class EditsLoaderCurrent implements EditsLoader {
 
       v.leaveEnclosingElement();
     }
-    // PERMISSION_STATUS
-    v.visitEnclosingElement(EditsElement.PERMISSION_STATUS);
-
-    v.visitStringText( EditsElement.USERNAME);
-    v.visitStringText( EditsElement.GROUPNAME);
-    v.visitShort(      EditsElement.FS_PERMISSIONS);
-
-    v.leaveEnclosingElement();
-    if(editsOpCode == FSEditLog.OP_ADD) {
-      v.visitStringUTF8(EditsElement.CLIENT_NAME);
-      v.visitStringUTF8(EditsElement.CLIENT_MACHINE);
-    }
   }
+
+  /**
+   * Visit OP_ADD and OP_CLOSE, they are almost the same
+   *
+   * @param editsOpCode op code to visit
+   */
+  private void visit_OP_ADD_or_OP_CLOSE(FSEditLogOpCodes editsOpCode)
+      throws IOException {
+      visitTxId();
+      if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+        IntToken opAddLength = v.visitInt(EditsElement.LENGTH);
+        // this happens if the edits is not properly ended (-1 op code),
+        // it is padded at the end with all zeros, OP_ADD is zero so
+        // without this check we would treat all zeros as empty OP_ADD)
+        if (opAddLength.value == 0) {
+          throw new IOException("OpCode " + editsOpCode
+              + " has zero length (corrupted edits)");
+        }
+      }
+      
+      v.visitStringUTF8(EditsElement.PATH);
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+        v.visitShort(EditsElement.REPLICATION);
+        v.visitLong(EditsElement.MTIME);
+        v.visitLong(EditsElement.ATIME);
+        v.visitLong(EditsElement.BLOCKSIZE);
+      } else {
+        v.visitStringUTF8(EditsElement.REPLICATION);
+        v.visitStringUTF8(EditsElement.MTIME);
+        v.visitStringUTF8(EditsElement.ATIME);
+        v.visitStringUTF8(EditsElement.BLOCKSIZE);
+      }
+      // now read blocks
+      visit_Blocks();
+      
+      // PERMISSION_STATUS
+      v.visitEnclosingElement(EditsElement.PERMISSION_STATUS);
+
+      v.visitStringText( EditsElement.USERNAME);
+      v.visitStringText( EditsElement.GROUPNAME);
+      v.visitShort(      EditsElement.FS_PERMISSIONS);
+
+      v.leaveEnclosingElement();
+      if(editsOpCode == FSEditLogOpCodes.OP_ADD) {
+        v.visitStringUTF8(EditsElement.CLIENT_NAME);
+        v.visitStringUTF8(EditsElement.CLIENT_MACHINE);
+      }
+    }
 
   /**
    * Visit OP_RENAME_OLD
    */
   private void visit_OP_RENAME_OLD() throws IOException {
     visitTxId();
-    v.visitInt(        EditsElement.LENGTH);
-    v.visitStringUTF8( EditsElement.SOURCE);
-    v.visitStringUTF8( EditsElement.DESTINATION);
-    v.visitStringUTF8( EditsElement.TIMESTAMP);
+    if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitInt(EditsElement.LENGTH);
+    }
+    v.visitStringUTF8(    EditsElement.SOURCE);
+    v.visitStringUTF8(    EditsElement.DESTINATION);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.TIMESTAMP);
+    } else {
+      v.visitStringUTF8(EditsElement.TIMESTAMP);
+    }
+  }
+  
+  /**
+   * Visit OP_HARDLINK
+   */
+  private void visit_OP_HARDLINK() throws IOException {
+    visitTxId();
+    v.visitStringUTF8(EditsElement.SOURCE);
+    v.visitStringUTF8(EditsElement.DESTINATION);
+    v.visitLong(EditsElement.TIMESTAMP);
+  }
+  
+  /**
+   * Visit OP_APPEND
+   */
+  private void visit_OP_APPEND() throws IOException {
+    visitTxId();
+    v.visitStringUTF8(EditsElement.PATH);
+    
+    // visit blocks
+    visit_Blocks();
+    
+    // client name & machine
+    v.visitStringUTF8(EditsElement.CLIENT_NAME);
+    v.visitStringUTF8(EditsElement.CLIENT_MACHINE);
   }
 
   /**
@@ -155,9 +201,15 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_DELETE() throws IOException {
     visitTxId();
-    v.visitInt(        EditsElement.LENGTH);
+    if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitInt(EditsElement.LENGTH);
+    }
     v.visitStringUTF8( EditsElement.PATH);
-    v.visitStringUTF8( EditsElement.TIMESTAMP);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.TIMESTAMP);
+    } else {
+      v.visitStringUTF8(EditsElement.TIMESTAMP);
+    }
   }
 
   /**
@@ -165,10 +217,17 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_MKDIR() throws IOException {
     visitTxId();
-    v.visitInt(        EditsElement.LENGTH);
+    if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitInt(EditsElement.LENGTH);
+    }
     v.visitStringUTF8( EditsElement.PATH);
-    v.visitStringUTF8( EditsElement.TIMESTAMP);
-    v.visitStringUTF8( EditsElement.ATIME);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.TIMESTAMP);
+      v.visitLong(EditsElement.ATIME);
+    } else {
+      v.visitStringUTF8(EditsElement.TIMESTAMP);
+      v.visitStringUTF8(EditsElement.ATIME);
+    }
     // PERMISSION_STATUS
     v.visitEnclosingElement( EditsElement.PERMISSION_STATUS);
 
@@ -179,13 +238,14 @@ class EditsLoaderCurrent implements EditsLoader {
     v.leaveEnclosingElement();
   }
 
-  /**
-   * Visit OP_SET_REPLICATION
-   */
   private void visit_OP_SET_REPLICATION() throws IOException {
     visitTxId();
     v.visitStringUTF8(EditsElement.PATH);
-    v.visitStringUTF8(EditsElement.REPLICATION);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitShort(EditsElement.REPLICATION);
+    } else {
+      v.visitStringUTF8(EditsElement.REPLICATION);
+    }
   }
 
   /**
@@ -220,10 +280,17 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_TIMES() throws IOException {
     visitTxId();
-    v.visitInt(        EditsElement.LENGTH);
+    if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitInt(EditsElement.LENGTH);
+    }
     v.visitStringUTF8( EditsElement.PATH);
-    v.visitStringUTF8( EditsElement.MTIME);
-    v.visitStringUTF8( EditsElement.ATIME);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.MTIME);
+      v.visitLong(EditsElement.ATIME);
+    } else {
+      v.visitStringUTF8(EditsElement.MTIME);
+      v.visitStringUTF8(EditsElement.ATIME);
+    }
   }
 
   /**
@@ -241,10 +308,16 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_RENAME() throws IOException {
     visitTxId();
-    v.visitInt(           EditsElement.LENGTH);
+    if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitInt(EditsElement.LENGTH);
+    }
     v.visitStringUTF8(    EditsElement.SOURCE);
     v.visitStringUTF8(    EditsElement.DESTINATION);
-    v.visitStringUTF8(    EditsElement.TIMESTAMP);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.TIMESTAMP);
+    } else {
+      v.visitStringUTF8(EditsElement.TIMESTAMP);
+    }
     v.visitBytesWritable( EditsElement.RENAME_OPTIONS);
   }
 
@@ -253,14 +326,27 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_CONCAT_DELETE() throws IOException {
     visitTxId();
-    IntToken lengthToken = v.visitInt(EditsElement.LENGTH);
+    int sourceCount = 0;
+    if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      IntToken lengthToken = v.visitInt(EditsElement.LENGTH);
+      sourceCount = lengthToken.value - 2;
+      Log.info("------------------------- does not support");
+    }
     v.visitStringUTF8(EditsElement.CONCAT_TARGET);
     // all except of CONCAT_TARGET and TIMESTAMP
-    int sourceCount = lengthToken.value - 2;
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      IntToken lengthToken = v.visitInt(EditsElement.LENGTH);
+      sourceCount = lengthToken.value;
+      Log.info("------------------------- does support");
+    }
     for(int i = 0; i < sourceCount; i++) {
       v.visitStringUTF8(EditsElement.CONCAT_SOURCE);
     }
-    v.visitStringUTF8(EditsElement.TIMESTAMP);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.TIMESTAMP);
+    } else {
+      v.visitStringUTF8(EditsElement.TIMESTAMP);
+    }
   }
 
   /**
@@ -268,11 +354,18 @@ class EditsLoaderCurrent implements EditsLoader {
    */
   private void visit_OP_SYMLINK() throws IOException {
     visitTxId();
-    v.visitInt(        EditsElement.LENGTH);
+    if (!LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitInt(EditsElement.LENGTH);
+    }
     v.visitStringUTF8( EditsElement.SOURCE);
     v.visitStringUTF8( EditsElement.DESTINATION);
-    v.visitStringUTF8( EditsElement.MTIME);
-    v.visitStringUTF8( EditsElement.ATIME);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.MTIME);
+      v.visitLong(EditsElement.ATIME);
+    } else {
+      v.visitStringUTF8(EditsElement.MTIME);
+      v.visitStringUTF8(EditsElement.ATIME);
+    }
     // PERMISSION_STATUS
     v.visitEnclosingElement(EditsElement.PERMISSION_STATUS);
 
@@ -287,34 +380,44 @@ class EditsLoaderCurrent implements EditsLoader {
    * Visit OP_GET_DELEGATION_TOKEN
    */
   private void visit_OP_GET_DELEGATION_TOKEN() throws IOException {
-    visitTxId();  
-    v.visitByte(       EditsElement.T_VERSION);
-    v.visitStringText( EditsElement.T_OWNER);
-    v.visitStringText( EditsElement.T_RENEWER);
-    v.visitStringText( EditsElement.T_REAL_USER);
-    v.visitVLong(      EditsElement.T_ISSUE_DATE);
-    v.visitVLong(      EditsElement.T_MAX_DATE);
-    v.visitVInt(       EditsElement.T_SEQUENCE_NUMBER);
-    v.visitVInt(       EditsElement.T_MASTER_KEY_ID);
-    v.visitStringUTF8( EditsElement.T_EXPIRY_TIME);
+    visitTxId();
+    
+    v.visitByte(EditsElement.T_VERSION);
+    v.visitStringText(EditsElement.T_OWNER);
+    v.visitStringText(EditsElement.T_RENEWER);
+    v.visitStringText(EditsElement.T_REAL_USER);
+    v.visitVLong(EditsElement.T_ISSUE_DATE);
+    v.visitVLong(EditsElement.T_MAX_DATE);
+    v.visitVInt(EditsElement.T_SEQUENCE_NUMBER);
+    v.visitVInt(EditsElement.T_MASTER_KEY_ID);
+    if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+      v.visitLong(EditsElement.T_EXPIRY_TIME);
+    } else {
+      v.visitStringUTF8(EditsElement.T_EXPIRY_TIME);
+    }
   }
 
   /**
    * Visit OP_RENEW_DELEGATION_TOKEN
    */
   private void visit_OP_RENEW_DELEGATION_TOKEN()
-    throws IOException {
-    visitTxId();
-    v.visitByte(       EditsElement.T_VERSION);
-    v.visitStringText( EditsElement.T_OWNER);
-    v.visitStringText( EditsElement.T_RENEWER);
-    v.visitStringText( EditsElement.T_REAL_USER);
-    v.visitVLong(      EditsElement.T_ISSUE_DATE);
-    v.visitVLong(      EditsElement.T_MAX_DATE);
-    v.visitVInt(       EditsElement.T_SEQUENCE_NUMBER);
-    v.visitVInt(       EditsElement.T_MASTER_KEY_ID);
-    v.visitStringUTF8( EditsElement.T_EXPIRY_TIME);
-  }
+      throws IOException {
+      visitTxId();
+
+      v.visitByte(EditsElement.T_VERSION);
+      v.visitStringText(EditsElement.T_OWNER);
+      v.visitStringText(EditsElement.T_RENEWER);
+      v.visitStringText(EditsElement.T_REAL_USER);
+      v.visitVLong(EditsElement.T_ISSUE_DATE);
+      v.visitVLong(EditsElement.T_MAX_DATE);
+      v.visitVInt(EditsElement.T_SEQUENCE_NUMBER);
+      v.visitVInt(EditsElement.T_MASTER_KEY_ID);
+      if (LayoutVersion.supports(Feature.EDITLOG_OP_OPTIMIZATION, editsVersion)) {
+        v.visitLong(EditsElement.T_EXPIRY_TIME);
+      } else {
+        v.visitStringUTF8(EditsElement.T_EXPIRY_TIME);
+      }
+    }
 
   /**
    * Visit OP_CANCEL_DELEGATION_TOKEN
@@ -351,77 +454,105 @@ class EditsLoaderCurrent implements EditsLoader {
       v.visitStringUTF8(EditsElement.PATH);
       v.visitStringUTF8(EditsElement.CLIENT_NAME);
   }
-
-  private void visitOpCode(byte editsOpCode)
+  
+  /**
+   * Visit OP_BEGIN_LOG_SEGMENT
+   */
+  private void visit_OP_BEGIN_LOG_SEGMENT()
     throws IOException {
+    visitTxId();
+  }
+  
+  /**
+   * Visit OP_END_LOG_SEGMENT
+   */
+  private void visit_OP_END_LOG_SEGMENT()
+    throws IOException {
+    visitTxId();
+  }
 
-    switch(editsOpCode) {
-      case FSEditLog.OP_INVALID: // -1
-        visit_OP_INVALID();
-        break;
-      case FSEditLog.OP_ADD: // 0
-        visit_OP_ADD();
-        break;
-      case FSEditLog.OP_CLOSE: // 9
-        visit_OP_CLOSE();
-        break;
-      case FSEditLog.OP_RENAME: // 1
-        visit_OP_RENAME_OLD();
-        break;
-      case FSEditLog.OP_DELETE: // 2
-        visit_OP_DELETE();
-        break;
-      case FSEditLog.OP_MKDIR: // 3
-        visit_OP_MKDIR();
-        break;
-      case FSEditLog.OP_SET_REPLICATION: // 4
-        visit_OP_SET_REPLICATION();
-        break;
-      case FSEditLog.OP_SET_PERMISSIONS: // 7
-        visit_OP_SET_PERMISSIONS();
-        break;
-      case FSEditLog.OP_SET_OWNER: // 8
-        visit_OP_SET_OWNER();
-        break;
-      case FSEditLog.OP_SET_GENSTAMP: // 10
-        visit_OP_SET_GENSTAMP();
-        break;
-      case FSEditLog.OP_TIMES: // 13
-        visit_OP_TIMES();
-        break;
-      case FSEditLog.OP_SET_QUOTA: // 14
-        visit_OP_SET_QUOTA();
-        break;
-      case 15: // 15
-        visit_OP_RENAME();
-        break;
-      case FSEditLog.OP_CONCAT_DELETE: // 16
-        visit_OP_CONCAT_DELETE();
-        break;
-      case 17: // 17
-        visit_OP_SYMLINK();
-        break;
-      case 18: // 18
-        visit_OP_GET_DELEGATION_TOKEN();
-        break;
-      case 19: // 19
-        visit_OP_RENEW_DELEGATION_TOKEN();
-        break;
-      case 20: // 20
-        visit_OP_CANCEL_DELEGATION_TOKEN();
-        break; 
-      case 21: // 21
-        visit_OP_UPDATE_MASTER_KEY();
-        break;
-      case 22: // 22
-        visit_OP_REASSIGN_LEASE();
-        break;
-      default:
-      {
-        throw new IOException("Unknown op code " + editsOpCode);
+  private void visitOpCode(FSEditLogOpCodes editsOpCode)
+      throws IOException {
+
+      switch(editsOpCode) {
+        case OP_INVALID: // -1
+          visit_OP_INVALID();
+          break;
+        case OP_ADD: // 0
+          visit_OP_ADD();
+          break;
+        case OP_CLOSE: // 9
+          visit_OP_CLOSE();
+          break;
+        case OP_RENAME:
+          visit_OP_RENAME_OLD();
+          break;
+        case OP_DELETE: // 2
+          visit_OP_DELETE();
+          break;
+        case OP_MKDIR: // 3
+          visit_OP_MKDIR();
+          break;
+        case OP_SET_REPLICATION: // 4
+          visit_OP_SET_REPLICATION();
+          break;
+        case OP_SET_PERMISSIONS: // 7
+          visit_OP_SET_PERMISSIONS();
+          break;
+        case OP_SET_OWNER: // 8
+          visit_OP_SET_OWNER();
+          break;
+        case OP_SET_GENSTAMP: // 10
+          visit_OP_SET_GENSTAMP();
+          break;
+        case OP_TIMES: // 13
+          visit_OP_TIMES();
+          break;
+        case OP_SET_QUOTA: // 14
+          visit_OP_SET_QUOTA();
+          break;
+        case OP_RENAME_15: // 15
+          visit_OP_RENAME();
+          break;
+        case OP_CONCAT_DELETE: // 16
+          visit_OP_CONCAT_DELETE();
+          break;
+        case OP_SYMLINK:
+          visit_OP_SYMLINK();
+          break;
+        case OP_GET_DELEGATION_TOKEN:
+          visit_OP_GET_DELEGATION_TOKEN();
+          break;
+        case OP_RENEW_DELEGATION_TOKEN:
+          visit_OP_RENEW_DELEGATION_TOKEN();
+          break;
+        case OP_CANCEL_DELEGATION_TOKEN:
+          visit_OP_CANCEL_DELEGATION_TOKEN();
+          break;
+        case OP_UPDATE_MASTER_KEY:
+          visit_OP_UPDATE_MASTER_KEY();
+          break;
+        case OP_REASSIGN_LEASE:
+          visit_OP_REASSIGN_LEASE();
+          break;
+        case OP_END_LOG_SEGMENT: // 23
+          visit_OP_END_LOG_SEGMENT();
+          break;        
+        case OP_START_LOG_SEGMENT: // 24
+          visit_OP_BEGIN_LOG_SEGMENT();
+          break;
+        case OP_HARDLINK: // 25
+          visit_OP_HARDLINK();
+          break;
+        case OP_APPEND: //26
+          visit_OP_APPEND();
+          break;
+        default:
+        {
+          throw new IOException("Unknown op code " + editsOpCode);
+        }
       }
     }
-  }
 
   /**
    * Loads edits file, uses visitor to process all elements
@@ -440,7 +571,7 @@ class EditsLoaderCurrent implements EditsLoader {
           editsVersionToken.value);
       }
 
-      byte editsOpCode;
+      FSEditLogOpCodes editsOpCode;
       do {
         v.visitEnclosingElement(EditsElement.RECORD);
 
@@ -452,10 +583,10 @@ class EditsLoaderCurrent implements EditsLoader {
           // it's just a finalized edits file
           // Just fake the OP_INVALID here.
           opCodeToken = new ByteToken(EditsElement.OPCODE);
-          opCodeToken.fromByte(FSEditLog.OP_INVALID);
+          opCodeToken.fromByte(FSEditLogOpCodes.OP_INVALID.getOpCode());
           v.visit(opCodeToken);
         }
-        editsOpCode = opCodeToken.value;
+        editsOpCode = FSEditLogOpCodes.fromByte(opCodeToken.value);
 
         v.visitEnclosingElement(EditsElement.DATA);
 
@@ -463,12 +594,12 @@ class EditsLoaderCurrent implements EditsLoader {
 
         v.leaveEnclosingElement(); // DATA
         
-        if (editsOpCode != FSEditLog.OP_INVALID && 
+        if (editsOpCode != FSEditLogOpCodes.OP_INVALID && 
             LayoutVersion.supports(Feature.EDITS_CHESKUM, editsVersion)) {
           v.visitInt(EditsElement.CHECKSUM);
         }
         v.leaveEnclosingElement(); // RECORD
-      } while(editsOpCode != FSEditLog.OP_INVALID);
+      } while(editsOpCode != FSEditLogOpCodes.OP_INVALID);
 
       v.leaveEnclosingElement(); // EDITS
       v.finish();

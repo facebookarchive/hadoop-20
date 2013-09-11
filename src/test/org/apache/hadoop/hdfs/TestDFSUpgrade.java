@@ -38,6 +38,7 @@ import org.apache.hadoop.hdfs.server.common.Storage;
 import org.apache.hadoop.hdfs.server.common.StorageInfo;
 import org.apache.hadoop.hdfs.server.datanode.DataNode;
 import org.apache.hadoop.hdfs.server.datanode.NameSpaceSliceStorage;
+import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil;
 import org.apache.hadoop.fs.FileUtil;
 
 /**
@@ -92,11 +93,7 @@ public class TestDFSUpgrade extends TestCase {
     switch (nodeType) {
     case NAME_NODE:
       for (int i = 0; i < baseDirs.length; i++) {
-        assertTrue(new File(baseDirs[i],"current").isDirectory());
-        assertTrue(new File(baseDirs[i],"current/VERSION").isFile());
-        assertTrue(new File(baseDirs[i],"current/edits").isFile());
-        assertTrue(new File(baseDirs[i],"current/fsimage").isFile());
-        assertTrue(new File(baseDirs[i],"current/fstime").isFile());
+        FSImageTestUtil.assertReasonableNameCurrentDir(new File(baseDirs[i], "current"));
       }
       break;
     case DATA_NODE:
@@ -423,17 +420,13 @@ public class TestDFSUpgrade extends TestCase {
 
       log("NameNode upgrade with no edits file", numDirs);
       baseDirs = UpgradeUtilities.createStorageDirs(NAME_NODE, nameNodeDirs, "current");
-      for (File f : baseDirs) { 
-        FileUtil.fullyDelete(new File(f,"edits"));
-      }
+      deleteStorageFilesWithPrefix(nameNodeDirs, "edits_");
       startNameNodeShouldFail(StartupOption.UPGRADE);
       UpgradeUtilities.createEmptyDirs(nameNodeDirs);
       
       log("NameNode upgrade with no image file", numDirs);
       baseDirs = UpgradeUtilities.createStorageDirs(NAME_NODE, nameNodeDirs, "current");
-      for (File f : baseDirs) { 
-        FileUtil.fullyDelete(new File(f,"fsimage")); 
-      }
+      deleteStorageFilesWithPrefix(nameNodeDirs, "fsimage_");
       startNameNodeShouldFail(StartupOption.UPGRADE);
       UpgradeUtilities.createEmptyDirs(nameNodeDirs);
       
@@ -485,6 +478,19 @@ public class TestDFSUpgrade extends TestCase {
     
   public static void main(String[] args) throws Exception {
     new TestDFSUpgrade().testUpgrade();
+  }
+  
+  private void deleteStorageFilesWithPrefix(String[] nameNodeDirs, String prefix)
+  throws Exception {
+    for (String baseDirStr : nameNodeDirs) {
+      File baseDir = new File(baseDirStr);
+      File currentDir = new File(baseDir, "current");
+      for (File f : currentDir.listFiles()) {
+        if (f.getName().startsWith(prefix)) {
+          assertTrue("Deleting " + f, f.delete());
+        }
+      }
+    }
   }
   
 }

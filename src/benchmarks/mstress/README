@@ -1,0 +1,313 @@
+#
+# $Id$
+#
+# Author: Thilee Subramaniam
+#
+# Copyright 2012 Quantcast Corp.
+#
+# This file is part of Kosmos File System (KFS).
+#
+# Licensed under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied. See the License for the specific language governing
+# permissions and limitations under the License.
+#
+
+
+MSTRESS : A framework for metaserver/namenode benchmarking
+==========================================================
+
+Contents:
+  [1] Framework description
+  [2] Files in this direcotry
+  [3] Running benchmark
+  [4] Setting up DFS metaserver/namenode
+
+
+[1] Framework
+=============
+
+The mstress master would invoke mstress.py in slave mode on the client hosts
+through SSH.
+
+Each mstress slave would invoke the necessary number of load-generating clients,
+which would stress the meta server.
+
+                   +-----------------------------+
+                   |   +-------------------+     |
+                   |   |    mstress.py     +-----+----------------------+
+                   |   | (--mode master)   +-----+------------------+   |
+                   |   +-------------------+     |                  |   |
+                   |        (master host)        |                  |   |
+                   +-----------------------------+                  |   |
+                                                                    |   |
+                          +--------------------------------------+  |   |
+                          |                                      |  |   |
+   +-----------+          | +--------------+   +--------------+  |  |   |
+   |           |<---------+-|mstress_client|<--|  mstress.py  |<-+--+   |
+   |           |          | +--------------+   |(--mode slave)|  |      |
+   | DFS meta  |          |                    +--------------+  |      |
+   |  server   |          |     (client host 1)                  |      |
+   |           |          +--------------------------------------+      |
+   |           |                                                        |
+   |           |                                                        |
+   |           |          +--------------------------------------+      |
+   |           |          | +--------------+   +--------------+  |      |
+   |           |<-----------|mstress_client|<--|  mstress.py  |<-+------+
+   +-----------+          | +--------------+   |(--mode slave)|  |
+                          |                    +--------------+  |
+                          |     (client host 2)                  |
+                          +--------------------------------------+
+
+The clients will do file or directory tree creation, stat, or directory walk as
+specified by the benchmark plan.
+
+
+
+[2] Files
+=========
+
+  - mstress_initialize.sh
+    Helper script to be used before compiling the source and deploying the
+    mstress bundle.
+    Do ./mstress_initialize.sh --h to see options.
+
+  - Makefile
+    Used to build the QFS stress client (C++) and HDFS stress client (Java).
+    Ensure that $JAVA_HOME is set correctly.
+
+  - mstress_client.cc
+    Produces the mstress_client binary that actually drives the QFS metaserver.
+    Build using the provided Makefile ('make ccclient')
+    See 'Benchmarking Procedure' below for details.
+
+  - MStress_Client.java
+    Produces the java MStress_Client for HDFS namenode.
+    Build using the provided Makefile ('make javaclient')
+    See 'Benchmarking Procedure' below for details.
+
+  - mstress_prepare_master_clients.sh
+    Helper script used to copy the mstress directory to a list of hosts. To be
+    used after running make.
+
+  - mstress_plan.py
+    Used to generate a plan file for benchmarking.
+    Args: client hosts list, number of clients per client host, file tree depth,
+          nodes per level etc.
+    The generated plan file is also copied to the /tmp firectory of the
+    participating client hosts.
+    Do ./mstress_plan.py --help to see all options.
+
+  - mstress.py
+    Used to run the metaserver test with the help of the plan file.
+    Args: dfs server host & port, planfile etc.
+    This script invokes mstress.py on the remote host through SSH. For this
+    reason, the mstress path should be the same on the participating hosts.
+    Do ./mstress.py --help to see all options.
+
+  - mstress_run.py
+    Essentially a wrapper around mstress_plan.py and mstress.py
+    Args: client hosts list and DFS server:port information.
+    Do mstress_run.py --help to see usage.
+
+  - mstress_sample_run.sh
+    Used to run sample benchmarks on given QFS and HDFS servers by launching
+    clients on localhost. Essentially a wrapper around mstress_initialize.sh,
+    make, mstress_prepare_master_clients.sh, and mstress.run.py.
+
+  - mstress_cleanup.py
+    Used to clean up the plan files and log files created on participating
+    hosts.
+    Do ./mstress_cleanup.py --help to see usage.
+
+
+
+[3] Benchmarking Procedure
+==========================
+
+In reality, benchmark would use separate physical machines each for compiling,
+running the DFS server, running mstress master, and load generating clients.
+The procedure below assumes different machines, but one can also run all
+on the same box, "localhost".
+
+
+(1) Setup the QFS metaserver and HDFS namenode with the help of
+    section [4] "Setting up DFS metaserver/namenode" below.
+
+
+(2) You should have SSH key authentication set up on the hosts involved so
+    that the scripts can do password/passphrase-less login.
+
+
+(3) On the build machine, ensure that you have the Cloudera HDFS client jars.
+    This is typically at /usr/lib/hadoop/client/*.jars.
+    If you don't have them, install them by,
+    1. Add the following to /etc/yum.repos.d/thirdparty.repo (sudo needed)
+       -----------------------------------
+       [cloudera-cdh4]
+       name=Cloudera's Distribution for Hadoop, Version 4
+       baseurl=http://archive.cloudera.com/cdh4/redhat/6/x86_64/cdh/4/
+       gpgkey = http://archive.cloudera.com/cdh4/redhat/6/x86_64/cdh/RPM-GPG-KEY-cloudera
+       gpgcheck = 1
+       -----------------------------------
+    2. sudo yum install hadoop-client
+
+
+(4) On the build host, execute 'mstress_initialize.sh' to set up jar paths.
+     ./mstress_initialize.sh /usr/lib/hadoop/client/
+
+
+(5) On the build host, compile and install QFS using the steps described in
+    https://github.com/quantcast/qfs/wiki/Developer-Documentation. Then change
+    directory to benchmarks/mstress, and just issuing 'make' should build the
+    Java/C++ clients.
+
+    To manually build C++ client:
+      - Assuming the QFS code is in ~/code/qfs, compile and install QFS using
+        the steps described in 
+        https://github.com/quantcast/qfs/wiki/Developer-Documentation
+      - cd ~/code/qfs/benchmarks/mstress
+      - QFS_BUILD_INCLUDE=~/code/qfs/build/include    \
+        QFS_BUILD_STATLIB=~/code/qfs/build/lib/static \
+        BOOST_LIBRARY_DIR=/opt/local/lib              \
+        make
+    If you encounter any build problem, ensure that your QFS_BUILD_INCLUDE etc.
+    refer to valid paths.
+
+
+    To manually build MStress_Client.java
+    - Compile MStress_client.java with hadoop-client jars in the class path.
+      theCP=$(echo mstress_hdfs_client_jars/*.jar | sed 's/ /:/g')
+      javac -cp $theCP MStress_Client.java
+
+
+(6) Determine the master and load generating client hosts that you want to use
+    to connect to the DFS server. This could just be "localhost" if you want to
+    run the benchmark locally.
+
+
+(7) From the build host, use "mstress_prepare_master_clients.sh" to copy your
+    mstress directory to the participating hosts.
+    Note: Do './mstress_prepare_master_clients.sh localhost' localhost-only run.
+    The mstress directory paths should be the same on master and client hosts.
+
+
+(8) On the master host change directory to ~/mstress
+    Create a plan file using mstress_plan.py.
+    Do ./mstress_plan.py --help to see example usage.
+    Eg:
+     ./mstress_plan.py -c localhost,127.0.0.1 -n 3 -t file -l 2 -i 10 -n 139
+
+    This will create a plan that creates 2 levels of 10 inodes each by 3
+    processes on 2 hosts. Since each client creates 110 inodes (10 directories
+    with 10 files each) and since there are 6 clients (3 x 2), this plan is to
+    create 660 inodes on the DFS server.
+
+    The planfile will pick N files to stat per client such that
+    (N x client-host-count x clients-per-host) is just enough to meet 139.
+
+    The plan file gets copied to the /tmp directory where you run it. It will
+    also get copied to the participating client hosts in the '-c' option.
+
+
+(9) Checklist: check the presence of,
+     - the plan file on master host and client hosts (step 8 does this for you)
+     - the mstress_client binaries (QFS and HDFS clients) on master and all
+       client hosts (step 7).
+
+(10) Run the benchmark from the master with mstress.py.
+     Do ./mstress.py --help to see options.
+     Eg:
+      ./mstress.py -f qfs -s <metahost> -p <metaport> -a </tmp/something.plan>
+      ./mstress.py -f hdfs -s <namehost> -p <nameport> -a </tmp/something.plan>
+
+(11) The benchmark name, progress, and time taken will be printed out.
+
+
+[4] DFS Server Setup
+====================
+
+[4.1] QFS Metaserver Setup
+-------------------------
+
+You can setup the QFS metaserver using the steps described in
+https://github.com/quantcast/qfs/wiki
+
+If you want to set up a simple metaserver for local testing, please use the
+script ~/code/qfs/examples/sampleservers/sample_setup.py.
+
+
+[4.2] HDFS Namenode Setup
+-------------------------
+
+This will setup the HDFS namenode to listen on port 40000.
+The webUI will run on default port 50070.
+The installation used here is based on Cloudera's CDH4 release.
+
+(1) Ensure java is installed, and $JAVA_HOME is set.
+
+(2) Add the following to /etc/yum.repos.d/thirdparty.repo (sudo needed)
+    -----------------------------------
+    [cloudera-cdh4]
+    name=Cloudera's Distribution for Hadoop, Version 4
+    baseurl=http://archive.cloudera.com/cdh4/redhat/6/x86_64/cdh/4/
+    gpgkey = http://archive.cloudera.com/cdh4/redhat/6/x86_64/cdh/RPM-GPG-KEY-cloudera
+    gpgcheck = 1
+    -----------------------------------
+
+(3) Install hadoop-hdfs-namenode and update the configs.
+    sudo yum install hadoop-hdfs-namenode
+    sudo mv /etc/hadoop/conf /etc/hadoop/conf.orig
+    sudo cp -r /etc/hadoop/conf.empty /etc/hadoop/conf
+
+(4) Update /etc/hadoop/conf/core-site.xml (enter your server name instead
+    of 10.20.30.255)
+    ----------------------------------
+    <configuration>
+     <property>
+      <name>fs.default.name</name>
+      <value>hdfs://10.20.30.255:40000</value>
+     </property>
+    </configuration>
+    ----------------------------------
+
+(5) Edit /etc/hadoop/conf/hdfs-site.xml, fix or ensure that there is
+    a "file://" prefix to avoid warnings.
+    ----------------------------------
+    <configuration>
+      <property>
+       <name>dfs.name.dir</name>
+       <value>file:///var/lib/hadoop-hdfs/cache/hdfs/dfs/name</value>
+      </property>
+    </configuration>
+    ----------------------------------
+
+(6) Format the namenode:
+    sudo service hadoop-hdfs-namenode init
+
+(7) Start namenode.
+    sudo service hadoop-hdfs-namenode start
+
+(8) Now namenode should be running. Confirm this by running,
+    ps aux | grep java
+    sudo netstat -pan | grep 40000
+
+(9) To administer the files and directories,
+    /usr/lib/hadoop/bin/hadoop fs -ls /
+
+(10) The user with write access on this namenode is "hdfs". Therefore, give
+     write permission to "/" folder (for mstress benchmark to use) by logging
+     in as "hdfs" user.
+       sudo bash
+       su hdfs
+       JAVA_HOME=<java-home> /usr/lib/hadoop/bin/hadoop fs -chmod 777 /
+       exit
+
+(11) Now the namenode is ready for running benchmarks.

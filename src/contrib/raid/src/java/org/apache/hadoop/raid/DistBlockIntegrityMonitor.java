@@ -21,13 +21,16 @@ package org.apache.hadoop.raid;
 import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintStream;
 import java.lang.reflect.Constructor;
+import java.net.InetSocketAddress;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Date;
 import java.util.TreeMap;
 import java.util.HashMap;
@@ -36,8 +39,24 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import javax.security.auth.login.LoginException;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
@@ -45,26 +64,33 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.tools.DFSck;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.SequenceFile;
 import org.apache.hadoop.io.Text;
+import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.JobInProgress;
+import org.apache.hadoop.mapreduce.Counter;
+import org.apache.hadoop.mapreduce.CounterGroup;
 import org.apache.hadoop.mapreduce.Counters;
 import org.apache.hadoop.mapreduce.InputSplit;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.JobID;
 import org.apache.hadoop.mapreduce.Mapper;
-import org.apache.hadoop.mapreduce.RecordReader;
-import org.apache.hadoop.mapreduce.TaskAttemptContext;
+import org.apache.hadoop.mapreduce.Mapper.Context;
 import org.apache.hadoop.mapreduce.lib.input.FileSplit;
 import org.apache.hadoop.mapreduce.lib.input.SequenceFileInputFormat;
-import org.apache.hadoop.mapreduce.lib.input.SequenceFileRecordReader;
 import org.apache.hadoop.mapreduce.lib.output.SequenceFileOutputFormat;
 import org.apache.hadoop.raid.BlockReconstructor.CorruptBlockReconstructor;
 import org.apache.hadoop.raid.DistBlockIntegrityMonitor.Worker.LostFileInfo;
+import org.apache.hadoop.raid.LogUtils.LOGRESULTS;
+import org.apache.hadoop.raid.LogUtils.LOGTYPES;
+import org.apache.hadoop.raid.RaidUtils.RaidInfo;
+import org.apache.hadoop.raid.protocol.RaidProtocol;
+import org.apache.hadoop.security.UnixUserGroupInformation;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
 
@@ -104,9 +130,22 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     "raid.blockfix.max.fix.time.for.file";
   private static final String LOST_FILES_LIMIT =
     "raid.blockfix.corruptfiles.limit";
+  private static final String RAIDNODE_BLOCK_FIXER_SCAN_NUM_THREADS_KEY =
+    "raid.block.fixer.scan.threads";
+  private static final int DEFAULT_BLOCK_FIXER_SCAN_NUM_THREADS = 5;
+  private int blockFixerScanThreads = DEFAULT_BLOCK_FIXER_SCAN_NUM_THREADS;
   // The directories checked by the corrupt file monitor, seperate by comma
   private static final String RAIDNODE_CORRUPT_FILE_COUNTER_DIRECTORIES_KEY = 
       "raid.corruptfile.counter.dirs";
+  public static final String RAIDNODE_BLOCK_FIX_SUBMISSION_INTERVAL_KEY = 
+    "raid.block.fix.submission.interval";
+  private static final long DEFAULT_BLOCK_FIX_SUBMISSION_INTERVAL = 5 * 1000;
+  public static final String RAIDNODE_BLOCK_FIX_SCAN_SUBMISSION_INTERVAL_KEY = 
+      "raid.block.fix.scan.submission.interval";
+  private static final long DEFAULT_BLOCK_FIX_SCAN_SUBMISSION_INTERVAL = 5 * 1000;
+  public static final String RAIDNODE_MAX_NUM_DETECTION_TIME_COLLECTED_KEY =
+    "raid.max.num.detection.time.collected";
+  public static final int DEFAULT_RAIDNODE_MAX_NUM_DETECTION_TIME_COLLECTED = 100;
   private static final String[] DEFAULT_CORRUPT_FILE_COUNTER_DIRECTORIES = 
       new String[]{"/"};
 
@@ -122,8 +161,12 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     4 * 60 * 60 * 1000;  // 4 hrs.
 
   private static final int DEFAULT_LOST_FILES_LIMIT = 200000;
+  public static final String FAILED_FILE = "failed";
+  public static final String SIMULATION_FAILED_FILE = "simulation_failed";
  
   protected static final Log LOG = LogFactory.getLog(DistBlockIntegrityMonitor.class);
+  
+  private static final String CORRUPT_FILE_DETECT_TIME = "corrupt_detect_time";
 
   // number of files to reconstruct in a task
   private long filesPerTask;
@@ -142,8 +185,18 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
   private Worker decommissioningWorker = new DecommissioningWorker();
   private Runnable corruptFileCounterWorker = new CorruptFileCounter();
 
-  static enum Counter {
-    FILES_SUCCEEDED, FILES_FAILED, FILES_NOACTION
+  static enum RaidCounter {
+    FILES_SUCCEEDED, FILES_FAILED, FILES_NOACTION,
+    BLOCK_FIX_SIMULATION_FAILED, BLOCK_FIX_SIMULATION_SUCCEEDED, 
+    FILE_FIX_NUM_READBYTES_REMOTERACK
+  }
+  
+  static enum CorruptFileStatus {
+    POTENTIALLY_CORRUPT,
+    RAID_UNRECOVERABLE,
+    NOT_RAIDED_UNRECOVERABLE,
+    NOT_EXIST,
+    RECOVERABLE
   }
   
   static enum Priority {
@@ -163,8 +216,20 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       return (underlyingValue > other.underlyingValue);
     }
   }
+  
+  /**
+   * Hold information about a failed file with task id
+   */
+  static public class FailedFileInfo {
+    String taskId;
+    LostFileInfo fileInfo;
+    public FailedFileInfo(String newTaskId, LostFileInfo newFileInfo) {
+      this.taskId = newTaskId;
+      this.fileInfo = newFileInfo;
+    }
+  }
 
-  public DistBlockIntegrityMonitor(Configuration conf) {
+  public DistBlockIntegrityMonitor(Configuration conf) throws Exception {
     super(conf);
     filesPerTask = DistBlockIntegrityMonitor.getFilesPerTask(getConf());
     maxPendingJobs = DistBlockIntegrityMonitor.getMaxPendingJobs(getConf());
@@ -199,18 +264,34 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
   
   public abstract class Worker implements Runnable {
 
-    protected Map<String, LostFileInfo> fileIndex = 
-      new HashMap<String, LostFileInfo>();
+    protected Map<String, LostFileInfo> fileIndex = Collections.synchronizedMap(
+      new HashMap<String, LostFileInfo>());
     protected Map<Job, List<LostFileInfo>> jobIndex =
-      new HashMap<Job, List<LostFileInfo>>();
+      Collections.synchronizedMap(new HashMap<Job, List<LostFileInfo>>());
+    protected Map<Job, List<FailedFileInfo>> failJobIndex =
+        new HashMap<Job, List<FailedFileInfo>>();
+    protected Map<Job, List<FailedFileInfo>> simFailJobIndex =
+      new HashMap<Job, List<FailedFileInfo>>();
 
     private long jobCounter = 0;
-    private volatile int numJobsRunning = 0;
+    private AtomicInteger numJobsRunning = new AtomicInteger(0);
+    
+    protected AtomicLong numFilesDropped = new AtomicLong(0);
     
     volatile BlockIntegrityMonitor.Status lastStatus = null;
-    volatile long recentNumFilesSucceeded = 0;
-    volatile long recentNumFilesFailed = 0;
-    volatile long recentSlotSeconds = 0;
+    AtomicLong recentNumFilesSucceeded = new AtomicLong();
+    AtomicLong recentNumFilesFailed = new AtomicLong();
+    AtomicLong recentSlotSeconds = new AtomicLong();
+    AtomicLong recentNumBlockFixSimulationSucceeded = new AtomicLong();
+    AtomicLong recentNumBlockFixSimulationFailed = new AtomicLong();
+    AtomicLong recentNumReadBytesRemoteRack = new AtomicLong();
+    Map<String, Long> recentLogMetrics = 
+        Collections.synchronizedMap(new HashMap<String, Long>());
+    
+    private static final int POOL_SIZE = 2;
+    private final ExecutorService executor = 
+        Executors.newFixedThreadPool(POOL_SIZE);
+    private static final int DEFAULT_CHECK_JOB_TIMEOUT_SEC = 600; //10 mins
 
     protected final Log LOG;
     protected final Class<? extends BlockReconstructor> RECONSTRUCTOR_CLASS;
@@ -224,6 +305,17 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       this.LOG = log;
       this.RECONSTRUCTOR_CLASS = rClass;
       this.JOB_NAME_PREFIX = prefix;
+      Path workingDir = new Path(prefix);
+      try {
+        FileSystem fs = workingDir.getFileSystem(getConf());
+        // Clean existing working dir
+        fs.delete(workingDir, true);
+      } catch (IOException ioe) {
+        LOG.warn("Get exception when cleaning " + workingDir, ioe);
+      }
+    }
+    
+    public void shutdown() {
     }
 
 
@@ -231,48 +323,47 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
      * runs the worker periodically
      */
     public void run() {
-      while (running) {
-        try {
-          updateStatus();
-          checkAndReconstructBlocks();
-        } catch (InterruptedException ignore) {
-          LOG.info("interrupted");
-        } catch (Exception e) {
-          // log exceptions and keep running
-          LOG.error(StringUtils.stringifyException(e));
-        } catch (Error e) {
-          LOG.error(StringUtils.stringifyException(e));
-          throw e;
+      try {
+        while (running) {
+          try {
+            updateStatus();
+            checkAndReconstructBlocks();
+          } catch (InterruptedException ignore) {
+            LOG.info("interrupted");
+          } catch (Exception e) {
+            // log exceptions and keep running
+            LOG.error(StringUtils.stringifyException(e));
+          } catch (Error e) {
+            LOG.error(StringUtils.stringifyException(e));
+            throw e;
+          }
+  
+          try {
+            Thread.sleep(blockCheckInterval);
+          } catch (InterruptedException ignore) {
+            LOG.info("interrupted");
+          }
         }
-
-        try {
-          Thread.sleep(blockCheckInterval);
-        } catch (InterruptedException ignore) {
-          LOG.info("interrupted");
-        }
+      } finally {
+        shutdown();
       }
     }
 
     /**
      * checks for lost blocks and reconstructs them (if any)
      */
-    void checkAndReconstructBlocks()
-    throws IOException, InterruptedException, ClassNotFoundException {
-      checkJobs();
-
-      if (jobIndex.size() >= maxPendingJobs) {
-        LOG.info("Waiting for " + jobIndex.size() + " pending jobs");
+    void checkAndReconstructBlocks() throws Exception {
+      checkJobsWithTimeOut(DEFAULT_CHECK_JOB_TIMEOUT_SEC);
+      int size = jobIndex.size();
+      if (size >= maxPendingJobs) {
+        LOG.info("Waiting for " + size + " pending jobs");
         return;
       }
 
       Map<String, Integer> lostFiles = getLostFiles();
+      long detectTime = System.currentTimeMillis();
       FileSystem fs = new Path("/").getFileSystem(getConf());
-      Map<String, Priority> filePriorities =
-        computePriorities(fs, lostFiles);
-
-      LOG.info("Found " + filePriorities.size() + " new lost files");
-
-      startJobs(filePriorities);
+      computePrioritiesAndStartJobs(fs, lostFiles, detectTime);
     }
 
     /**
@@ -286,9 +377,22 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       // reconstructing failed.
       for (LostFileInfo fileInfo: jobIndex.get(job)) {
         boolean failed = true;
+        addToMap(job, job.getID().toString(), fileInfo, failJobIndex);
         fileInfo.finishJob(job.getJobName(), failed);
       }
-      numJobsRunning--;
+      numJobsRunning.decrementAndGet();
+    }
+    
+    private void addToMap(Job job, String taskId, LostFileInfo fileInfo, 
+        Map<Job, List<FailedFileInfo>> index) {
+      List<FailedFileInfo> failFiles = null;
+      if (!index.containsKey(job)) {
+        failFiles = new ArrayList<FailedFileInfo>();
+        index.put(job, failFiles);
+      } else {
+        failFiles = index.get(job);
+      }
+      failFiles.add(new FailedFileInfo(taskId, fileInfo));
     }
 
     /**
@@ -299,33 +403,66 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       String jobName = job.getJobName();
       LOG.info("Job " + job.getID() + "(" + jobName +
       ") finished (succeeded)");
-
-      if (filesFailed == 0) {
-        // no files have failed
-        for (LostFileInfo fileInfo: jobIndex.get(job)) {
+      // we have to look at the output to check which files have failed
+      HashMap<String, String> failedFiles = getFailedFiles(job);
+      for (LostFileInfo fileInfo: jobIndex.get(job)) {
+        String filePath = fileInfo.getFile().toString();
+        String failedFilePath = 
+            DistBlockIntegrityMonitor.FAILED_FILE + "," +
+            filePath;
+        String simulatedFailedFilePath =
+            DistBlockIntegrityMonitor.SIMULATION_FAILED_FILE + "," + 
+            filePath;
+        if (failedFiles.containsKey(simulatedFailedFilePath)) {
+          String taskId = failedFiles.get(simulatedFailedFilePath);
+          addToMap(job, taskId, fileInfo, simFailJobIndex);
+          LOG.error("Simulation failed file: " + fileInfo.getFile());
+        }
+        if (failedFiles.containsKey(failedFilePath)) {
+          String taskId = failedFiles.get(failedFilePath);
+          addToMap(job, taskId, fileInfo, failJobIndex);
+          boolean failed = true;
+          fileInfo.finishJob(jobName, failed);
+        } else {
+          // call succeed for files that have succeeded or for which no action
+          // was taken
           boolean failed = false;
           fileInfo.finishJob(jobName, failed);
         }
-      } else {
-        // we have to look at the output to check which files have failed
-        Set<String> failedFiles = getFailedFiles(job);
-
-        for (LostFileInfo fileInfo: jobIndex.get(job)) {
-          if (failedFiles.contains(fileInfo.getFile().toString())) {
-            boolean failed = true;
-            fileInfo.finishJob(jobName, failed);
-          } else {
-            // call succeed for files that have succeeded or for which no action
-            // was taken
-            boolean failed = false;
-            fileInfo.finishJob(jobName, failed);
-          }
-        }
       }
       // report succeeded files to metrics
-      this.recentNumFilesSucceeded += filesSucceeded;
-      this.recentNumFilesFailed += filesFailed;
-      numJobsRunning--;
+      this.recentNumFilesSucceeded.addAndGet(filesSucceeded);
+      this.recentNumFilesFailed.addAndGet(filesFailed);
+      if (filesSucceeded > 0) {
+        lastSuccessfulFixTime = System.currentTimeMillis();
+      }
+      numJobsRunning.decrementAndGet();
+    }
+    
+    /**
+     * Check the jobs with timeout
+     */
+    void checkJobsWithTimeOut(int timeoutSec) 
+        throws ExecutionException {
+      Future<Boolean> future = executor.submit(new Callable<Boolean>() {
+        @Override
+        public Boolean call() throws Exception {
+          checkJobs();
+          return true;
+        }
+      });
+      try {
+        future.get(timeoutSec, TimeUnit.SECONDS);
+      } catch (TimeoutException e) {
+        // ignore this.
+        LOG.warn("Timeout when checking jobs' status.");
+      } catch (InterruptedException e) {
+        // ignore this.
+        LOG.warn("checkJobs function is interrupted.");
+      }
+      if (!future.isDone()) {
+        future.cancel(true);
+      }
     }
 
     /**
@@ -333,63 +470,85 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
      * returns a list of failed files for restarting
      */
     void checkJobs() throws IOException {
-      Iterator<Job> jobIter = jobIndex.keySet().iterator();
       List<Job> nonRunningJobs = new ArrayList<Job>();
-      while(jobIter.hasNext()) {
-        Job job = jobIter.next();
-
-        try {
-          if (job.isComplete()) {
-            Counters ctrs = job.getCounters();
-            if (ctrs != null) {
-              // If we got counters, perform extra validation.
-              this.recentSlotSeconds += ctrs.findCounter(
-                  JobInProgress.Counter.SLOTS_MILLIS_MAPS).getValue() / 1000;
-              
-              long filesSucceeded =
-                  ctrs.findCounter(Counter.FILES_SUCCEEDED) != null ?
-                    ctrs.findCounter(Counter.FILES_SUCCEEDED).getValue() : 0;
-              long filesFailed =
-                  ctrs.findCounter(Counter.FILES_FAILED) != null ?
-                    ctrs.findCounter(Counter.FILES_FAILED).getValue() : 0;
-              long filesNoAction =
-                  ctrs.findCounter(Counter.FILES_NOACTION) != null ?
-                    ctrs.findCounter(Counter.FILES_NOACTION).getValue() : 0;
-
-              int files = jobIndex.get(job).size();
-              
-              if (job.isSuccessful() &&
-                  (filesSucceeded + filesFailed + filesNoAction ==
-                    ((long) files))) {
-                // job has processed all files
-                succeedJob(job, filesSucceeded, filesFailed);
+      synchronized(jobIndex) {
+        Iterator<Job> jobIter = jobIndex.keySet().iterator();
+        while(jobIter.hasNext()) {
+          Job job = jobIter.next();
+  
+          try {
+            if (job.isComplete()) {
+              Counters ctrs = job.getCounters();
+              if (ctrs != null) {
+                // If we got counters, perform extra validation.
+                this.recentSlotSeconds.addAndGet(ctrs.findCounter(
+                    JobInProgress.Counter.SLOTS_MILLIS_MAPS).getValue() / 1000);
+                
+                long filesSucceeded =
+                    ctrs.findCounter(RaidCounter.FILES_SUCCEEDED) != null ?
+                      ctrs.findCounter(RaidCounter.FILES_SUCCEEDED).getValue() : 0;
+                long filesFailed =
+                    ctrs.findCounter(RaidCounter.FILES_FAILED) != null ?
+                      ctrs.findCounter(RaidCounter.FILES_FAILED).getValue() : 0;
+                long filesNoAction =
+                    ctrs.findCounter(RaidCounter.FILES_NOACTION) != null ?
+                      ctrs.findCounter(RaidCounter.FILES_NOACTION).getValue() : 0;
+                long blockFixSimulationFailed = 
+                    ctrs.findCounter(RaidCounter.BLOCK_FIX_SIMULATION_FAILED) != null?
+                      ctrs.findCounter(RaidCounter.BLOCK_FIX_SIMULATION_FAILED).getValue() : 0;
+                long blockFixSimulationSucceeded = 
+                    ctrs.findCounter(RaidCounter.BLOCK_FIX_SIMULATION_SUCCEEDED) != null?
+                      ctrs.findCounter(RaidCounter.BLOCK_FIX_SIMULATION_SUCCEEDED).getValue() : 0;
+                this.recentNumBlockFixSimulationFailed.addAndGet(blockFixSimulationFailed);
+                this.recentNumBlockFixSimulationSucceeded.addAndGet(blockFixSimulationSucceeded);
+                long fileFixNumReadBytesRemoteRack = 
+                    ctrs.findCounter(RaidCounter.FILE_FIX_NUM_READBYTES_REMOTERACK) != null ?
+                      ctrs.findCounter(RaidCounter.FILE_FIX_NUM_READBYTES_REMOTERACK).getValue() : 0;
+                this.recentNumReadBytesRemoteRack.addAndGet(fileFixNumReadBytesRemoteRack);
+                CounterGroup counterGroup = ctrs.getGroup(LogUtils.LOG_COUNTER_GROUP_NAME);
+                for (Counter ctr: counterGroup) {
+                  Long curVal = ctr.getValue();
+                  if (this.recentLogMetrics.containsKey(ctr.getName())) {
+                    curVal += this.recentLogMetrics.get(ctr.getName());
+                  }
+                  this.recentLogMetrics.put(ctr.getName(), curVal);
+                }
+                
+                int files = jobIndex.get(job).size();
+                
+                if (job.isSuccessful() &&
+                    (filesSucceeded + filesFailed + filesNoAction ==
+                      ((long) files))) {
+                  // job has processed all files
+                  succeedJob(job, filesSucceeded, filesFailed);
+                } else {
+                  failJob(job);
+                }
               } else {
-                failJob(job);
+                long filesSucceeded = jobIndex.get(job).size();
+                long filesFailed = 0;
+                if (job.isSuccessful()) {
+                  succeedJob(job, filesSucceeded, filesFailed);
+                } else {
+                  failJob(job);
+                }
               }
+              jobIter.remove();
+              nonRunningJobs.add(job);
             } else {
-              long filesSucceeded = jobIndex.get(job).size();
-              long filesFailed = 0;
-              if (job.isSuccessful()) {
-                succeedJob(job, filesSucceeded, filesFailed);
-              } else {
-                failJob(job);
-              }
+              LOG.info("Job " + job.getID() + "(" + job.getJobName()
+                  + " still running");
             }
+          } catch (Exception e) {
+            LOG.error(StringUtils.stringifyException(e));
+            failJob(job);
             jobIter.remove();
             nonRunningJobs.add(job);
-          } else {
-            LOG.info("Job " + job.getID() + "(" + job.getJobName()
-                + " still running");
-          }
-        } catch (Exception e) {
-          LOG.error(StringUtils.stringifyException(e));
-          failJob(job);
-          jobIter.remove();
-          nonRunningJobs.add(job);
-          try {
-            job.killJob();
-          } catch (Exception ee) {
-            LOG.error(StringUtils.stringifyException(ee));
+            try {
+              job.killJob();
+            } catch (Exception ee) {
+              LOG.error(StringUtils.stringifyException(ee));
+            }
           }
         }
       }
@@ -425,8 +584,8 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     /**
      * determines which files have failed for a given job
      */
-    private Set<String> getFailedFiles(Job job) throws IOException {
-      Set<String> failedFiles = new HashSet<String>();
+    private HashMap<String, String> getFailedFiles(Job job) throws IOException {
+      HashMap<String, String> failedFiles = new HashMap<String, String>();
 
       Path outDir = SequenceFileOutputFormat.getOutputPath(job);
       FileSystem fs  = outDir.getFileSystem(getConf());
@@ -446,7 +605,10 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
           Text key = new Text();
           Text value = new Text();
           while (reader.next(key, value)) {
-            failedFiles.add(key.toString());
+            if (LOG.isDebugEnabled()) {
+              LOG.debug("key: " + key.toString() + " , value: " + value.toString());
+            }
+            failedFiles.put(key.toString(), value.toString());
           }
           reader.close();
         }
@@ -468,12 +630,42 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
         }
       }
     }
+    
+    // Return true if succeed to start one job
+    public boolean startOneJob(Priority pri, Set<String> jobFiles,
+        long detectTime, AtomicLong numFilesSubmitted, 
+        AtomicLong lastCheckingTime) 
+            throws IOException, InterruptedException, ClassNotFoundException {
+      if (lastCheckingTime != null) {
+        lastCheckingTime.set(System.currentTimeMillis());
+      }
+      String startTimeStr = dateFormat.format(new Date());
+      String jobName = JOB_NAME_PREFIX + "." + jobCounter + "." + pri + "-pri" +
+                       "." + startTimeStr;
+      synchronized(jobFiles) {
+        if (jobFiles.size() == 0) {
+          return false;
+        }
+        jobCounter++;
+        
+        synchronized(jobIndex) {
+          if (jobIndex.size() >= maxPendingJobs) {
+            // full 
+            return false;
+          }
+          startJob(jobName, jobFiles, pri, detectTime);
+        }
+        numFilesSubmitted.addAndGet(jobFiles.size());
+        jobFiles.clear();
+        
+      }
+      return true;
+    }
 
     // Start jobs for all the lost files.
-    private void startJobs(Map<String, Priority> filePriorities)
+    public void startJobs(Map<String, Priority> filePriorities, long detectTime)
     throws IOException, InterruptedException, ClassNotFoundException {
-      String startTimeStr = dateFormat.format(new Date());
-
+      AtomicLong numFilesSubmitted = new AtomicLong(0);
       for (Priority pri : Priority.values()) {
         Set<String> jobFiles = new HashSet<String>();
         for (Map.Entry<String, Priority> entry: filePriorities.entrySet()) {
@@ -484,29 +676,36 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
           jobFiles.add(entry.getKey());
           // Check if we have hit the threshold for number of files in a job.
           if (jobFiles.size() == filesPerTask * TASKS_PER_JOB) {
-            String jobName = JOB_NAME_PREFIX + "." + jobCounter +
-            "." + pri + "-pri" + "." + startTimeStr;
-            jobCounter++;
-            startJob(jobName, jobFiles, pri);
-            jobFiles.clear();
-            if (jobIndex.size() > maxPendingJobs) return;
+            boolean succeed = startOneJob(pri, jobFiles, detectTime,
+                numFilesSubmitted, null);
+            if (!succeed) {
+              this.numFilesDropped.set(filePriorities.size() -
+                  numFilesSubmitted.get());
+              LOG.debug("Submitted a job with max number of files allowed. " + 
+                        "Num files dropped is " + this.numFilesDropped.get());
+              return;
+            }
           }
         }
         if (jobFiles.size() > 0) {
-          String jobName = JOB_NAME_PREFIX + "." + jobCounter +
-          "." + pri + "-pri" + "." + startTimeStr;
-          jobCounter++;
-          startJob(jobName, jobFiles, pri);
-          jobFiles.clear();
-          if (jobIndex.size() > maxPendingJobs) return;
+          boolean succeed = startOneJob(pri, jobFiles, detectTime,
+              numFilesSubmitted, null);
+          if (!succeed) {
+            this.numFilesDropped.set(filePriorities.size() -
+                numFilesSubmitted.get());
+            LOG.debug("Submitted a job with max number of files allowed. " + 
+                      "Num files dropped is " + this.numFilesDropped.get());
+            return;
+          }
         }
       }
+      this.numFilesDropped.set(filePriorities.size() - numFilesSubmitted.get());
     }
 
     /**
      * creates and submits a job, updates file index and job index
      */
-    private void startJob(String jobName, Set<String> lostFiles, Priority priority)
+    private void startJob(String jobName, Set<String> lostFiles, Priority priority, long detectTime)
     throws IOException, InterruptedException, ClassNotFoundException {
       Path inDir = new Path(JOB_NAME_PREFIX + "/in/" + jobName);
       Path outDir = new Path(JOB_NAME_PREFIX + "/out/" + jobName);
@@ -517,6 +716,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       Configuration jobConf = new Configuration(getConf());
       RaidUtils.parseAndSetOptions(jobConf, priority.configOption);
       Job job = new Job(jobConf, jobName);
+      job.getConfiguration().set(CORRUPT_FILE_DETECT_TIME, Long.toString(detectTime));
       configureJob(job, this.RECONSTRUCTOR_CLASS);
       job.setJarByClass(getClass());
       job.setMapperClass(ReconstructionMapper.class);
@@ -528,6 +728,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
 
       ReconstructionInputFormat.setInputPaths(job, inDir);
       SequenceFileOutputFormat.setOutputPath(job, outDir);
+      
 
       submitJob(job, filesInJob, priority);
       List<LostFileInfo> fileInfos =
@@ -537,7 +738,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       if (jobIndex.containsKey(job)) {
         jobIndex.put(job, fileInfos);
       }
-      numJobsRunning++;
+      numJobsRunning.incrementAndGet();
     }
 
     void submitJob(Job job, List<String> filesInJob, Priority priority)
@@ -603,6 +804,8 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       int lowPriorityFiles = 0;
       int lowestPriorityFiles = 0;
       List<JobStatus> jobs = new ArrayList<JobStatus>();
+      List<JobStatus> failJobs = new ArrayList<JobStatus>();
+      List<JobStatus> simFailJobs = new ArrayList<JobStatus>();
       List<String> highPriorityFileNames = new ArrayList<String>();
       for (Map.Entry<String, LostFileInfo> e : fileIndex.entrySet()) {
         String fileName = e.getKey();
@@ -617,14 +820,31 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
           lowestPriorityFiles++;
         }
       }
-      for (Job job : jobIndex.keySet()) {
-        String url = job.getTrackingURL();
-        String name = job.getJobName();
-        JobID jobId = job.getID();
-        jobs.add(new BlockIntegrityMonitor.JobStatus(jobId, name, url));
+      synchronized(jobIndex) {
+        for (Job job : jobIndex.keySet()) {
+          String url = job.getTrackingURL();
+          String name = job.getJobName();
+          JobID jobId = job.getID();
+          jobs.add(new BlockIntegrityMonitor.JobStatus(jobId, name, url,
+              jobIndex.get(job), null));
+        }
+        for (Job job : failJobIndex.keySet()) {
+          String url = job.getTrackingURL();
+          String name = job.getJobName();
+          JobID jobId = job.getID();
+          failJobs.add(new BlockIntegrityMonitor.JobStatus(jobId, name, url,
+              null, failJobIndex.get(job)));
+        }
+        for (Job simJob : simFailJobIndex.keySet()) {
+          String url = simJob.getTrackingURL();
+          String name = simJob.getJobName();
+          JobID jobId = simJob.getID();
+          simFailJobs.add(new BlockIntegrityMonitor.JobStatus(jobId, name, url,
+              null, simFailJobIndex.get(simJob)));
+        }
       }
       lastStatus = new BlockIntegrityMonitor.Status(highPriorityFiles, lowPriorityFiles,
-          lowestPriorityFiles, jobs, highPriorityFileNames);
+          lowestPriorityFiles, jobs, highPriorityFileNames, failJobs, simFailJobs);
       updateRaidNodeMetrics();
     }
     
@@ -632,13 +852,14 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       return lastStatus;
     }
 
-    abstract Map<String, Priority> computePriorities(
-        FileSystem fs, Map<String, Integer> lostFiles) throws IOException;
+    abstract void computePrioritiesAndStartJobs(
+        FileSystem fs, Map<String, Integer> lostFiles, long detectTime)
+            throws IOException, InterruptedException, ClassNotFoundException;
 
     protected abstract Map<String, Integer> getLostFiles() throws IOException;
 
     protected abstract void updateRaidNodeMetrics();
-
+    
     /**
      * hold information about a lost file that is being reconstructed
      */
@@ -710,12 +931,6 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
 
   }
   
-  static public String[] getCorruptMonitorDirs(Configuration conf) {
-    return conf.getStrings(
-        RAIDNODE_CORRUPT_FILE_COUNTER_DIRECTORIES_KEY,
-        DEFAULT_CORRUPT_FILE_COUNTER_DIRECTORIES);
-  }
-  
   /**
    * CorruptFileCounter is a periodical running daemon that keeps running raidfsck 
    * to get the number of the corrupt files under the give directories defined by 
@@ -724,47 +939,120 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
    *
    */
   public class CorruptFileCounter implements Runnable {
-    public String[] corruptMonitorDirs = null;
-    private TreeMap<String, Long> counterMap = 
-        new TreeMap<String, Long>();
+    private TreeMap<String, Long> unRecoverableCounterMap = new TreeMap<String, Long>();
+    private Map<String, Long> recoverableCounterMap = new HashMap<String, Long>();
+    private long filesWithMissingBlksCnt = 0;
+    private Map<String, long[]> numStrpWithMissingBlksMap = new HashMap<String, long[]>();
     private Object counterMapLock = new Object();
-    
+    private long numNonRaidedMissingBlocks = 0;
+
     public CorruptFileCounter() {
-      this.corruptMonitorDirs = getCorruptMonitorDirs(getConf());
+      for (Codec codec : Codec.getCodecs()) {
+        this.numStrpWithMissingBlksMap.put(codec.id,
+            new long[codec.stripeLength + codec.parityLength]);
+      }
     }
-    
+
     public void run() {
-      RaidNodeMetrics.getInstance(
-          RaidNodeMetrics.DEFAULT_NAMESPACE_ID).initCorruptFilesMetrics(getConf());
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID)
+        .initCorruptFilesMetrics(getConf());
       while (running) {
-        TreeMap<String, Long> newCounterMap = new TreeMap<String, Long>();
-        for (String srcDir: corruptMonitorDirs) {
-          try {
-            ByteArrayOutputStream bout = new ByteArrayOutputStream();
-            PrintStream ps = new PrintStream(bout, true);
-            RaidShell shell = new RaidShell(getConf(), ps);
-            int res = ToolRunner.run(shell, new String[]{"-fsck", srcDir, "-count"});
-            shell.close();
-            ByteArrayInputStream bin = new ByteArrayInputStream(bout.toByteArray());
-            BufferedReader reader = new BufferedReader(new InputStreamReader(bin));
-            String line = reader.readLine();
-            if (line == null) {
-              throw new IOException("Raidfsck fails without output");
-            }
-            Long corruptCount = Long.parseLong(line);
-            LOG.info("The number of corrupt files under " + srcDir + " is " + corruptCount);
-            newCounterMap.put(srcDir, corruptCount);
-            reader.close();
-            bin.close();
-          } catch (Exception e) {
-            LOG.error("Fail to count the corrupt files under " + srcDir, e);
+        TreeMap<String, Long> newUnRecoverableCounterMap = new TreeMap<String, Long>();
+        Map<String, Long> newRecoverableCounterMap = new HashMap<String, Long>();
+        long newfilesWithMissingBlksCnt = 0;
+        String srcDir = "/";
+        try {
+          ByteArrayOutputStream bout = new ByteArrayOutputStream();
+          PrintStream ps = new PrintStream(bout, true);
+          RaidShell shell = new RaidShell(getConf(), ps);
+          int res = ToolRunner.run(shell, new String[] { "-fsck", srcDir,
+              "-count", "-retNumStrpsMissingBlks" });
+          shell.close();
+          ByteArrayInputStream bin = new ByteArrayInputStream(
+              bout.toByteArray());
+          BufferedReader reader = new BufferedReader(new InputStreamReader(bin));
+          String line = reader.readLine();
+          if (line == null) {
+            throw new IOException("Raidfsck fails without output");
           }
+          Long corruptCount = Long.parseLong(line);
+          LOG.info("The number of corrupt files under " + srcDir + " is "
+              + corruptCount);
+          newUnRecoverableCounterMap.put(srcDir, corruptCount);
+          line = reader.readLine();
+          if (line == null) {
+            throw new IOException("Raidfsck did not print number "
+                + "of files with missing blocks");
+          }
+
+          // get files with Missing Blks
+          // fsck with '-count' prints this number in line2
+          long incfilesWithMissingBlks = Long.parseLong(line);
+          LOG.info("The number of files with missing blocks under " + srcDir
+              + " is " + incfilesWithMissingBlks);
+
+          long numRecoverableFiles = incfilesWithMissingBlks - corruptCount;
+          newRecoverableCounterMap.put(srcDir, numRecoverableFiles);
+          approximateNumRecoverableFiles = numRecoverableFiles;
+
+          // Add filesWithMissingBlks and numStrpWithMissingBlks only for "/"
+          // dir to avoid duplicates
+          Map<String, long[]> newNumStrpWithMissingBlksMap = new HashMap<String, long[]>();
+          newfilesWithMissingBlksCnt += incfilesWithMissingBlks;
+          // read the array for num stripes with missing blocks
+
+          line = reader.readLine();
+          if (line == null) {
+            throw new IOException("Raidfsck did not print the number of "
+                + "missing blocks in non raided files");
+          }
+          long numNonRaided = Long.parseLong(line);
+
+          for (int i = 0; i < Codec.getCodecs().size(); i++) {
+            line = reader.readLine();
+            if (line == null) {
+              throw new IOException("Raidfsck did not print the missing "
+                  + "block info for codec at index " + i);
+            }
+
+            Codec codec = Codec.getCodec(line);
+            long[] incNumStrpWithMissingBlks = new long[codec.stripeLength
+                                                        + codec.parityLength];
+            for (int j = 0; j < incNumStrpWithMissingBlks.length; j++) {
+              line = reader.readLine();
+              if (line == null) {
+                throw new IOException("Raidfsck did not print the array "
+                          + "for number stripes with missing blocks for index "
+                          + j);
+              }
+              incNumStrpWithMissingBlks[j] = Long.parseLong(line);
+              LOG.info("The number of stripes with missing blocks at index"
+                        + j + "under" + srcDir + " is "
+                        + incNumStrpWithMissingBlks[j]);
+            }
+            newNumStrpWithMissingBlksMap.put(codec.id, incNumStrpWithMissingBlks);
+          }
+          synchronized (counterMapLock) {
+            this.numNonRaidedMissingBlocks = numNonRaided;
+            for (String codeId : newNumStrpWithMissingBlksMap.keySet()) {
+              numStrpWithMissingBlksMap.put(codeId,
+              newNumStrpWithMissingBlksMap.get(codeId));
+            }
+          }
+          reader.close();
+          bin.close();
+        } catch (Exception e) {
+          LOG.error("Fail to count the corrupt files under " + srcDir, e);
         }
-        synchronized(counterMapLock) {
-          this.counterMap = newCounterMap;
+        synchronized (counterMapLock) {
+          this.unRecoverableCounterMap = newUnRecoverableCounterMap;
+          this.recoverableCounterMap = newRecoverableCounterMap;
+          this.filesWithMissingBlksCnt = newfilesWithMissingBlksCnt;
         }
         updateRaidNodeMetrics();
-
+        if (!running) {
+          break;
+        }
         try {
           Thread.sleep(corruptFileCountInterval);
         } catch (InterruptedException ignore) {
@@ -772,174 +1060,571 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
         }
       }
     }
-    
-    public Map<String, Long> getCounterMap() {
+
+    public long getNumNonRaidedMissingBlks() {
       synchronized (counterMapLock) {
-        return counterMap;
+        return this.numNonRaidedMissingBlocks;
       }
     }
-    
+
+    public long getFilesWithMissingBlksCnt() {
+      synchronized (counterMapLock) {
+        return filesWithMissingBlksCnt;
+      }
+    }
+
+    public long[] getNumStrpWithMissingBlksRS() {
+      synchronized (counterMapLock) {
+        return numStrpWithMissingBlksMap.get("rs");
+      }
+    }
+
     protected void updateRaidNodeMetrics() {
-      RaidNodeMetrics rnm = RaidNodeMetrics.getInstance(
-          RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
-      synchronized(counterMapLock) {
-        for (String dir : corruptMonitorDirs) {
-          if (this.counterMap.containsKey(dir)) {
-            rnm.corruptFiles.get(dir).set(this.counterMap.get(dir));
-          } else {
-            rnm.corruptFiles.get(dir).set(-1L);
+      RaidNodeMetrics rnm = RaidNodeMetrics
+        .getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID);
+
+      synchronized (counterMapLock) {
+        rnm.numFilesWithMissingBlks.set(this.filesWithMissingBlksCnt);
+        long[] numStrpWithMissingBlksRS = this.numStrpWithMissingBlksMap
+          .get("rs");
+
+        if (numStrpWithMissingBlksRS != null) {
+          rnm.numStrpsOneMissingBlk.set(numStrpWithMissingBlksRS[0]);
+          rnm.numStrpsTwoMissingBlk.set(numStrpWithMissingBlksRS[1]);
+          rnm.numStrpsThreeMissingBlk.set(numStrpWithMissingBlksRS[2]);
+          rnm.numStrpsFourMissingBlk.set(numStrpWithMissingBlksRS[3]);
+
+          long tmp_sum = 0;
+          for (int idx = 4; idx < numStrpWithMissingBlksRS.length; idx++) {
+            tmp_sum += numStrpWithMissingBlksRS[idx];
           }
+          rnm.numStrpsFiveMoreMissingBlk.set(tmp_sum);
         }
+      }
+    }
+
+    public String getMissingBlksHtmlTable() {
+      synchronized (counterMapLock) {
+        return RaidUtils.getMissingBlksHtmlTable(
+            this.numNonRaidedMissingBlocks, this.numStrpWithMissingBlksMap);
       }
     }
   }
   
-  public class CorruptionWorker extends Worker {
+  /**
+   * Get the lost blocks numbers per stripe in the source file.
+   */
+  private Map<Integer, Integer> getLostStripes(
+              Configuration conf, FileStatus stat, FileSystem fs) 
+                  throws IOException {
+    Map<Integer, Integer> lostStripes = new HashMap<Integer, Integer>();
+    RaidInfo raidInfo = RaidUtils.getFileRaidInfo(stat, conf);
+    if (raidInfo.codec == null) {
+      // Can not find the parity file, the file is not raided.
+      return lostStripes;
+    }
+    Codec codec = raidInfo.codec;
     
+    if (codec.isDirRaid) {
+      RaidUtils.collectDirectoryCorruptBlocksInStripe(conf, 
+          (DistributedFileSystem)fs, raidInfo, 
+          stat.getPath(), lostStripes);
+    } else {
+      RaidUtils.collectFileCorruptBlocksInStripe((DistributedFileSystem)fs, 
+          raidInfo, stat.getPath(), lostStripes);
+    }
+    return lostStripes;
+  }
+  
+  public class CorruptFile {
+    public String path;
+    public long detectTime;
+    public volatile int numCorrupt;
+    public volatile CorruptFileStatus fileStatus;
+    public volatile long lastSubmitTime;
+    public CorruptFile(String newPath, int newNumCorrupt, long newDetectTime) {
+      this.path = newPath;
+      this.numCorrupt = newNumCorrupt;
+      this.fileStatus = CorruptFileStatus.POTENTIALLY_CORRUPT;
+      this.lastSubmitTime = System.currentTimeMillis();
+      this.detectTime = newDetectTime;
+    }
+    
+    public String toString() {
+      return fileStatus.name();
+    }
+  }
+  
+  public class MonitorSet {
+    public ConcurrentHashMap<String, CorruptFile> toScanFiles;
+    public ExecutorService executor;
+    public BlockingQueue<Runnable> scanningQueue;
+    public MonitorSet(final String monitorDir) {
+      this.scanningQueue = new LinkedBlockingQueue<Runnable>();
+      ThreadFactory factory = new ThreadFactory() {
+        final AtomicInteger numThreads = new AtomicInteger();
+        public Thread newThread(Runnable r) {
+          Thread t = new Thread(r);
+          t.setName("BlockFix-Scanner-" + monitorDir + "-" + 
+            numThreads.getAndIncrement());
+          return t;
+        }
+      };
+      this.executor = new ThreadPoolExecutor(blockFixerScanThreads,
+          blockFixerScanThreads, 0L, TimeUnit.MILLISECONDS, scanningQueue,
+          factory);
+      this.toScanFiles = new ConcurrentHashMap<String, CorruptFile>();
+    }
+  }
+
+  public class CorruptionWorker extends Worker {
+    public String[] corruptMonitorDirs = null;
+    public HashMap<String, MonitorSet> monitorSets;
+    public final String OTHERS = "others";
+    public HashMap<Priority, HashSet<String>> jobFilesMap;
+    public HashMap<Priority, AtomicLong> lastCheckingTimes;
+    public AtomicLong numFilesSubmitted = new AtomicLong(0);
+    public AtomicLong totalFilesToSubmit = new AtomicLong(0);
+    private long blockFixSubmissionInterval =
+        DEFAULT_BLOCK_FIX_SUBMISSION_INTERVAL;
+    private long blockFixScanSubmissionInterval = 
+        DEFAULT_BLOCK_FIX_SCAN_SUBMISSION_INTERVAL;
+    private int maxNumDetectionTime;
+    // Collection of recent X samples;
+    private long[] detectionTimeCollection;
+    private int currPos;
+    private long totalDetectionTime;
+    private long totalCollecitonSize;
+
     public CorruptionWorker() {
       super(LogFactory.getLog(CorruptionWorker.class), 
-            CorruptBlockReconstructor.class, 
-            "blockfixer");
+          CorruptBlockReconstructor.class, 
+          "blockfixer");
+      blockFixerScanThreads = getConf().getInt(
+          RAIDNODE_BLOCK_FIXER_SCAN_NUM_THREADS_KEY,
+          DEFAULT_BLOCK_FIXER_SCAN_NUM_THREADS);
+      this.blockFixSubmissionInterval = getConf().getLong(
+          RAIDNODE_BLOCK_FIX_SUBMISSION_INTERVAL_KEY,
+          DEFAULT_BLOCK_FIX_SUBMISSION_INTERVAL);
+      this.blockFixScanSubmissionInterval = getConf().getLong(
+          RAIDNODE_BLOCK_FIX_SCAN_SUBMISSION_INTERVAL_KEY, 
+          DEFAULT_BLOCK_FIX_SCAN_SUBMISSION_INTERVAL);
+      this.corruptMonitorDirs = DistBlockIntegrityMonitor.getCorruptMonitorDirs(
+          getConf());
+      this.monitorSets = new HashMap<String, MonitorSet>();
+      for (String monitorDir : this.corruptMonitorDirs) {
+        this.monitorSets.put(monitorDir, new MonitorSet(monitorDir));
+      }
+      this.monitorSets.put(OTHERS, new MonitorSet(OTHERS));
+      this.jobFilesMap = new HashMap<Priority, HashSet<String>>();
+      lastCheckingTimes = new HashMap<Priority, AtomicLong>();
+      for (Priority priority: Priority.values()) {
+        this.jobFilesMap.put(priority, new HashSet<String>());
+        this.lastCheckingTimes.put(priority, new AtomicLong(System.currentTimeMillis()));
+      }
+      this.maxNumDetectionTime = getConf().getInt(
+          RAIDNODE_MAX_NUM_DETECTION_TIME_COLLECTED_KEY, 
+          DEFAULT_RAIDNODE_MAX_NUM_DETECTION_TIME_COLLECTED);
+      detectionTimeCollection = new long[maxNumDetectionTime];
+      this.totalCollecitonSize = 0;
+      this.totalDetectionTime = 0;
+      this.currPos = 0;
+    }
+    
+    public void putDetectionTime(long detectionTime) {
+      synchronized(detectionTimeCollection) {
+        long oldVal = detectionTimeCollection[currPos]; 
+        detectionTimeCollection[currPos] = detectionTime;
+        totalDetectionTime += detectionTime - oldVal;
+        currPos++;
+        if (currPos == maxNumDetectionTime) {
+          currPos = 0;
+        }
+        if (totalCollecitonSize < maxNumDetectionTime) {
+          totalCollecitonSize++;
+        }
+      }
+    }
+    
+    public double getNumDetectionsPerSec() {
+      synchronized(detectionTimeCollection) {
+        if (totalCollecitonSize == 0) {
+          return 0;
+        } else {
+          return ((double)totalCollecitonSize)*1000/totalDetectionTime
+              * blockFixerScanThreads;
+        }
+      }
     }
 
     @Override
     protected Map<String, Integer> getLostFiles() throws IOException {
       return DistBlockIntegrityMonitor.this.getLostFiles(LIST_CORRUPT_FILE_PATTERN, 
-                    new String[]{"-list-corruptfileblocks", "-limit", 
-                      new Integer(lostFilesLimit).toString()});
+          new String[]{"-list-corruptfileblocks", "-limit", 
+          new Integer(lostFilesLimit).toString()});
     }
-
-    @Override
-    // Compute integer priority. Urgency is indicated by higher numbers.
-    Map<String, Priority> computePriorities(
-        FileSystem fs, Map<String, Integer> corruptFiles) throws IOException {
-
-      Map<String, Priority> fileToPriority = new HashMap<String, Priority>();
-      String[] parityDestPrefixes = destPrefixes();
-      Set<String> srcDirsToWatchOutFor = new HashSet<String>();
-      // Loop over parity files once.
-      for (Iterator<String> it = corruptFiles.keySet().iterator(); it.hasNext(); ) {
-        String p = it.next();
-        if (BlockIntegrityMonitor.isSourceFile(p, parityDestPrefixes)) {
-          continue;
-        }
-        // Find the parent of the parity file.
-        Path parent = new Path(p).getParent();
-        // If the file was a HAR part file, the parent will end with _raid.har. In
-        // that case, the parity directory is the parent of the parent.
-        if (parent.toUri().getPath().endsWith(RaidNode.HAR_SUFFIX)) {
-          parent = parent.getParent();
-        }
-        String parentUriPath = parent.toUri().getPath();
-        // Remove the RAID prefix to get the source dir.
-        srcDirsToWatchOutFor.add(
-            parentUriPath.substring(parentUriPath.indexOf(Path.SEPARATOR, 1)));
-        int numCorrupt = corruptFiles.get(p);
-        Priority priority = (numCorrupt > 1) ? Priority.HIGH : Priority.LOW;
-        LostFileInfo fileInfo = fileIndex.get(p);
-        if (fileInfo == null || priority.higherThan(fileInfo.getHighestPriority())) {
-          fileToPriority.put(p, priority);
+    
+    public void addToScanSet(String p, int numCorrupt, String monitorDir,
+        ConcurrentHashMap<String, CorruptFile> newScanSet, FileSystem fs,
+        long detectTime)
+            throws IOException {
+      CorruptFile cf = new CorruptFile(p, numCorrupt, detectTime);
+      MonitorSet monitorSet = monitorSets.get(monitorDir);
+      CorruptFile oldCf = monitorSet.toScanFiles.get(p);
+      FileCheckRunnable fcr = new FileCheckRunnable(cf, monitorSet, fs,
+          detectTime, this);
+      if (oldCf == null) {
+        newScanSet.put(p, cf);
+        monitorSet.toScanFiles.put(p,  cf);
+        // Check the file
+        cf.lastSubmitTime = System.currentTimeMillis();
+        monitorSet.executor.submit(fcr);
+      } else {
+        if (oldCf.numCorrupt == numCorrupt) {
+          newScanSet.put(p, oldCf);
+          if (System.currentTimeMillis() - oldCf.lastSubmitTime >
+              this.blockFixScanSubmissionInterval) {
+            // if a block hasn't been checked for a while, check it again.
+            oldCf.lastSubmitTime = System.currentTimeMillis();
+            monitorSet.executor.submit(fcr);
+          }
+        } else {
+          cf.detectTime = oldCf.detectTime;
+          newScanSet.put(p, cf);
+          cf.lastSubmitTime = System.currentTimeMillis();
+          monitorSet.executor.submit(fcr);  
         }
       }
-      // Loop over src files now.
-      for (Iterator<String> it = corruptFiles.keySet().iterator(); it.hasNext(); ) {
-        String p = it.next();
-        if (BlockIntegrityMonitor.isSourceFile(p, parityDestPrefixes)) {
-          FileStatus stat = fs.getFileStatus(new Path(p));
-          if (stat.getReplication() >= notRaidedReplication) {
-            continue;
+    }
+    
+    // Return used time 
+    public long addToJobFilesMap(
+        HashMap<Priority, HashSet<String>> jobFilesMap,
+        Priority priority, String path, long detectTime)
+            throws IOException, InterruptedException, ClassNotFoundException {
+      long startTime = System.currentTimeMillis();
+      HashSet<String> jobFiles = jobFilesMap.get(priority);
+      boolean succeed = false;
+      synchronized(jobFiles) {
+        if (!jobFiles.add(path)) {
+          return System.currentTimeMillis() - startTime;
+        }
+        totalFilesToSubmit.incrementAndGet();
+        // Check if we have hit the threshold for number of files in a job.
+      
+        AtomicLong lastCheckingTime = lastCheckingTimes.get(priority);
+        if (jobFiles.size() >= filesPerTask * TASKS_PER_JOB) {
+          succeed = startOneJob(priority, jobFiles, detectTime, numFilesSubmitted,
+              lastCheckingTime); 
+          if (!succeed) {
+            this.numFilesDropped.addAndGet(jobFiles.size());
           }
-          if (BlockIntegrityMonitor.doesParityDirExist(fs, p, parityDestPrefixes)) {
-            int numCorrupt = corruptFiles.get(p);
-            Priority priority = Priority.LOW;
-            if (stat.getReplication() > 1) {
-              // If we have a missing block when replication > 1, it is high pri.
-              priority = Priority.HIGH;
-            } else {
-              // Replication == 1. Assume Reed Solomon parity exists.
-              // If we have more than one missing block when replication == 1, then
-              // high pri.
-              priority = (numCorrupt > 1) ? Priority.HIGH : Priority.LOW;
+        } else {
+          // Not submit a job for a long time
+          if (System.currentTimeMillis() - lastCheckingTime.get()
+              > this.blockFixSubmissionInterval && jobFiles.size() > 0) {
+            succeed = startOneJob(priority, jobFiles, detectTime, numFilesSubmitted,
+                lastCheckingTime);
+            if (!succeed) {
+              this.numFilesDropped.set(jobFiles.size());
             }
-            // If priority is low, check if the scan of corrupt parity files found
-            // the src dir to be risky.
-            if (priority == Priority.LOW) {
-              Path parent = new Path(p).getParent();
-              String parentUriPath = parent.toUri().getPath();
-              if (srcDirsToWatchOutFor.contains(parentUriPath)) {
+          }
+        }
+      }
+      return System.currentTimeMillis() - startTime;
+    }
+    
+    @Override
+    public void shutdown() {
+      for (MonitorSet ms : monitorSets.values()) {
+        ms.executor.shutdownNow();
+      }
+    }
+    
+    public Map<String, Map<CorruptFileStatus, Long>> getCounterMap() {
+      TreeMap<String, Map<CorruptFileStatus, Long>> results = 
+          new TreeMap<String, Map<CorruptFileStatus, Long>>();
+      for (String monitorDir: monitorSets.keySet()) {
+        MonitorSet ms = monitorSets.get(monitorDir);
+        HashMap<CorruptFileStatus, Long> counters =
+            new HashMap<CorruptFileStatus, Long>();
+        for (CorruptFileStatus cfs: CorruptFileStatus.values()) {
+          counters.put(cfs, 0L);
+        }
+        for (CorruptFile cf: ms.toScanFiles.values()) {
+          Long counter = counters.get(cf.fileStatus);
+          if (counter == null) {
+            counter = 0L;
+          }
+          counters.put(cf.fileStatus, counter + 1);
+        }
+        results.put(monitorDir, counters);
+      }
+      return results;
+    }
+    
+    public ArrayList<CorruptFile> getCorruptFileList(String monitorDir, 
+        CorruptFileStatus cfs) { 
+      ArrayList<CorruptFile> corruptFiles = new ArrayList<CorruptFile>();
+      MonitorSet ms = monitorSets.get(monitorDir);
+      if (ms == null) {
+        return corruptFiles;
+      }
+      for (CorruptFile cf: ms.toScanFiles.values()) {
+        if (cf.fileStatus == cfs) {
+          corruptFiles.add(cf);
+        }
+      }
+      return corruptFiles;
+    }
+    
+    public Map<String, Map<CorruptFileStatus, Long>> getCorruptFilesCounterMap() {
+      return this.getCounterMap();
+    }
+    
+    public class FileCheckRunnable implements Runnable {
+      CorruptFile corruptFile;
+      MonitorSet monitorSet;
+      FileSystem fs;
+      CorruptionWorker worker;
+      long detectTime;
+      
+      public FileCheckRunnable(CorruptFile newCorruptFile,
+          MonitorSet newMonitorSet,
+          FileSystem newFs, long newDetectTime, CorruptionWorker newWorker) {
+        corruptFile = newCorruptFile;
+        monitorSet = newMonitorSet;
+        fs = newFs;
+        detectTime = newDetectTime;
+        worker = newWorker;
+      }
+      
+      public void run() {
+        long startTime = System.currentTimeMillis();
+        try {
+          if (corruptFile.numCorrupt <=0) {
+            // Not corrupt
+            return;
+          }
+          ConcurrentHashMap<String, CorruptFile> toScanFiles = 
+              monitorSet.toScanFiles;
+          // toScanFiles could be switched before the task get executed
+          CorruptFile cf = toScanFiles.get(corruptFile.path);
+          if (cf == null || cf.numCorrupt != corruptFile.numCorrupt) {
+            // Not exist or doesn't match
+            return;
+          }
+          FileStatus stat = null;
+          try {
+            stat = fs.getFileStatus(new Path(corruptFile.path));
+          } catch (FileNotFoundException fnfe) {
+            cf.fileStatus = CorruptFileStatus.NOT_EXIST;
+            return;
+          }
+          Codec codec = BlockIntegrityMonitor.isParityFile(corruptFile.path);
+          long addJobTime = 0;
+          if (codec == null) {
+            if (stat.getReplication() >= notRaidedReplication) {
+              cf.fileStatus = CorruptFileStatus.NOT_RAIDED_UNRECOVERABLE;
+              return;
+            }
+            if (BlockIntegrityMonitor.doesParityDirExist(fs, corruptFile.path)) {
+              Priority priority = Priority.LOW;
+              if (stat.getReplication() > 1) {
+                // If we have a missing block when replication > 1, it is high pri.
                 priority = Priority.HIGH;
+              } else {
+                // Replication == 1. Assume Reed Solomon parity exists.
+                // If we have more than one missing block when replication == 1, then
+                // high pri.
+                priority = (corruptFile.numCorrupt > 1) ? Priority.HIGH : Priority.LOW;
+              }
+              LostFileInfo fileInfo = fileIndex.get(corruptFile.path);
+              if (fileInfo == null || priority.higherThan(
+                  fileInfo.getHighestPriority())) {
+                addJobTime = addToJobFilesMap(jobFilesMap, priority,
+                    corruptFile.path, detectTime);
               }
             }
-            LostFileInfo fileInfo = fileIndex.get(p);
-            if (fileInfo == null || priority.higherThan(fileInfo.getHighestPriority())) {
-              fileToPriority.put(p, priority);
+          } else {
+            // Dikang: for parity files, we use the total numbers for now.
+            Priority priority = (corruptFile.numCorrupt > 1) ?
+                Priority.HIGH : (codec.parityLength == 1)? Priority.HIGH: Priority.LOW;
+            LostFileInfo fileInfo = fileIndex.get(corruptFile.path);
+            if (fileInfo == null || priority.higherThan(
+                fileInfo.getHighestPriority())) {
+              addJobTime = addToJobFilesMap(jobFilesMap, priority, corruptFile.path,
+                  detectTime);
             }
+          }
+          boolean isFileCorrupt = RaidShell.isFileCorrupt((DistributedFileSystem)fs,
+              stat, false, getConf(), null, null);
+          if (isFileCorrupt) {
+            cf.fileStatus = CorruptFileStatus.RAID_UNRECOVERABLE;
+          } else {
+            cf.fileStatus = CorruptFileStatus.RECOVERABLE;
+          }
+          long elapseTime = System.currentTimeMillis() - startTime - addJobTime;
+          worker.putDetectionTime(elapseTime);
+        } catch (Exception e) {
+          LOG.error("Get Exception ", e);
+        }
+      }
+    }
+
+    @Override
+    // Compute integer priority and start jobs. Urgency is indicated by higher numbers.
+    void computePrioritiesAndStartJobs(
+        FileSystem fs, Map<String, Integer> corruptFiles, long detectTime)
+            throws IOException, InterruptedException, ClassNotFoundException {
+
+      HashMap<String, ConcurrentHashMap<String, CorruptFile>>
+          newToScanSet = new HashMap<String, ConcurrentHashMap<String,
+          CorruptFile>>();
+      // Include "others"
+      for (String monitorDir: this.monitorSets.keySet()) {
+        newToScanSet.put(monitorDir, new ConcurrentHashMap<String,
+            CorruptFile>());
+      }
+      numFilesSubmitted.set(0);
+      totalFilesToSubmit.set(0);
+      for (Iterator<String> it = corruptFiles.keySet().iterator(); it.hasNext(); ) {
+        String p = it.next();
+        int numCorrupt = corruptFiles.get(p);
+        // Filter through monitor dirs
+        boolean match = false;
+        for (String monitorDir: this.corruptMonitorDirs) {
+          if (p.startsWith(monitorDir)) {
+            match = true;
+            addToScanSet(p, numCorrupt, monitorDir, newToScanSet.get(monitorDir),
+                fs, detectTime);
+          }
+        }
+        if (match == false) {
+          addToScanSet(p, numCorrupt, OTHERS, newToScanSet.get(OTHERS), fs,
+              detectTime);
+        }
+      }
+      // switch to new toScanSet
+      for (String monitorDir : this.monitorSets.keySet()) {
+        MonitorSet ms = this.monitorSets.get(monitorDir);
+        ms.toScanFiles = newToScanSet.get(monitorDir);
+      }
+      for (Priority pri : Priority.values()) {
+        HashSet<String> jobFiles = jobFilesMap.get(pri);
+        if (System.currentTimeMillis() - lastCheckingTimes.get(pri).get()
+            > this.blockFixSubmissionInterval && jobFiles.size() > 0) {
+          boolean succeed = startOneJob(pri, jobFiles, detectTime,
+             numFilesSubmitted, lastCheckingTimes.get(pri));
+          if (!succeed) {
+            this.numFilesDropped.set(jobFiles.size()); 
+            return;
           }
         }
       }
-      return fileToPriority;
     }
-    
+
     @Override
     protected void updateRaidNodeMetrics() {
-      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).corruptFilesHighPri.set(lastStatus.highPriorityFiles);
-      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).corruptFilesLowPri.set(lastStatus.lowPriorityFiles);
-      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).numFilesToFix.set(this.fileIndex.size());
+      RaidNodeMetrics rnm = RaidNodeMetrics.getInstance(
+          RaidNodeMetrics.DEFAULT_NAMESPACE_ID); 
+      
+      rnm.corruptFilesHighPri.set(lastStatus.highPriorityFiles);
+      rnm.corruptFilesLowPri.set(lastStatus.lowPriorityFiles);
+      rnm.numFilesToFix.set(this.fileIndex.size());
+      rnm.numFilesToFixDropped.set(this.numFilesDropped.get());
       
       // Flush statistics out to the RaidNode
-      incrFilesFixed(this.recentNumFilesSucceeded);
-      incrFileFixFailures(this.recentNumFilesFailed);
-      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).blockFixSlotSeconds.inc(this.recentSlotSeconds);
-      this.recentNumFilesSucceeded = 0;
-      this.recentNumFilesFailed = 0;
-      this.recentSlotSeconds = 0;
+      incrFilesFixed(this.recentNumFilesSucceeded.get());
+      incrFileFixFailures(this.recentNumFilesFailed.get());
+      incrNumBlockFixSimulationFailures(this.recentNumBlockFixSimulationFailed.get());
+      incrNumBlockFixSimulationSuccess(this.recentNumBlockFixSimulationSucceeded.get());
+      incrFileFixReadBytesRemoteRack(this.recentNumReadBytesRemoteRack.get());
+      LogUtils.incrLogMetrics(this.recentLogMetrics);
+
+      rnm.blockFixSlotSeconds.inc(this.recentSlotSeconds.get());
+      this.recentNumFilesSucceeded.set(0);
+      this.recentNumFilesFailed.set(0);
+      this.recentSlotSeconds.set(0);
+      this.recentNumBlockFixSimulationFailed.set(0);
+      this.recentNumBlockFixSimulationSucceeded.set(0);
+      this.recentNumReadBytesRemoteRack.set(0);
+      this.recentLogMetrics.clear();
+      
+      Map<String, Map<CorruptFileStatus, Long>> corruptFilesCounterMap = 
+          this.getCounterMap();
+      if (rnm.corruptFiles == null) {
+        return;
+      }
+      for (String dir: this.corruptMonitorDirs) {
+        if (corruptFilesCounterMap.containsKey(dir) &&
+            rnm.corruptFiles.containsKey(dir)) {
+          Map<CorruptFileStatus, Long> maps = corruptFilesCounterMap.get(dir);
+          Long raidUnrecoverable = maps.get(CorruptFileStatus.RAID_UNRECOVERABLE);
+          Long notRaidUnrecoverable = maps.get(
+              CorruptFileStatus.NOT_RAIDED_UNRECOVERABLE);
+          if (raidUnrecoverable == null) {
+            raidUnrecoverable = 0L;
+          }
+          if (notRaidUnrecoverable == null) {
+            notRaidUnrecoverable = 0L;
+          }
+          rnm.corruptFiles.get(dir).set(raidUnrecoverable + notRaidUnrecoverable);
+        } else {
+          rnm.corruptFiles.get(dir).set(-1L);
+        }
+      }
     }
-    
   }
-  
+
   public class DecommissioningWorker extends Worker {
 
     DecommissioningWorker() {
       super(LogFactory.getLog(DecommissioningWorker.class), 
-            BlockReconstructor.DecommissioningBlockReconstructor.class, 
-            "blockcopier");
+          BlockReconstructor.DecommissioningBlockReconstructor.class, 
+          "blockcopier");
     }
-    
+
 
     /**
      * gets a list of decommissioning files from the namenode
      * and filters out files that are currently being regenerated or
      * that were recently regenerated
      */
+    @Override
     protected Map<String, Integer> getLostFiles() throws IOException {
       return DistBlockIntegrityMonitor.this.getLostFiles(LIST_DECOMMISSION_FILE_PATTERN,
-                              new String[]{"-list-corruptfileblocks",
-                                "-list-decommissioningblocks",
-                                "-limit",
-                                new Integer(lostFilesLimit).toString()});
+          new String[]{"-list-corruptfileblocks",
+          "-list-decommissioningblocks",
+          "-limit",
+          new Integer(lostFilesLimit).toString()});
     }
 
-    Map<String, Priority> computePriorities(
-        FileSystem fs, Map<String, Integer> decommissioningFiles)
-        throws IOException {
+    @Override
+    void computePrioritiesAndStartJobs(
+        FileSystem fs, Map<String, Integer> decommissioningFiles, long detectTime)
+            throws IOException, InterruptedException, ClassNotFoundException {
 
       Map<String, Priority> fileToPriority =
           new HashMap<String, Priority>(decommissioningFiles.size());
 
       for (String file : decommissioningFiles.keySet()) {
-        
+
         // Replication == 1. Assume Reed Solomon parity exists.
         // Files with more than 4 blocks being decommissioned get a bump.
         // Otherwise, copying jobs have the lowest priority. 
-        Priority priority = ((decommissioningFiles.get(file) > RaidNode.rsParityLength(getConf())) ? 
-                                  Priority.LOW : Priority.LOWEST);
-        
+        Priority priority = ((decommissioningFiles.get(file)
+            > Codec.getCodec("rs").parityLength) ? 
+            Priority.LOW : Priority.LOWEST);
+
         LostFileInfo fileInfo = fileIndex.get(file);
         if (fileInfo == null || priority.higherThan(fileInfo.getHighestPriority())) {
           fileToPriority.put(file, priority);
         }
       }
-      return fileToPriority;
+      LOG.info("Found " + fileToPriority.size() + " new lost files");
+
+      startJobs(fileToPriority, detectTime);
     }
 
     @Override
@@ -947,15 +1632,22 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).decomFilesLowPri.set(lastStatus.highPriorityFiles);
       RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).decomFilesLowestPri.set(lastStatus.lowPriorityFiles);
       RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).numFilesToCopy.set(fileIndex.size());
+
+      incrFilesCopied(recentNumFilesSucceeded.get());
+      incrFileCopyFailures(recentNumFilesFailed.get());
+      incrNumBlockFixSimulationFailures(this.recentNumBlockFixSimulationFailed.get());
+      incrNumBlockFixSimulationSuccess(this.recentNumBlockFixSimulationSucceeded.get());
+      LogUtils.incrLogMetrics(this.recentLogMetrics);
       
-      incrFilesCopied(recentNumFilesSucceeded);
-      incrFileCopyFailures(recentNumFilesFailed);
-      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).blockCopySlotSeconds.inc(recentSlotSeconds);
-      
+      RaidNodeMetrics.getInstance(RaidNodeMetrics.DEFAULT_NAMESPACE_ID).blockCopySlotSeconds.inc(recentSlotSeconds.get());
+
       // Reset temporary values now that they've been flushed
-      recentNumFilesSucceeded = 0;
-      recentNumFilesFailed = 0;
-      recentSlotSeconds = 0;
+      recentNumFilesSucceeded.set(0);
+      recentNumFilesFailed.set(0);
+      recentSlotSeconds.set(0);
+      recentNumBlockFixSimulationFailed.set(0);
+      recentNumBlockFixSimulationSucceeded.set(0);
+      recentLogMetrics.clear();
     }
 
   }
@@ -981,17 +1673,18 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       if (!m.find()) {
         continue;
       }
+      
       String fileName = m.group(1).trim();
       Integer numLost = lostFiles.get(fileName);
       numLost = numLost == null ? 0 : numLost;
       numLost += 1;
       lostFiles.put(fileName, numLost);
-    }
+    } 
     LOG.info("FSCK returned " + lostFiles.size() + " files with args " +
-      Arrays.toString(dfsckArgs));
+        Arrays.toString(dfsckArgs));
     RaidUtils.filterTrash(getConf(), lostFiles.keySet().iterator());
     LOG.info("getLostFiles returning " + lostFiles.size() + " files with args " +
-      Arrays.toString(dfsckArgs));
+        Arrays.toString(dfsckArgs));
     return lostFiles;
   }
 
@@ -1009,23 +1702,23 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     ByteArrayInputStream bin = new ByteArrayInputStream(bout.toByteArray());
     return new BufferedReader(new InputStreamReader(bin));
   }
-  
+
   public void configureJob(Job job, 
-        Class<? extends BlockReconstructor> reconstructorClass) {
-    
+      Class<? extends BlockReconstructor> reconstructorClass) {
+
     ((JobConf)job.getConfiguration()).setUser(RaidNode.JOBUSER);
     ((JobConf)job.getConfiguration()).setClass(
         ReconstructionMapper.RECONSTRUCTOR_CLASS_TAG, 
         reconstructorClass,
         BlockReconstructor.class);
   }
-  
+
   void submitJob(Job job, List<String> filesInJob, Priority priority, 
-                 Map<Job, List<LostFileInfo>> jobIndex)
-  throws IOException, InterruptedException, ClassNotFoundException {
+      Map<Job, List<LostFileInfo>> jobIndex)
+          throws IOException, InterruptedException, ClassNotFoundException {
     job.submit();
     LOG.info("Job " + job.getID() + "(" + job.getJobName() +
-    ") started");
+        ") started");
     jobIndex.put(job, null);
   }
 
@@ -1033,16 +1726,16 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
    * returns the number of map reduce jobs running
    */
   public int jobsRunning() {
-    return (corruptionWorker.numJobsRunning 
-        + decommissioningWorker.numJobsRunning);
+    return (corruptionWorker.numJobsRunning.get() 
+        + decommissioningWorker.numJobsRunning.get());
   }
 
   static class ReconstructionInputFormat
-    extends SequenceFileInputFormat<LongWritable, Text> {
+  extends SequenceFileInputFormat<LongWritable, Text> {
 
     protected static final Log LOG = 
-      LogFactory.getLog(ReconstructionMapper.class);
-    
+        LogFactory.getLog(ReconstructionMapper.class);
+
     /**
      * splits the input files into tasks handled by a single node
      * we have to read the input files to do this based on a number of 
@@ -1050,7 +1743,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
      */
     @Override
     public List <InputSplit> getSplits(JobContext job) 
-      throws IOException {
+        throws IOException {
       long filesPerTask = DistBlockIntegrityMonitor.getFilesPerTask(job.getConfiguration());
 
       Path[] inPaths = getInputPaths(job);
@@ -1060,7 +1753,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       long fileCounter = 0;
 
       for (Path inPath: inPaths) {
-        
+
         FileSystem fs = inPath.getFileSystem(job.getConfiguration());      
 
         if (!fs.getFileStatus(inPath).isDir()) {
@@ -1071,17 +1764,17 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
 
         for (FileStatus inFileStatus: inFiles) {
           Path inFile = inFileStatus.getPath();
-          
+
           if (!inFileStatus.isDir() &&
               (inFile.getName().equals(job.getJobName() + IN_FILE_SUFFIX))) {
 
             fileCounter++;
             SequenceFile.Reader inFileReader = 
-              new SequenceFile.Reader(fs, inFile, job.getConfiguration());
-            
+                new SequenceFile.Reader(fs, inFile, job.getConfiguration());
+
             long startPos = inFileReader.getPosition();
             long counter = 0;
-            
+
             // create an input split every filesPerTask items in the sequence
             LongWritable key = new LongWritable();
             Text value = new Text();
@@ -1089,20 +1782,20 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
               while (inFileReader.next(key, value)) {
                 if (counter % filesPerTask == filesPerTask - 1L) {
                   splits.add(new FileSplit(inFile, startPos, 
-                                           inFileReader.getPosition() - 
-                                           startPos,
-                                           null));
+                      inFileReader.getPosition() - 
+                      startPos,
+                      null));
                   startPos = inFileReader.getPosition();
                 }
                 counter++;
               }
-              
+
               // create input split for remaining items if necessary
               // this includes the case where no splits were created by the loop
               if (startPos != inFileReader.getPosition()) {
                 splits.add(new FileSplit(inFile, startPos,
-                                         inFileReader.getPosition() - startPos,
-                                         null));
+                    inFileReader.getPosition() - startPos,
+                    null));
               }
             } finally {
               inFileReader.close();
@@ -1112,8 +1805,8 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       }
 
       LOG.info("created " + splits.size() + " input splits from " +
-               fileCounter + " files");
-      
+          fileCounter + " files");
+
       return splits;
     }
 
@@ -1130,27 +1823,44 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
    * Mapper for reconstructing stripes with lost blocks
    */
   static class ReconstructionMapper
-    extends Mapper<LongWritable, Text, Text, Text> {
+  extends Mapper<LongWritable, Text, Text, Text> {
 
     protected static final Log LOG = 
-      LogFactory.getLog(ReconstructionMapper.class);
-    
-    public static final String RECONSTRUCTOR_CLASS_TAG =
-      "hdfs.blockintegrity.reconstructor";
-    
-    private BlockReconstructor reconstructor;
+        LogFactory.getLog(ReconstructionMapper.class);
 
-    
+    public static final String RECONSTRUCTOR_CLASS_TAG =
+        "hdfs.blockintegrity.reconstructor";
+
+    private BlockReconstructor reconstructor;
+    public RaidProtocol raidnode;
+    private UnixUserGroupInformation ugi;
+    RaidProtocol rpcRaidnode;
+    private long detectTimeInput;
+
+    void initializeRpc(Configuration conf, InetSocketAddress address) throws IOException {
+      try {
+        this.ugi = UnixUserGroupInformation.login(conf, true);
+      } catch (LoginException e) {
+        throw (IOException)(new IOException().initCause(e));
+      }
+
+      this.rpcRaidnode = RaidShell.createRPCRaidnode(address, conf, ugi);
+      this.raidnode = RaidShell.createRaidnode(rpcRaidnode);
+    }
+
     @Override
     protected void setup(Context context) 
         throws IOException, InterruptedException {
-      
+
       super.setup(context);
-      
+
       Configuration conf = context.getConfiguration();
-      
+
+      Codec.initializeCodecs(conf);
+      initializeRpc(conf, RaidNode.getAddress(conf));
+
       Class<? extends BlockReconstructor> reconstructorClass = 
-        context.getConfiguration().getClass(RECONSTRUCTOR_CLASS_TAG, 
+          context.getConfiguration().getClass(RECONSTRUCTOR_CLASS_TAG, 
                                             null, 
                                             BlockReconstructor.class);
       
@@ -1171,7 +1881,15 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
       } catch (Exception ex) {
         throw new IOException("Could not instantiate a block reconstructor " +
                           "based on class " + reconstructorClass, ex);
-      }  
+      }
+      
+      detectTimeInput = Long.parseLong(conf.get("corrupt_detect_time"));
+    }
+    
+    @Override
+    protected void cleanup(Context context) throws IOException,
+        InterruptedException {
+      RPC.stopProxy(rpcRaidnode);
     }
 
     /**
@@ -1183,27 +1901,49 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
 
       String fileStr = fileText.toString();
       LOG.info("reconstructing " + fileStr);
-
       Path file = new Path(fileStr);
+      long waitTime = System.currentTimeMillis() - detectTimeInput;
+      FileSystem fs = file.getFileSystem(context.getConfiguration());
+      LogUtils.logWaitTimeMetrics(waitTime, getMaxPendingJobs(
+          context.getConfiguration()), 
+          getFilesPerTask(context.getConfiguration()),
+          LOGTYPES.FILE_FIX_WAITTIME,
+          fs,
+          context);
+      long recoveryTime = -1;
 
       try {
         boolean reconstructed = reconstructor.reconstructFile(file, context);
-
         if (reconstructed) {
-          context.getCounter(Counter.FILES_SUCCEEDED).increment(1L);
+          context.getCounter(RaidCounter.FILES_SUCCEEDED).increment(1L);
+          LogUtils.logRaidReconstructionMetrics(LOGRESULTS.SUCCESS, 0, null,
+              file, -1, LOGTYPES.OFFLINE_RECONSTRUCTION_FILE, 
+              fs, null, context);
+          recoveryTime = System.currentTimeMillis() - detectTimeInput; 
         } else {
-          context.getCounter(Counter.FILES_NOACTION).increment(1L);
+          context.getCounter(RaidCounter.FILES_NOACTION).increment(1L);
         }
-      } catch (Exception e) {
+      } catch (Throwable e) {
         LOG.error("Reconstructing file " + file + " failed", e);
-
+        LogUtils.logRaidReconstructionMetrics(LOGRESULTS.FAILURE, 0, null,
+            file, -1, LOGTYPES.OFFLINE_RECONSTRUCTION_FILE, 
+            fs, e, context);
+        recoveryTime = Integer.MAX_VALUE;
         // report file as failed
-        context.getCounter(Counter.FILES_FAILED).increment(1L);
-        String outkey = fileStr;
-        String outval = "failed";
+        context.getCounter(RaidCounter.FILES_FAILED).increment(1L);
+        String outkey = DistBlockIntegrityMonitor.FAILED_FILE + "," + fileStr;
+        String outval = context.getConfiguration().get("mapred.task.id");
         context.write(new Text(outkey), new Text(outval));
+      } finally {
+        if (recoveryTime > 0) {
+          // Send recoveryTime to raidnode
+          try {
+            raidnode.sendRecoveryTime(fileStr, recoveryTime);
+          } catch (Exception e) {
+            LOG.error("Failed to send recovery time ", e);
+          }
+        }
       }
-
       context.progress();
     }
   }
@@ -1221,12 +1961,16 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     Status copier = decommissioningWorker.getStatus();
 
     List<JobStatus> jobs = new ArrayList<JobStatus>();
+    List<JobStatus> simFailedJobs = new ArrayList<JobStatus>();
+    List<JobStatus> failedJobs = new ArrayList<JobStatus>();
     List<String> highPriFileNames = new ArrayList<String>();
     int numHighPriFiles = 0;
     int numLowPriFiles = 0;
     int numLowestPriFiles = 0;
     if (fixer != null) {
       jobs.addAll(fixer.jobs);
+      simFailedJobs.addAll(fixer.simFailJobs);
+      failedJobs.addAll(fixer.failJobs);
       if (fixer.highPriorityFileNames != null) {
         highPriFileNames.addAll(fixer.highPriorityFileNames);
       }
@@ -1236,6 +1980,8 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     }
     if (copier != null) {
       jobs.addAll(copier.jobs);
+      simFailedJobs.addAll(copier.simFailJobs);
+      failedJobs.addAll(copier.failJobs);
       if (copier.highPriorityFileNames != null) {
         highPriFileNames.addAll(copier.highPriorityFileNames);
       }
@@ -1245,7 +1991,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
     }
 
     return new Status(numHighPriFiles, numLowPriFiles, numLowestPriFiles,
-                      jobs, highPriFileNames);
+                      jobs, highPriFileNames,failedJobs, simFailedJobs);
   }
   
   public Worker getCorruptionMonitor() {
@@ -1256,7 +2002,7 @@ public class DistBlockIntegrityMonitor extends BlockIntegrityMonitor {
   public Worker getDecommissioningMonitor() {
     return this.decommissioningWorker;
   }
-
+  
   @Override
   public Runnable getCorruptFileCounter() {
     return this.corruptFileCounterWorker;

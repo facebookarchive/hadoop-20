@@ -21,11 +21,22 @@ import org.apache.commons.logging.*;
 
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hdfs.DFSUtil;
+import org.apache.hadoop.hdfs.server.namenode.JournalStream.JournalType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.StorageLocationType;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLogManifest;
 import org.apache.hadoop.hdfs.server.common.HdfsConstants;
 import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageDirectory;
+import org.apache.hadoop.hdfs.server.common.Storage.StorageState;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.conf.*;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Daemon;
 import org.apache.hadoop.http.HttpServer;
@@ -69,40 +80,10 @@ public class SecondaryNameNode implements Runnable {
   private int infoPort;
   private String infoBindAddress;
 
-  private Collection<File> checkpointDirs;
-  private Collection<File> checkpointEditsDirs;
+  private Collection<URI> checkpointDirs;
+  private Collection<URI> checkpointEditsDirs;
   private long checkpointPeriod;	// in seconds
-  private long checkpointSize;    // size (in MB) of current Edit Log
-
-  /**
-   * Utility class to facilitate junit test error simulation.
-   */
-  static class ErrorSimulator {
-    private static boolean[] simulation = null; // error simulation events
-    static void initializeErrorSimulationEvent(int numberOfEvents) {
-      simulation = new boolean[numberOfEvents]; 
-      for (int i = 0; i < numberOfEvents; i++) {
-        simulation[i] = false;
-      }
-    }
-    
-    static boolean getErrorSimulation(int index) {
-      if(simulation == null)
-        return false;
-      assert(index < simulation.length);
-      return simulation[index];
-    }
-    
-    static void setErrorSimulation(int index) {
-      assert(index < simulation.length);
-      simulation[index] = true;
-    }
-    
-    static void clearErrorSimulation(int index) {
-      assert(index < simulation.length);
-      simulation[index] = false;
-    }
-  }
+  private long checkpointTxnCount;
 
   FSImage getFSImage() {
     return checkpointImage;
@@ -120,6 +101,16 @@ public class SecondaryNameNode implements Runnable {
     }
   }
 
+  private Collection<URI> getFileStorageDirs(Collection<URI> uris) {
+    ArrayList<URI> directories = new ArrayList<URI>();
+    for (URI uri : uris) {
+      if (uri.getScheme().compareTo(JournalType.FILE.name().toLowerCase()) == 0) {
+        directories.add(uri);
+      }
+    }
+    return directories;
+  }
+  
   /**
    * Initialize SecondaryNameNode.
    */
@@ -135,19 +126,20 @@ public class SecondaryNameNode implements Runnable {
     this.namenode =
         (NamenodeProtocol) RPC.waitForProxy(NamenodeProtocol.class,
             NamenodeProtocol.versionID, nameNodeAddr, conf);
+    this.namenode.register();
 
     // initialize checkpoint directories
     fsName = getInfoServer();
-    checkpointDirs = FSImage.getCheckpointDirs(conf,
-                                  "/tmp/hadoop/dfs/namesecondary");
-    checkpointEditsDirs = FSImage.getCheckpointEditsDirs(conf, 
-                                  "/tmp/hadoop/dfs/namesecondary");    
+    checkpointDirs = getFileStorageDirs(NNStorageConfiguration
+        .getCheckpointDirs(conf, "/tmp/hadoop/dfs/namesecondary"));
+    checkpointEditsDirs = getFileStorageDirs(NNStorageConfiguration
+        .getCheckpointEditsDirs(conf, "/tmp/hadoop/dfs/namesecondary")); 
     checkpointImage = new CheckpointStorage(conf);
     checkpointImage.recoverCreate(checkpointDirs, checkpointEditsDirs);
 
     // Initialize other scheduling parameters from the configuration
     checkpointPeriod = conf.getLong("fs.checkpoint.period", 3600);
-    checkpointSize = conf.getLong("fs.checkpoint.size", 4194304);
+    checkpointTxnCount = NNStorageConfiguration.getCheckpointTxnCount(conf);
 
     // initialize the webserver for uploading files.
     String infoAddr = 
@@ -171,8 +163,7 @@ public class SecondaryNameNode implements Runnable {
     LOG.info("Secondary Web-server up at: " + infoBindAddress + ":" +infoPort);
     LOG.warn("Checkpoint Period   :" + checkpointPeriod + " secs " +
              "(" + checkpointPeriod/60 + " min)");
-    LOG.warn("Log Size Trigger    :" + checkpointSize + " bytes " +
-             "(" + checkpointSize/1024 + " KB)");
+    LOG.warn("Log Size Trigger    :" + checkpointTxnCount  + " transactions ");
   }
 
   /**
@@ -220,8 +211,7 @@ public class SecondaryNameNode implements Runnable {
       try {
         long now = System.currentTimeMillis();
 
-        long size = namenode.getEditLogSize();
-        if (size >= checkpointSize || 
+        if (shouldCheckpointBasedOnCount() || 
             now >= lastCheckpointTime + 1000 * checkpointPeriod) {
           doCheckpoint();
           lastCheckpointTime = now;
@@ -230,7 +220,6 @@ public class SecondaryNameNode implements Runnable {
         LOG.error("Exception in doCheckpoint: ");
         LOG.error(StringUtils.stringifyException(e));
         e.printStackTrace();
-        checkpointImage.imageDigest = null;
       } catch (Throwable e) {
         LOG.error("Throwable Exception in doCheckpoint: ");
         LOG.error(StringUtils.stringifyException(e));
@@ -246,51 +235,51 @@ public class SecondaryNameNode implements Runnable {
    * @return true if a new image has been downloaded and needs to be loaded
    * @throws IOException
    */
-  private boolean downloadCheckpointFiles(CheckpointSignature sig
-                                      ) throws IOException {
-    
-    checkpointImage.cTime = sig.cTime;
-    checkpointImage.checkpointTime = sig.checkpointTime;
-    
+  static boolean downloadCheckpointFiles(final String nnHostPort,
+      final FSImage dstImage, final CheckpointSignature sig,
+      final RemoteEditLogManifest manifest) throws IOException {
+
+    // Sanity check manifest - these could happen if, eg, someone on the
+    // NN side accidentally rmed the storage directories
+    if (manifest.getLogs().isEmpty()) {
+      throw new IOException("Found no edit logs to download on NN since txid "
+          + sig.mostRecentCheckpointTxId);
+    }
+
+    long expectedTxId = sig.mostRecentCheckpointTxId + 1;
+    if (manifest.getLogs().get(0).getStartTxId() != expectedTxId) {
+      throw new IOException("Bad edit log manifest (expected txid = "
+          + expectedTxId + ": " + manifest);
+    }
+
+    dstImage.storage.cTime = sig.cTime;
+
+    // get fsimage
     boolean downloadImage = true;
-    String fileid;
-    File[] srcNames;
-    if (sig.imageDigest.equals(checkpointImage.imageDigest)) {
+    if (sig.mostRecentCheckpointTxId == dstImage.storage
+        .getMostRecentCheckpointTxId() &&
+        sig.mostRecentCheckpointTxId != -1) {
       downloadImage = false;
       LOG.info("Image has not changed. Will not download image.");
     } else {
-      // get fsimage
-      srcNames = checkpointImage.getImageFiles();
-      assert srcNames.length > 0 : "No checkpoint targets.";
-      fileid = "getimage=1";
-      TransferFsImage.getFileClient(fsName, fileid, srcNames, false);
-      checkpointImage.imageDigest = sig.imageDigest;
-      LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
-          srcNames[0].length() + " bytes.");
+      MD5Hash downloadedHash = TransferFsImage
+          .downloadImageToStorage(nnHostPort, sig.mostRecentCheckpointTxId,
+              dstImage, true);
+      dstImage.checkpointUploadDone(sig.mostRecentCheckpointTxId, downloadedHash);
+      dstImage.saveDigestAndRenameCheckpointImage(sig.mostRecentCheckpointTxId,
+          downloadedHash);
+
     }
+
     // get edits file
-    fileid = "getedit=1";
-    srcNames = checkpointImage.getEditsFiles();
-    assert srcNames.length > 0 : "No checkpoint targets.";
-    TransferFsImage.getFileClient(fsName, fileid, srcNames, false);
-    LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
-        srcNames[0].length() + " bytes.");
-
-    checkpointImage.checkpointUploadDone(null);
-    
+    for (RemoteEditLog log : manifest.getLogs()) {
+      if (log.inProgress())
+        break;
+      TransferFsImage.downloadEditsToStorage(nnHostPort, log,
+          dstImage.storage);
+    }
     return downloadImage;
-  }
 
-  /**
-   * Copy the new fsimage into the NameNode
-   */
-  private void putFSImage(CheckpointSignature sig) throws IOException {
-    String fileid = "putimage=1&port=" + infoPort +
-      "&machine=" +
-      InetAddress.getLocalHost().getHostAddress() +
-      "&token=" + sig.toString();
-    LOG.info("Posted URL " + fsName + fileid);
-    TransferFsImage.getFileClient(fsName, fileid, (File[])null, false);
   }
 
   /**
@@ -308,64 +297,84 @@ public class SecondaryNameNode implements Runnable {
   /**
    * Create a new checkpoint
    */
-  void doCheckpoint() throws IOException {
+  boolean doCheckpoint() throws IOException {
 
     LOG.info("Checkpoint starting");
-    
+
     // Do the required initialization of the merge work area.
     startCheckpoint();
 
+    checkpointImage.ensureCurrentDirExists();
+    NNStorage dstStorage = checkpointImage.storage;
+
     // Tell the namenode to start logging transactions in a new edit file
     // Returns a token that would be used to upload the merged image.
-    CheckpointSignature sig = (CheckpointSignature)namenode.rollEditLog();
+    CheckpointSignature sig = namenode.rollEditLog();
 
-    // error simulation code for junit test
-    if (ErrorSimulator.getErrorSimulation(0)) {
-      throw new IOException("Simulating error0 " +
-                            "after creating edits.new");
+    // Make sure we're talking to the same NN!
+    if (checkpointImage.getNamespaceID() != 0) {
+      // If the image actually has some data, make sure we're talking
+      // to the same NN as we did before.
+      sig.validateStorageInfo(checkpointImage.storage);
+    } else {
+      // if we're a fresh 2NN, just take the storage info from the server
+      // we first talk to.
+      dstStorage.setStorageInfo(sig);
     }
 
-    boolean loadImage = downloadCheckpointFiles(sig);   // Fetch fsimage and edits
-    doMerge(sig, loadImage);                   // Do the merge
-  
+    // error simulation code for junit test
+    InjectionHandler.processEventIO(InjectionEvent.SECONDARYNAMENODE_CHECKPOINT0);
+
+    RemoteEditLogManifest manifest = namenode
+        .getEditLogManifest(sig.mostRecentCheckpointTxId + 1);
+
+    boolean loadImage = downloadCheckpointFiles(fsName, checkpointImage, sig,
+        manifest); // Fetch fsimage and edits
+    doMerge(sig, manifest, loadImage, checkpointImage);
+
     //
     // Upload the new image into the NameNode. Then tell the Namenode
     // to make this new uploaded image as the most current image.
     //
-    putFSImage(sig);
+    long txid = checkpointImage.getLastAppliedTxId();
+    TransferFsImage.uploadImageFromStorage(fsName, InetAddress.getLocalHost()
+        .getHostAddress(), infoPort, dstStorage, txid);
 
     // error simulation code for junit test
-    if (ErrorSimulator.getErrorSimulation(1)) {
-      throw new IOException("Simulating error1 " +
-                            "after uploading new image to NameNode");
-    }
+    InjectionHandler.processEventIO(InjectionEvent.SECONDARYNAMENODE_CHECKPOINT1);
 
     namenode.rollFsImage(new CheckpointSignature(checkpointImage));
-    checkpointImage.endCheckpoint();
 
-    LOG.info("Checkpoint done. New Image Size: " 
-              + checkpointImage.getFsImageName().length());
+    LOG.warn("Checkpoint done. New Image Size: "
+        + dstStorage.getFsImageName(StorageLocationType.LOCAL, txid).length());
+
+    // Since we've successfully checkpointed, we can remove some old
+    // image files
+    checkpointImage.purgeOldStorage();
+
+    return loadImage;
   }
 
   private void startCheckpoint() throws IOException {
-    checkpointImage.unlockAll();
+    checkpointImage.storage.unlockAll();
     checkpointImage.getEditLog().close();
     checkpointImage.recoverCreate(checkpointDirs, checkpointEditsDirs);
-    checkpointImage.startCheckpoint();
   }
 
   /**
-   * Merge downloaded image and edits and write the new image into
-   * current storage directory.
+   * Merge downloaded image and edits and write the new image into current
+   * storage directory.
    */
-  private void doMerge(CheckpointSignature sig, boolean loadImage) throws IOException {
-    if (loadImage) {  // create an empty namespace if new image
+  private void doMerge(CheckpointSignature sig, RemoteEditLogManifest manifest,
+      boolean loadImage, FSImage dstImage) throws IOException {
+    if (loadImage) { // create an empty namespace if new image
       namesystem = new FSNamesystem(checkpointImage, conf);
+      checkpointImage.setFSNamesystem(namesystem);
     }
     assert namesystem.dir.fsImage == checkpointImage;
-    checkpointImage.doMerge(sig, loadImage);
+    checkpointImage.doMerge(sig, manifest, loadImage);
   }
-
+  
   /**
    * @param argv The parameters passed to this program.
    * @exception Exception if the filesystem does not exist.
@@ -404,19 +413,20 @@ public class SecondaryNameNode implements Runnable {
     exitCode = 0;
     try {
       if ("-checkpoint".equals(cmd)) {
-        long size = namenode.getEditLogSize();
-        if (size >= checkpointSize || 
+        long uncheckpointedTxns = countUncheckpointedTxns();
+        if (countUncheckpointedTxns() >= checkpointTxnCount || 
             argv.length == 2 && "force".equals(argv[i])) {
           doCheckpoint();
         } else {
-          System.err.println("EditLog size " + size + " bytes is " +
-                             "smaller than configured checkpoint " +
-                             "size " + checkpointSize + " bytes.");
-          System.err.println("Skipping checkpoint.");
+          LOG.info("EditLog uncheckpointed transactions " + uncheckpointedTxns
+              + "smaller than configured checkpoint size of "
+              + checkpointTxnCount + " transactions.");
+          LOG.info("Skipping checkpoint based on transaction count.");
+
         }
       } else if ("-geteditsize".equals(cmd)) {
-        long size = namenode.getEditLogSize();
-        System.out.println("EditLog size is " + size + " bytes");
+        long uncheckpointedTxns = countUncheckpointedTxns();
+        System.out.println("EditLog size is " + uncheckpointedTxns + " transactions");
       } else {
         exitCode = -1;
         LOG.error(cmd.substring(1) + ": Unknown command");
@@ -466,6 +476,18 @@ public class SecondaryNameNode implements Runnable {
                          "[-geteditsize] [-service serviceName]\n");
     }
   }
+  
+  private long countUncheckpointedTxns() throws IOException {
+    long curTxId = namenode.getTransactionID();
+    long uncheckpointedTxns = curTxId -
+      checkpointImage.storage.getMostRecentCheckpointTxId();
+    assert uncheckpointedTxns >= 0;
+    return uncheckpointedTxns;
+  }
+
+  boolean shouldCheckpointBasedOnCount() throws IOException {
+    return countUncheckpointedTxns() >= checkpointTxnCount;
+  }
 
   /**
    * main() has some simple utility methods.
@@ -495,15 +517,12 @@ public class SecondaryNameNode implements Runnable {
 
   static class CheckpointStorage extends FSImage {
     /**
+     * Construct a checkpoint image.
+     * @param conf Node configuration..
+     * @throws IOException If storage cannot be access.
      */
     CheckpointStorage(Configuration conf) throws IOException {
       super(conf);
-    }
-
-    @Override
-    public
-    boolean isConversionNeeded(StorageDirectory sd) {
-      return false;
     }
 
     /**
@@ -515,14 +534,15 @@ public class SecondaryNameNode implements Runnable {
      * @param editsDirs
      * @throws IOException
      */
-    void recoverCreate(Collection<File> dataDirs,
-                       Collection<File> editsDirs) throws IOException {
-      Collection<File> tempDataDirs = new ArrayList<File>(dataDirs);
-      Collection<File> tempEditsDirs = new ArrayList<File>(editsDirs);
-      this.storageDirs = new ArrayList<StorageDirectory>();
-      setStorageDirectories(tempDataDirs, tempEditsDirs);
+    void recoverCreate(Collection<URI> dataDirs,
+                       Collection<URI> editsDirs) throws IOException {
+      Collection<URI> tempDataDirs = new ArrayList<URI>(dataDirs);
+      Collection<URI> tempEditsDirs = new ArrayList<URI>(editsDirs);
+      storage.setStorageDirectories(tempDataDirs, tempEditsDirs, null);
+      imageSet = new ImageSet(this, tempDataDirs, tempEditsDirs, null);
+      
       for (Iterator<StorageDirectory> it = 
-                   dirIterator(); it.hasNext();) {
+                   storage.dirIterator(); it.hasNext();) {
         StorageDirectory sd = it.next();
         boolean isAccessible = true;
         try { // create directories if don't exist yet
@@ -535,6 +555,7 @@ public class SecondaryNameNode implements Runnable {
         if(!isAccessible)
           throw new InconsistentFSStateException(sd.getRoot(),
               "cannot access checkpoint directory.");
+        
         StorageState curState;
         try {
           curState = sd.analyzeStorage(HdfsConstants.StartupOption.REGULAR);
@@ -557,52 +578,38 @@ public class SecondaryNameNode implements Runnable {
         }
       }
     }
-
-    /**
-     * Prepare directories for a new checkpoint.
-     * <p>
-     * Rename <code>current</code> to <code>lastcheckpoint.tmp</code>
-     * and recreate <code>current</code>.
-     * @throws IOException
-     */
-    void startCheckpoint() throws IOException {
-      for(StorageDirectory sd : storageDirs) {
-        moveCurrent(sd);
-      }
-    }
-
-    void endCheckpoint() throws IOException {
-      for(StorageDirectory sd : storageDirs) {
-        moveLastCheckpoint(sd);
+    
+    void ensureCurrentDirExists() throws IOException {
+      for (Iterator<StorageDirectory> it = storage.dirIterator(); it.hasNext();) {
+        StorageDirectory sd = it.next();
+        File curDir = sd.getCurrentDir();
+        if (!curDir.exists() && !curDir.mkdirs()) {
+          throw new IOException("Could not create directory " + curDir);
+        }
       }
     }
 
     /**
      * Merge image and edits, and verify consistency with the signature.
      */
-    private void doMerge(CheckpointSignature sig, boolean loadImage) throws IOException {
-      getEditLog().open();
-      StorageDirectory sdName = null;
-      StorageDirectory sdEdits = null;
-      Iterator<StorageDirectory> it = null;
+    private void doMerge(CheckpointSignature sig,
+        RemoteEditLogManifest manifest, boolean loadImage) throws IOException {
+      NNStorage dstStorage = this.storage;
+      dstStorage.setStorageInfo(sig);
+
       if (loadImage) {
-        it = dirIterator(NameNodeDirType.IMAGE);
-        if (it.hasNext())
-          sdName = it.next();
-        if (sdName == null)
-          throw new IOException("Could not locate checkpoint fsimage");
+        File file = dstStorage.findImageFile(sig.mostRecentCheckpointTxId);
+        if (file == null) {
+          throw new IOException("Couldn't find image file at txid "
+              + sig.mostRecentCheckpointTxId + " even though it should have "
+              + "just been downloaded");
+        }
+        loadFSImage(new ImageInputStream(sig.mostRecentCheckpointTxId,
+            new FileInputStream(file), null, "image", file.length()));
       }
-      it = dirIterator(NameNodeDirType.EDITS);
-      if (it.hasNext())
-        sdEdits = it.next();
-      if (sdEdits == null)
-        throw new IOException("Could not locate checkpoint edits");
-      if (loadImage) {
-        loadFSImage(FSImage.getImageFile(sdName, NameNodeFile.IMAGE));
-      }
-      loadFSEdits(sdEdits);
-      sig.validateStorageInfo(this);
-      saveNamespace(false);
+      FSImage.rollForwardByApplyingLogs(manifest, this);
+      this.saveFSImageInAllDirs(this.getLastAppliedTxId(), false);
+      dstStorage.writeAll();
     }
   }
 }

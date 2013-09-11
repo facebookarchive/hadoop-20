@@ -27,21 +27,26 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
 import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicyDefault;
+import org.apache.hadoop.hdfs.server.namenode.BlockPlacementPolicy.NotEnoughReplicasException;
+import org.apache.hadoop.hdfs.util.InjectionEvent;
 import org.apache.hadoop.net.DNSToSwitchMapping;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.Node;
+import org.apache.hadoop.raid.DirectoryStripeReader.BlockInfo;
 import org.apache.hadoop.raid.RaidNode;
+import org.apache.hadoop.raid.Codec;
 import org.apache.hadoop.util.HostsFileReader;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 
 /**
@@ -64,19 +69,11 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
   public static final Log LOG =
     LogFactory.getLog(BlockPlacementPolicyRaid.class);
   Configuration conf;
-  private int stripeLength;
-  private int xorParityLength;
-  private int rsParityLength;
-  private String xorPrefix = null;
-  private String rsPrefix = null;
-  private String raidTempPrefix = null;
-  private String raidrsTempPrefix = null;
-  private String raidHarTempPrefix = null;
-  private String raidrsHarTempPrefix = null;
   private FSNamesystem namesystem = null;
 
   private CachedLocatedBlocks cachedLocatedBlocks;
   private CachedFullPathNames cachedFullPathNames;
+  private long minFileSize = RaidNode.MINIMUM_RAIDABLE_FILESIZE;
 
   /** {@inheritDoc} */
   @Override
@@ -86,26 +83,11 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
     super.initialize(conf, stats, clusterMap, 
                      hostsReader, dnsToSwitchMapping, namesystem);
     this.conf = conf;
+    this.minFileSize = conf.getLong(RaidNode.MINIMUM_RAIDABLE_FILESIZE_KEY,
+        RaidNode.MINIMUM_RAIDABLE_FILESIZE);
     this.namesystem = namesystem;
-    this.stripeLength = RaidNode.getStripeLength(conf);
-    this.rsParityLength = RaidNode.rsParityLength(conf);
-    this.xorParityLength = 1;
-    this.cachedLocatedBlocks = new CachedLocatedBlocks(conf, namesystem);
-    this.cachedFullPathNames = new CachedFullPathNames(conf, namesystem);
-    this.xorPrefix = new Path(conf.get(RaidNode.RAID_LOCATION_KEY, 
-        RaidNode.DEFAULT_RAID_LOCATION)).toUri().getPath();
-    this.rsPrefix = new Path(conf.get(RaidNode.RAIDRS_LOCATION_KEY,
-        RaidNode.DEFAULT_RAIDRS_LOCATION)).toUri().getPath();
-    if (this.xorPrefix == null) {
-      this.xorPrefix = RaidNode.DEFAULT_RAID_LOCATION;
-    }
-    if (this.rsPrefix == null) {
-      this.rsPrefix = RaidNode.DEFAULT_RAIDRS_LOCATION;
-    }
-    this.raidTempPrefix = RaidNode.xorTempPrefix(conf);
-    this.raidrsTempPrefix = RaidNode.rsTempPrefix(conf);
-    this.raidHarTempPrefix = RaidNode.xorHarTempPrefix(conf);
-    this.raidrsHarTempPrefix = RaidNode.rsHarTempPrefix(conf);
+    this.cachedLocatedBlocks = new CachedLocatedBlocks(conf);
+    this.cachedFullPathNames = new CachedFullPathNames(conf);
   }
 
   @Override
@@ -115,14 +97,52 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
     return chooseTarget(srcPath, numOfReplicas, writer, chosenNodes, null, 
         blocksize);
   }
-  
+
+  @Override
+  protected void place3rdReplicaForInClusterWriter(
+      HashMap<Node, Node> excludedNodes, long blocksize,
+      int maxNodesPerRack,List<DatanodeDescriptor> results
+      ) throws NotEnoughReplicasException {
+    if (results.size() > 2) {
+      return;
+    }
+    HashSet<String> excludedRacks = new HashSet<String>();
+    for (DatanodeDescriptor node : results) {
+      String rack = node.getNetworkLocation();
+      excludedRacks.add(rack);
+    }
+    
+    do {
+      String remoteRack = clusterMap.chooseRack(excludedRacks);
+      if (remoteRack == null) { // no more remote rack available
+        // choose a node on the rack where the first replica is located
+        chooseLocalRack(
+            results.get(0), excludedNodes, blocksize, maxNodesPerRack, results);
+        return;
+      }
+      // a remote rack is chosen
+      try {
+        excludedRacks.add(remoteRack);
+        chooseRandom(1, remoteRack, excludedNodes, blocksize, 
+            maxNodesPerRack, results);
+        return;
+      } catch (NotEnoughReplicasException ne) {
+        // try again until all remote tracks are exhausted
+      }
+    } while (true);
+  }
+    
+
   @Override
   public DatanodeDescriptor[] chooseTarget(String srcPath, int numOfReplicas,
       DatanodeDescriptor writer, List<DatanodeDescriptor> chosenNodes,
       List<Node> exlcNodes, long blocksize) {
     try {
-      FileType type = getFileType(srcPath);
-      if (type == FileType.NOT_RAID) {
+      FileInfo info = getFileInfo(srcPath);
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("FileType:" + srcPath + " " + info.type.name());
+      }
+      if (info.type == FileType.NOT_RAID) {
         return super.chooseTarget(
             srcPath, numOfReplicas, writer, chosenNodes, exlcNodes, blocksize);
       }
@@ -136,7 +156,7 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
       for (Node node:chosenNodes) {
         excludedNodes.put(node, node);
       }
-      chooseRandom(numOfReplicas, "/", excludedNodes, blocksize,
+      chooseRandom(numOfReplicas, Path.SEPARATOR, excludedNodes, blocksize,
           1, results);
       return results.toArray(new DatanodeDescriptor[results.size()]);
     } catch (Exception e) {
@@ -157,14 +177,14 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
 
     DatanodeDescriptor chosenNode = null;
     try {
-      String path = cachedFullPathNames.get(inode);
-      FileType type = getFileType(path);
-      if (type == FileType.NOT_RAID) {
+      String path = getFullPathName(inode);
+      FileInfo info = getFileInfo(path);
+      if (info.type == FileType.NOT_RAID) {
         return super.chooseReplicaToDelete(
             inode, block, replicationFactor, first, second);
       }
       List<LocatedBlock> companionBlocks =
-          getCompanionBlocks(path, type, block);
+          getCompanionBlocks(path, info, block, inode);
       if (companionBlocks == null || companionBlocks.size() == 0) {
         // Use the default method if it is not a valid raided or parity file
         return super.chooseReplicaToDelete(
@@ -188,22 +208,6 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
     }
   }
 
-  /**
-   * Obtain the excluded nodes for the current block that is being written
-   */
-  List<Node> getExcludedNodes(String file, FileType type) throws IOException {
-    Set<Node> excluded = new HashSet<Node>();
-    Collection<LocatedBlock> blocks = getCompanionBlocks(file, type, null);
-    if (blocks != null) {
-      for (LocatedBlock b : blocks) {
-        for (Node n : b.getLocations()) {
-          excluded.add(n);
-        }
-      }
-    }
-    return new ArrayList<Node>(excluded);
-  }
-
   private DatanodeDescriptor chooseReplicaToDelete(
       Collection<LocatedBlock> companionBlocks,
       Collection<DatanodeDescriptor> dataNodes) throws IOException {
@@ -212,10 +216,11 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
       return null;
     }
     // Count the number of replicas on each node and rack
+    final Map<String, Integer>[] companionBlockCounts = countCompanionBlocks(companionBlocks);
     final Map<String, Integer> nodeCompanionBlockCount =
-      countCompanionBlocks(companionBlocks, false);
+        companionBlockCounts[0];
     final Map<String, Integer> rackCompanionBlockCount =
-      countCompanionBlocks(companionBlocks, true);
+        companionBlockCounts[1];
 
     NodeComparator comparator =
       new NodeComparator(nodeCompanionBlockCount, rackCompanionBlockCount);
@@ -225,21 +230,27 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
   /**
    * Count how many companion blocks are on each datanode or the each rack
    * @param companionBlocks a collection of all the companion blocks
-   * @param doRackCount count the companion blocks on the racks of datanodes
    * @param result the map from node name to the number of companion blocks
+   * [0] for datanodes [1] for racks
    */
-  static Map<String, Integer> countCompanionBlocks(
-      Collection<LocatedBlock> companionBlocks, boolean doRackCount) {
-    Map<String, Integer> result = new HashMap<String, Integer>();
+  @SuppressWarnings("unchecked")
+  static Map<String, Integer>[] countCompanionBlocks(
+      Collection<LocatedBlock> companionBlocks) {
+    Map<String, Integer>[] result = new HashMap[2];
+    result[0] = new HashMap<String, Integer>();
+    result[1] = new HashMap<String, Integer>();
+    
     for (LocatedBlock block : companionBlocks) {
       for (DatanodeInfo d : block.getLocations()) {
-        String name = doRackCount ? d.getParent().getName() : d.getName();
-        if (result.containsKey(name)) {
-          int count = result.get(name) + 1;
-          result.put(name, count);
-        } else {
-          result.put(name, 1);
-        }
+        // count the companion blocks on the datanodes
+        String name = d.getName();
+        Integer currentCount = result[0].get(name);
+        result[0].put(name, currentCount == null ? 1 : currentCount + 1);
+        
+        // count the companion blocks on the racks of datanodes
+        name = d.getParent().getName();
+        currentCount = result[1].get(name);
+        result[1].put(name, currentCount == null ? 1 : currentCount + 1);
       }
     }
     return result;
@@ -296,159 +307,377 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
    * Companion blocks are defined as the blocks that can help recover each
    * others by using raid decoder.
    * @param path The path of the file contains the block
-   * @param type The type of this file
+   * @param info The info of this file
    * @param block The given block
    *              null if it is the block which is currently being written to
+   * @param inode the inode of the path file 
    * @return the block locations of companion blocks
    */
-  List<LocatedBlock> getCompanionBlocks(String path, FileType type, Block block)
+  List<LocatedBlock> getCompanionBlocks(String path, FileInfo info, Block block, FSInodeInfo inode)
       throws IOException {
-    switch (type) {
+    Codec codec = info.codec;
+    switch (info.type) {
       case NOT_RAID:
         return Collections.emptyList();
-      case XOR_HAR_TEMP_PARITY:
+      case HAR_TEMP_PARITY:
         return getCompanionBlocksForHarParityBlock(
-            path, xorParityLength, block);
-      case RS_HAR_TEMP_PARITY:
-        return getCompanionBlocksForHarParityBlock(
-            path, rsParityLength, block);
-      case XOR_TEMP_PARITY:
+            path, codec.parityLength, block, inode);
+      case TEMP_PARITY:
+        NameWithINode ni = getSourceFile(path, codec.tmpParityDirectory);
         return getCompanionBlocksForParityBlock(
-            getSourceFile(path, raidTempPrefix), path, xorParityLength, block);
-      case RS_TEMP_PARITY:
+            ni.name,
+            path, codec.parityLength, codec.stripeLength, block,
+            codec.isDirRaid, ni.inode, inode);
+      case PARITY:
+        ni = getSourceFile(path, codec.parityDirectory);
         return getCompanionBlocksForParityBlock(
-            getSourceFile(path, raidrsTempPrefix), path, rsParityLength, block);
-      case XOR_PARITY:
-        return getCompanionBlocksForParityBlock(getSourceFile(path, xorPrefix),
-            path, xorParityLength, block);
-      case RS_PARITY:
-        return getCompanionBlocksForParityBlock(getSourceFile(path, rsPrefix),
-            path, rsParityLength, block);
-      case XOR_SOURCE:
+            ni.name,
+            path, codec.parityLength, codec.stripeLength, block, 
+            codec.isDirRaid, ni.inode, inode);
+      case SOURCE:
         return getCompanionBlocksForSourceBlock(
-            path, getParityFile(path), xorParityLength, block);
-      case RS_SOURCE:
-        return getCompanionBlocksForSourceBlock(
-            path, getParityFile(path), xorParityLength, block);
+            path,
+            info.parityName,
+            codec.parityLength, codec.stripeLength, block,
+            codec.isDirRaid, inode, info.parityInode);
     }
     return Collections.emptyList();
   }
 
   private List<LocatedBlock> getCompanionBlocksForHarParityBlock(
-      String parity, int parityLength, Block block)
+      String parity, int parityLength, Block block, FSInodeInfo inode)
       throws IOException {
-    int blockIndex = getBlockIndex(parity, block);
+    int blockIndex = getBlockIndex(parity, block, inode, true);
+    List<LocatedBlock> parityBlocks = getLocatedBlocks(parity, inode);
     // consider only parity file in this case because source file block
     // location is not easy to obtain
-    List<LocatedBlock> parityBlocks = cachedLocatedBlocks.get(parity);
     List<LocatedBlock> result = new ArrayList<LocatedBlock>();
-    synchronized (parityBlocks) {
-      int start = Math.max(0, blockIndex - parityLength + 1);
-      int end = Math.min(parityBlocks.size(), blockIndex + parityLength);
-      result.addAll(parityBlocks.subList(start, end));
-    }
+    int start = Math.max(0, blockIndex - parityLength + 1);
+    int end = Math.min(parityBlocks.size(), blockIndex + parityLength);
+    result.addAll(parityBlocks.subList(start, end));
     return result;
   }
 
-  private List<LocatedBlock> getCompanionBlocksForParityBlock(
-      String src, String parity, int parityLength, Block block)
-      throws IOException {
-    int blockIndex = getBlockIndex(parity, block);
-    List<LocatedBlock> result = new ArrayList<LocatedBlock>();
-    List<LocatedBlock> parityBlocks = cachedLocatedBlocks.get(parity);
-    int stripeIndex = blockIndex / parityLength;
-    synchronized (parityBlocks) {
-      int parityStart = stripeIndex * parityLength;
-      int parityEnd = Math.min(parityStart + parityLength,
-                               parityBlocks.size());
-      // for parity, always consider the neighbor blocks as companion blocks
-      if (parityStart < parityBlocks.size()) {
-        result.addAll(parityBlocks.subList(parityStart, parityEnd));
-      }
+  private void addCompanionParityBlocks(String parity, INodeFile pinode,
+      int stripeIndex, int parityLength, List<LocatedBlock> blocks)
+          throws IOException {
+    if (pinode == null) 
+      return;
+    long parityStartOffset = stripeIndex * parityLength *
+       pinode.getPreferredBlockSize(); 
+    long parityFileSize = namesystem.dir.getFileSize(pinode);
+    // for parity, always consider the neighbor blocks as companion blocks
+    if (parityStartOffset < parityFileSize) {
+      blocks.addAll(getLocatedBlocks(pinode, parityStartOffset,
+          parityLength * pinode.getPreferredBlockSize()));
     }
+  }
 
+  String getFullPathName(FSInodeInfo inode) throws IOException {
+    String path = cachedFullPathNames.get(inode);
+    if (path != null) {
+      InjectionHandler
+          .processEvent(InjectionEvent.BLOCKPLACEMENTPOLICYRAID_CACHED_PATH);
+      return path;
+    }
+    byte[][] names = null;
+    namesystem.readLock();
+    try {
+      names = FSDirectory.getINodeByteArray((INode)inode);
+    } finally {
+      namesystem.readUnlock();
+    }
+    path = FSDirectory.getFullPathName(names);
+    cachedFullPathNames.put(inode, path);
+    return path;   
+  }
+  
+  List<LocatedBlock> getLocatedBlocks(String file, FSInodeInfo f)
+      throws IOException {
+    List<LocatedBlock> blocks = cachedLocatedBlocks.get(file);
+    if (blocks != null) {
+      InjectionHandler
+          .processEvent(InjectionEvent.BLOCKPLACEMENTPOLICYRAID_CACHED_BLOCKS);
+      return blocks;
+    }
+    // otherwise populate cache
+    INodeFile inode = (INodeFile) f;
+    // Note that the list is generated. It is not the internal data of inode.
+    List<LocatedBlock> result = inode == null ? new ArrayList<LocatedBlock>()
+        : namesystem.getBlockLocationsInternal(inode, 0, Long.MAX_VALUE,
+            Integer.MAX_VALUE).getLocatedBlocks();
+    if (result == null) {
+      result = Collections.emptyList();
+    } else {
+      result = Collections.unmodifiableList(result);
+    }
+    cachedLocatedBlocks.put(file, result);
+    return result;
+  }
+  
+  public List<LocatedBlock> getLocatedBlocks(INodeFile inode, long offset, 
+      long length)
+      throws IOException {
+    // Note that the list is generated. It is not the internal data of inode.
+    List<LocatedBlock> result = inode == null ?
+        new ArrayList<LocatedBlock>() :
+        namesystem.getBlockLocationsInternal(inode, offset, length,
+                                     Integer.MAX_VALUE).getLocatedBlocks();
+    if (result == null) {
+      return Collections.emptyList(); 
+    }
+    return Collections.unmodifiableList(result);
+  }
+
+  private List<LocatedBlock> getCompanionBlocksForParityBlock(
+      String src, String parity, int parityLength, int stripeLength, 
+      Block block, boolean isDirRaid, FSInodeInfo srcinode, FSInodeInfo pinode)
+      throws IOException {
+    int blockIndex = getBlockIndex(parity, block, pinode, false);
+    int stripeIndex = blockIndex / parityLength;
+
+    List<LocatedBlock> result = new ArrayList<LocatedBlock>();
+    addCompanionParityBlocks(parity, (INodeFile)pinode, stripeIndex,
+        parityLength, result);
     if (src == null) {
       return result;
     }
-    List<LocatedBlock> sourceBlocks = cachedLocatedBlocks.get(src);
-    synchronized (sourceBlocks) {
-      int sourceStart = stripeIndex * stripeLength;
-      int sourceEnd = Math.min(sourceStart + stripeLength,
-                               sourceBlocks.size());
-      if (sourceStart < sourceBlocks.size()) {
-        result.addAll(sourceBlocks.subList(sourceStart, sourceEnd));
+
+    // get the source blocks.
+    List<LocatedBlock> sourceBlocks;
+    int sourceStart = stripeIndex * stripeLength;
+    int sourceEnd = sourceStart + stripeLength;
+
+    if (!isDirRaid) {
+      sourceBlocks = getLocatedBlocks(src, srcinode);
+    } else {
+      sourceBlocks = new ArrayList<LocatedBlock>();
+      INode inode = (INode) srcinode;
+      INodeDirectory srcNode;
+      if (inode.isDirectory()) {
+        srcNode = (INodeDirectory) inode;
+      } else {
+        throw new IOException(
+            "The source should be a directory in Dir-Raiding: " + src);
       }
+
+      boolean found = false;
+      String srcPath = src + Path.SEPARATOR;
+      // look for the stripe 
+      namesystem.readLock();
+      namesystem.dir.readLock();
+      try {
+        for (INode child : srcNode.getChildren()) {
+          if (child.isDirectory()) {
+            throw new IOException("The source is not a leaf directory: " + src
+                + ", contains a subdirectory: " + child.getLocalName());
+          }
+          INodeFile childInode = (INodeFile)child;
+          long fileSize = namesystem.dir.getFileSize(childInode);
+          // check if we will do dir-raid on this file
+          if (fileSize < minFileSize) {
+            continue;
+          }
+          int numBlocks = childInode.blocks.length;
+
+          if (numBlocks < sourceStart && !found) {
+            sourceStart -= numBlocks; 
+            sourceEnd -= numBlocks;
+            continue;
+          } else {
+            String childName = srcPath + child.getLocalName();
+            List<LocatedBlock> childBlocks = getLocatedBlocks(childName, child);
+            found = true;
+            sourceBlocks.addAll(childBlocks);
+            if (sourceEnd <= sourceBlocks.size()) {
+              break;
+            }
+          }
+        }
+      } finally {
+        namesystem.dir.readUnlock();
+        namesystem.readUnlock();
+      }
+    }
+
+    sourceEnd = Math.min(sourceEnd,
+        sourceBlocks.size());
+    if (sourceStart < sourceBlocks.size()) {
+      result.addAll(sourceBlocks.subList(sourceStart, sourceEnd));
     }
     return result;
   }
 
   private List<LocatedBlock> getCompanionBlocksForSourceBlock(
-      String src, String parity, int parityLength, Block block)
+      String src, String parity, int parityLength, int stripeLength, 
+      Block block, boolean isDirRaid, FSInodeInfo inode, FSInodeInfo parityInode)
       throws IOException {
-    int blockIndex = getBlockIndex(src, block);
     List<LocatedBlock> result = new ArrayList<LocatedBlock>();
-    List<LocatedBlock> sourceBlocks = cachedLocatedBlocks.get(src);
-    int stripeIndex = blockIndex / stripeLength;
-    synchronized (sourceBlocks) {
-      int sourceStart = stripeIndex * stripeLength;
-      int sourceEnd = Math.min(sourceStart + stripeLength,
-                               sourceBlocks.size());
-      if (sourceStart < sourceBlocks.size()) {
-        result.addAll(sourceBlocks.subList(sourceStart, sourceEnd));
+    List<LocatedBlock> sourceBlocks = null;
+    int blockIndex = getBlockIndex(src, block, inode, true);
+    int stripeIndex = 0;
+    int sourceStart = 0;
+    int sourceEnd = 0;
+
+    if (!isDirRaid) {
+      sourceBlocks = getLocatedBlocks(src, inode);
+      stripeIndex = blockIndex / stripeLength;
+      sourceStart = stripeIndex * stripeLength;
+      sourceEnd = Math.min(sourceStart + stripeLength, sourceBlocks.size());
+    } else {
+      // cache the candidate blocks.
+      BlockInfo[] tmpStripe = new BlockInfo[stripeLength];
+      for (int i = 0; i < stripeLength; i++) {
+        tmpStripe[i] = new BlockInfo(0, 0);
+      }
+      int curIdx = 0;
+      boolean found = false;
+
+      sourceBlocks = new ArrayList<LocatedBlock>();
+      byte[][] components = INodeDirectory.getPathComponents(src);
+      INodeDirectory srcNode = namesystem.dir.getINode(components).getParent();
+      String parentPath = getParentPath(src);
+      if (!parentPath.endsWith(Path.SEPARATOR)) {
+        parentPath += Path.SEPARATOR;
+      }
+      
+      namesystem.readLock();
+      namesystem.dir.readLock();
+      try {
+        List<INode> children = srcNode.getChildren();
+        // look for the stripe
+        for (int fid = 0; fid < children.size(); fid++) {
+          INode child = children.get(fid);
+          if (child.isDirectory()) {
+            throw new IOException("The raided-directory is not a leaf directory: "
+                + parentPath + 
+                ", contains a subdirectory: " + child.getLocalName());
+          }
+          INodeFile childInode = (INodeFile)child;
+
+          long fileSize = namesystem.dir.getFileSize(childInode);
+          // check if we will do dir-raid on this file
+          if (fileSize < minFileSize) {
+            continue;
+          }
+
+          String childName = parentPath + child.getLocalName();
+          if (found) {
+            if (sourceEnd <= sourceBlocks.size()) {
+              break;
+            }
+            List<LocatedBlock> childBlocks = getLocatedBlocks(childName, childInode);
+            sourceBlocks.addAll(childBlocks);
+          } else {
+            int childBlockSize = childInode.blocks.length;
+
+            /** 
+             * If we find the target file, we will addAll the
+             * cached blocks and the child blocks. 
+             * And update the metrics like stripeIndex, sourceStart and sourceEnd.
+             * 
+             */
+            if (childName.equals(src)) {
+              found = true;
+              List<LocatedBlock> prevChildBlocks = null;
+              for (int i=0; i<curIdx; i++) {
+                if (i == 0 || tmpStripe[i].fileIdx != tmpStripe[i - 1].fileIdx) {
+                  INode prevChildInode = children.get(tmpStripe[i].fileIdx);
+                  String prevChildName = parentPath + prevChildInode.getLocalName();
+                  prevChildBlocks = getLocatedBlocks(prevChildName, prevChildInode);
+                }
+                sourceBlocks.add(prevChildBlocks.get(tmpStripe[i].blockId));
+              }
+              List<LocatedBlock> childBlocks = getLocatedBlocks(childName, childInode);
+              sourceBlocks.addAll(childBlocks);
+              blockIndex += curIdx;
+
+              stripeIndex += blockIndex / stripeLength;
+              sourceStart = (blockIndex / stripeLength) * stripeLength;
+              sourceEnd = sourceStart + stripeLength;
+            } else {
+              /**
+               * If not find the target file, we will keep the current stripe
+               * in the temp stripe cache.
+               */
+              /**
+               * the childBlockSize is small, and we can fill them into 
+               * current temp stripe cache.
+               */
+              if (curIdx + childBlockSize < stripeLength) {
+                for (int i=0; i<childBlockSize; i++, curIdx++) {
+                  tmpStripe[curIdx].fileIdx = fid;
+                  tmpStripe[curIdx].blockId = i;
+                }
+              } else {
+                /**
+                 * The childBlockSize is not small, We need to calculate 
+                 * the place in the stripe cache, and copy the current stripe 
+                 * into the temp stripe cache.
+                 */
+                stripeIndex += (curIdx + childBlockSize) / stripeLength;
+                int childStart = ((curIdx + childBlockSize) / stripeLength) 
+                    * stripeLength - curIdx;
+                curIdx = 0;
+                for (; childStart<childBlockSize; childStart++,curIdx++) {
+                  tmpStripe[curIdx].fileIdx = fid;
+                  tmpStripe[curIdx].blockId = childStart;
+                }
+                curIdx %= stripeLength;
+              }
+            }
+          }
+        }
+      } finally {
+        namesystem.dir.readUnlock();
+        namesystem.readUnlock();
+      }
+      sourceEnd = Math.min(sourceEnd, sourceBlocks.size());
+    }
+
+    if (sourceStart < sourceBlocks.size()) {
+      for (int i = sourceStart; i < sourceEnd; i++) {
+        result.add(sourceBlocks.get(i));
       }
     }
     if (parity == null) {
       return result;
     }
-    List<LocatedBlock> parityBlocks = cachedLocatedBlocks.get(parity);
-    synchronized (parityBlocks) {
-      int parityStart = stripeIndex * parityLength;
-      int parityEnd = Math.min(parityStart + parityLength,
-                               parityBlocks.size());
-      if (parityStart < parityBlocks.size()) {
-        result.addAll(parityBlocks.subList(parityStart, parityEnd));
-      }
-    }
+    // add the parity blocks.
+    addCompanionParityBlocks(parity, (INodeFile)parityInode,
+        stripeIndex, parityLength, result);
     return result;
   }
 
-  private int getBlockIndex(String file, Block block) throws IOException {
-    List<LocatedBlock> blocks = cachedLocatedBlocks.get(file);
-    synchronized (blocks) {
+  private int getBlockIndex(String file, Block block, FSInodeInfo inode,
+      boolean cacheResult)
+      throws IOException {
+    if (cacheResult) {
+      List<LocatedBlock> blocks = getLocatedBlocks(file, inode);
       // null indicates that this block is currently added. Return size()
       // as the index in this case
-	    if (block == null) {
-	      return blocks.size();
-	    }
+      if (block == null) {
+        return blocks.size();
+      }
       for (int i = 0; i < blocks.size(); i++) {
         if (blocks.get(i).getBlock().equals(block)) {
           return i;
         }
       }
+      throw new IOException("Cannot locate " + block + " in file " + file);
+    } else {
+      return namesystem.dir.getBlockIndex((INodeFile)inode, block, file);
     }
-    throw new IOException("Cannot locate " + block + " in file " + file);
   }
-
+  
   /**
    * Cache results for FSInodeInfo.getFullPathName()
    */
   static class CachedFullPathNames {
     private Cache<INodeWithHashCode, String> cacheInternal;
-    private FSNamesystem namesystem;
 
-    CachedFullPathNames(final Configuration conf, final FSNamesystem namesystem) {
-      this.namesystem = namesystem;
-      this.cacheInternal = new Cache<INodeWithHashCode, String>(conf) {  
-        @Override
-        public String getDirectly(INodeWithHashCode inode) throws IOException {
-          namesystem.readLock();
-          try {
-            return inode.getFullPathName();
-          } finally {
-            namesystem.readUnlock();
-          }
-        }
-      };
+    CachedFullPathNames(final Configuration conf) {
+      this.cacheInternal = new Cache<INodeWithHashCode, String>(conf);
     }
       
     private static class INodeWithHashCode {
@@ -458,19 +687,22 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
       }
       @Override
       public boolean equals(Object obj) {
-        return inode == obj;
+        if (!(obj instanceof INodeWithHashCode))
+          return false;
+        return inode == ((INodeWithHashCode)obj).inode;
       }
       @Override
       public int hashCode() {
         return System.identityHashCode(inode);
       }
-      String getFullPathName() {
-        return inode.getFullPathName();
-      }
     }
 
     public String get(FSInodeInfo inode) throws IOException {
       return cacheInternal.get(new INodeWithHashCode(inode));
+    }
+    
+    public void put(FSInodeInfo inode, String path) {
+      cacheInternal.put(new INodeWithHashCode(inode), path);
     }
   }
 
@@ -478,29 +710,15 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
    * Cache results for FSNamesystem.getBlockLocations()
    */
   static class CachedLocatedBlocks extends Cache<String, List<LocatedBlock>> {
-    private FSNamesystem namesystem;
-
-    CachedLocatedBlocks(Configuration conf, FSNamesystem namesystem) {
+    CachedLocatedBlocks(Configuration conf) {
       super(conf);
-      this.namesystem = namesystem;
-    }
-
-    @Override
-    public List<LocatedBlock> getDirectly(String file) throws IOException {
-      INodeFile inode = namesystem.dir.getFileINode(file);
-      // Note that the list is generated. It is not the internal data of inode.
-      List<LocatedBlock> result = inode == null ?
-          new ArrayList<LocatedBlock>() :
-          namesystem.getBlockLocationsInternal(inode, 0, Long.MAX_VALUE,
-                                       Integer.MAX_VALUE).getLocatedBlocks();
-      if (result == null) {
-        result = new ArrayList<LocatedBlock>();
-      }
-      return result;
     }
   }
 
-  private static abstract class Cache<K, V> {
+  /**
+   * Generic caching class
+   */
+  private static class Cache<K, V> {
     private Map<K, ValueWithTime> cache;
     final private long cacheTimeout;
     final private int maxEntries;
@@ -511,7 +729,7 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
       this.maxEntries =
         conf.getInt("raid.blockplacement.cache.size", 1000);  // 1000 entries
       Map<K, ValueWithTime> map = new LinkedHashMap<K, ValueWithTime>(
-          maxEntries, 0.75f, true) {
+          2 * maxEntries, 0.75f, true) {
         private static final long serialVersionUID = 1L;
           @Override
           protected boolean removeEldestEntry(
@@ -522,11 +740,6 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
       this.cache = Collections.synchronizedMap(map);
     }
 
-    // Note that this method may hold FSNamesystem.readLock() and it may
-    // be called inside FSNamesystem.writeLock(). If we make this method
-    // synchronized, it will deadlock.
-    abstract protected V getDirectly(K key) throws IOException;
-
     public V get(K key) throws IOException {
       // The method is not synchronized so we may get some stale value here but
       // it's OK.
@@ -536,12 +749,16 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
           now - result.cachedTime < cacheTimeout) {
         return result.value;
       }
-      result = new ValueWithTime();
-      result.value = getDirectly(key);
-      result.cachedTime = now;
-      cache.put(key, result);
-      return result.value;
+      return null;
     }
+    
+    public void put(K key, V value) {
+      ValueWithTime v = new ValueWithTime();
+      v.value = value;
+      v.cachedTime = System.currentTimeMillis();
+      cache.put(key,  v);
+    }
+    
     private class ValueWithTime {
       V value = null;
       long cachedTime = 0L;
@@ -554,95 +771,118 @@ public class BlockPlacementPolicyRaid extends BlockPlacementPolicyDefault {
    * @param parity the toUri path of the parity file
    * @return the toUri path of the source file
    */
-  String getSourceFile(String parity, String prefix) throws IOException {
+  NameWithINode getSourceFile(String parity, String prefix) throws IOException {
     if (isHarFile(parity)) {
       return null;
     }
     // remove the prefix
     String src = parity.substring(prefix.length());
-    if (namesystem.dir.getInode(src) == null) {
-      return null;
-    }
-    return src;
+    byte[][] components = INodeDirectory.getPathComponents(src);
+    INode inode = namesystem.dir.getINode(components);
+    return new NameWithINode(src, inode);
   }
-
-  /**
-   * Get path for the corresponding parity file for a source file.
-   * Returns null if it does not exists
-   * @param src the toUri path of the source file
-   * @return the toUri path of the parity file
-   */
-  String getParityFile(String src) throws IOException {
-    String xorParity = getParityFile(xorPrefix, src);
-    if (xorParity != null) {
-      return xorParity;
+  
+  class NameWithINode {
+    String name;
+    INode inode;
+    
+    public NameWithINode(String name, INode inode) {
+      this.name = name;
+      this.inode = inode;
     }
-    String rsParity = getParityFile(rsPrefix, src);
-    if (rsParity != null) {
-      return rsParity;
-    }
-    return null;
   }
 
   /**
    * Get path for the parity file. Returns null if it does not exists
-   * @param parityPrefix usuall "/raid/" or "/raidrs/"
+   * @param codec the codec of the parity file.
    * @return the toUri path of the parity file
    */
-  private String getParityFile(String parityPrefix, String src)
+  private NameWithINode getParityFile(Codec codec, String src)
       throws IOException {
-    String parity = parityPrefix + src;
-    if (namesystem.dir.getInode(parity) == null) {
-      return null;
+    String parity;
+    if (codec.isDirRaid) {
+      String parent = getParentPath(src);      
+      parity = codec.parityDirectory + parent;
+    } else {
+      parity = codec.parityDirectory + src;
     }
-    return parity;
+    byte[][] components = INodeDirectory.getPathComponents(parity);
+    INode parityInode = namesystem.dir.getINode(components);
+    if (parityInode == null)
+      return null;
+    return new NameWithINode(parity, parityInode);
+  }
+  
+  static String getParentPath(String src) {
+    int precision = 1;
+    if (src.length() > 1 && src.endsWith(Path.SEPARATOR)) {
+      precision = 2;
+    }
+    src = src.substring(0, src.lastIndexOf(Path.SEPARATOR, src.length() - precision));
+    if (src.isEmpty())
+      src = Path.SEPARATOR;
+    return src;
   }
 
   private boolean isHarFile(String path) {
     return path.lastIndexOf(RaidNode.HAR_SUFFIX) != -1;
   }
 
-  enum FileType {
-    NOT_RAID,
-    XOR_HAR_TEMP_PARITY,
-    XOR_TEMP_PARITY,
-    XOR_PARITY,
-    XOR_SOURCE,
-    RS_HAR_TEMP_PARITY,
-    RS_TEMP_PARITY,
-    RS_PARITY,
-    RS_SOURCE,
+  class FileInfo {
+    FileInfo(FileType type, Codec codec) {
+      this.type = type;
+      this.codec = codec;
+    }
+    
+    FileInfo(FileType type, Codec codec, String parityName, INode parityInode)
+        throws IOException {
+      if (type != FileType.SOURCE) {
+        throw new IOException("FileType must be source");
+      }
+      this.type = type;
+      this.codec = codec;
+      this.parityInode = parityInode;
+      this.parityName = parityName;
+    }
+    
+    final FileType type;
+    final Codec codec;
+    INode parityInode = null;
+    String parityName = null;
   }
 
-  FileType getFileType(String path) throws IOException {
-    if (path.startsWith(raidHarTempPrefix + Path.SEPARATOR)) {
-      return FileType.XOR_HAR_TEMP_PARITY;
+  enum FileType {
+    NOT_RAID,
+    HAR_TEMP_PARITY,
+    TEMP_PARITY,
+    PARITY,
+    SOURCE,
+  }
+
+  /**
+   * Return raid information about a file, for example
+   * if this file is the source file, parity file, or not raid
+   * 
+   * @param path file name
+   * @return raid information
+   * @throws IOException
+   */
+  protected FileInfo getFileInfo(String path) throws IOException {
+    for (Codec c : Codec.getCodecs()) {
+      if (path.startsWith(c.tmpHarDirectoryPS)) {
+        return new FileInfo(FileType.HAR_TEMP_PARITY, c);
+      }
+      if (path.startsWith(c.tmpParityDirectoryPS)) {
+        return new FileInfo(FileType.TEMP_PARITY, c);
+      }
+      if (path.startsWith(c.parityDirectoryPS)) {
+        return new FileInfo(FileType.PARITY, c);
+      }
+      NameWithINode ni = getParityFile(c, path);
+      if (ni != null) {
+        return new FileInfo(FileType.SOURCE, c, ni.name, ni.inode);
+      }
     }
-    if (path.startsWith(raidrsHarTempPrefix + Path.SEPARATOR)) {
-      return FileType.RS_HAR_TEMP_PARITY;
-    }
-    if (path.startsWith(raidTempPrefix + Path.SEPARATOR)) {
-      return FileType.XOR_TEMP_PARITY;
-    }
-    if (path.startsWith(raidrsTempPrefix + Path.SEPARATOR)) {
-      return FileType.RS_TEMP_PARITY;
-    }
-    if (path.startsWith(xorPrefix + Path.SEPARATOR)) {
-      return FileType.XOR_PARITY;
-    }
-    if (path.startsWith(rsPrefix + Path.SEPARATOR)) {
-      return FileType.RS_PARITY;
-    }
-    String parity = getParityFile(path);
-    if (parity == null) {
-      return FileType.NOT_RAID;
-    }
-    if (parity.startsWith(xorPrefix + Path.SEPARATOR)) {
-      return FileType.XOR_SOURCE;
-    }
-    if (parity.startsWith(rsPrefix + Path.SEPARATOR)) {
-      return FileType.RS_SOURCE;
-    }
-    return FileType.NOT_RAID;
+    return new FileInfo(FileType.NOT_RAID, null);
   }
 }

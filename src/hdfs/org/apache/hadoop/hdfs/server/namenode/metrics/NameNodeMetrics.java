@@ -114,12 +114,29 @@ public class NameNodeMetrics implements Updater {
                           new MetricsTimeVaryingLong("numGetContentSummary", registry, 
                           "The number of get content summary operations");
 
+    // hftp related metrics
+    public MetricsTimeVaryingLong numFileDataServletDoGet =
+        new MetricsTimeVaryingLong("numFileDataServletDoGet", registry);
+    public MetricsTimeVaryingLong numListPathsServletDoGet =
+        new MetricsTimeVaryingLong("numListPathsServletDoGet", registry);
+    public MetricsTimeVaryingLong numRedirectServletDoGet =
+        new MetricsTimeVaryingLong("numRedirectServletDoGet", registry);
+    public MetricsTimeVaryingLong numFsckDoGet =
+        new MetricsTimeVaryingLong("numFsckDoGet", registry);
+    
     public MetricsTimeVaryingRate transactions =
                     new MetricsTimeVaryingRate("Transactions", registry, "Journal Transaction");
     public MetricsTimeVaryingRate syncs =
                     new MetricsTimeVaryingRate("Syncs", registry, "Journal Sync");
     public MetricsTimeVaryingLong transactionsBatchedInSync =
                     new MetricsTimeVaryingLong("JournalTransactionsBatchedInSync", registry, "Journal Transactions Batched In Sync");
+    public MetricsLongValue currentTxnId =
+                    new MetricsLongValue("CurrentTxId", registry, "Last Written Transaction Id");
+    public MetricsTimeVaryingLong rollEditLogTime =
+                    new MetricsTimeVaryingLong("RollEditLogTime", registry, "Roll Edit Log Time");
+    public MetricsTimeVaryingLong rollFsImageTime =
+                    new MetricsTimeVaryingLong("RollFSImageTime", registry, "Roll FSImage Time");
+    
     public MetricsTimeVaryingRate blockReport =
                     new MetricsTimeVaryingRate("blockReport", registry, "Block Report");
     public MetricsIntValue safeModeTime =
@@ -132,9 +149,14 @@ public class NameNodeMetrics implements Updater {
                     new MetricsIntValue("numBufferedTransactions", registry);
     public MetricsLongValue numOverReplicatedBlocks =
                     new MetricsLongValue("numOverReplicatedBlocks", registry);
-    public MetricsTimeVaryingLong numFsckOperations =
-                    new MetricsTimeVaryingLong("numFsckOperations", registry);
-
+    public MetricsIntValue imagesFailed = 
+                    new MetricsIntValue("imagesFailed", registry, 
+                        "Number of failed image directories");
+    public MetricsIntValue journalsFailed = 
+                    new MetricsIntValue("journalsFailed", registry, 
+                        "Number of failed journals");
+    public MetricsLongValue tsLastEditsRoll = new MetricsLongValue(
+        "tsLastEditsRoll", registry, "Timestamp of last edits rolling");
       
     public NameNodeMetrics(Configuration conf, NameNode nameNode) {
       String sessionId = conf.get("session.id");

@@ -170,7 +170,7 @@ public class LightWeightLinkedSet<T> extends LightWeightHashSet<T> {
   /**
    * Remove and return first n elements on the linked list of all elements.
    *
-   * @return first element
+   * @return list of elements
    */
   public List<T> pollN(int n) {
     if (n >= size) {
@@ -178,13 +178,25 @@ public class LightWeightLinkedSet<T> extends LightWeightHashSet<T> {
       return pollAll();
     }
     List<T> retList = new ArrayList<T>(n);
+    pollNToList(n, retList);
+    return retList;
+  }
+  
+  /**
+   * Remove and return first n elements on the linked list of all elements.
+   * Put elements into the given list.
+   */
+  public void pollNToList(int n, List<T> retList) {
+    if (n >= size) {
+      // if we need to remove all elements then do fast polling
+      pollAllToList(retList);
+    }
     while (n-- > 0 && head != null) {
       T curr = head.element;
       this.removeElem(curr);
       retList.add(curr);
     }
     shrinkIfNecessary();
-    return retList;
   }
 
   /**
@@ -194,12 +206,23 @@ public class LightWeightLinkedSet<T> extends LightWeightHashSet<T> {
    */
   public List<T> pollAll() {
     List<T> retList = new ArrayList<T>(size);
+    pollAllToList(retList);
+    return retList;
+  }
+  
+  /**
+   * Remove all elements from the set and return them in order. Traverse the
+   * link list, don't worry about hashtable - faster version of the parent
+   * method.
+   * 
+   * @param retList put elements into the given list
+   */
+  public void pollAllToList(List<T> retList) {
     while (head != null) {
       retList.add(head.element);
       head = head.after;
     }
     this.clear();
-    return retList;
   }
 
   @Override

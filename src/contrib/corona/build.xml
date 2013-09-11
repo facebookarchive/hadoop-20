@@ -117,6 +117,7 @@
      deprecation="${javac.deprecation}">
      <classpath refid="contrib-classpath"/>
     </javac>
+    <copy file="${src.dir}/error.xml" todir="${build.classes}"/>
   </target>
 
   <target name="copy.libs">
@@ -134,7 +135,6 @@
     <jar
       jarfile="${build.dir}/hadoop-${version}-${name}.jar"
       basedir="${build.classes}">
-      <zipfileset dir="${build.webapp}" prefix="webapps"/>
     </jar>
 
   </target>

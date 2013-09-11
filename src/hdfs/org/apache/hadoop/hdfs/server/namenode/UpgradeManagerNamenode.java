@@ -59,7 +59,7 @@ class UpgradeManagerNamenode extends UpgradeManager {
       initializeUpgrade();
       if(!upgradeState) return false;
       // write new upgrade state into disk
-      namesystem.getFSImage().writeAll();
+      namesystem.getFSImage().storage.writeAll();
     }
     assert currentUpgrades != null : "currentUpgrades is null";
     this.broadcastCommand = currentUpgrades.first().startUpgrade();
@@ -108,7 +108,7 @@ class UpgradeManagerNamenode extends UpgradeManager {
   public synchronized void completeUpgrade() throws IOException {
     // set and write new upgrade state into disk
     setUpgradeState(false, FSConstants.LAYOUT_VERSION);
-    namesystem.getFSImage().writeAll();
+    namesystem.getFSImage().storage.writeAll();
     currentUpgrades = null;
     broadcastCommand = null;
     namesystem.leaveSafeMode(false);

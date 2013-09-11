@@ -36,6 +36,12 @@ class FSPermissionChecker extends PermissionChecker {
     super(fsOwner, supergroup);
   }
 
+  FSPermissionChecker(String fsOwner, String supergroup, 
+      UserGroupInformation ugi
+  ) throws AccessControlException{
+    super(fsOwner, supergroup, ugi);
+  }
+
   /**
    * Check whether current user have permissions to access the path.
    * Traverse is always checked.
@@ -154,6 +160,7 @@ class FSPermissionChecker extends PermissionChecker {
       if (mode.getOtherAction().implies(access)) { return; }
     }
     throw new AccessControlException("Permission denied: user=" + user
+        + " groups=" + getGroups()
         + ", access=" + access + ", inode=" + inode);
   }
 }

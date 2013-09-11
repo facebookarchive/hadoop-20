@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+
+<configuration>
+
+<!-- Codec specifications -->
+<property>
+  <name>raid.codecs.json</name>
+    <value>[
+{
+"id" : "rs",
+"parity_dir" : "/raidrs",
+"stripe_length" : 10,
+"parity_length" : 4,
+"priority" : 200,
+"erasure_code" : "org.apache.hadoop.raid.ReedSolomonCode",
+"description" : "ReedSolomonCode code",
+"simulate_block_fix": true
+},
+{
+"id" : "xor",
+"parity_dir" : "/raid",
+"stripe_length" : 10,
+"parity_length" : 1,
+"priority" : 100,
+"erasure_code" : "org.apache.hadoop.raid.XORCode",
+"description" : "XORCode code",
+"simulate_block_fix": true
+},
+{
+"id" : "dir-rs",
+"parity_dir" : "/dir-raidrs",
+"stripe_length" : 10,
+"parity_length" : 4,
+"priority" : 400,
+"erasure_code" : "org.apache.hadoop.raid.ReedSolomonCode",
+"description" : "Directory ReedSolomonCode code",
+"simulate_block_fix": false,
+"dir_raid" : true
+},
+{
+"id" : "dir-xor",
+"parity_dir" : "/dir-raid",
+"stripe_length" : 10,
+"parity_length" : 1,
+"priority" : 300,
+"erasure_code" : "org.apache.hadoop.raid.XORCode",
+"description" : "Directory XORCode code",
+"simulate_block_fix": false,
+"dir_raid" : true
+}
+]</value>
+  <description>JSon string that contains all Raid codecs</description>
+</property>
+
+</configuration>

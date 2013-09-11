@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
@@ -31,6 +32,7 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.protocol.LocatedBlocksWithMetaInfo;
 import org.apache.hadoop.hdfs.protocol.VersionedLocatedBlocks;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
+import org.apache.hadoop.hdfs.server.namenode.FSImageFormat.FSImageLoadingContext;
 import org.apache.hadoop.hdfs.server.namenode.FSNamesystem.BlockMetaInfoType;
 import org.apache.hadoop.util.StringUtils;
 
@@ -44,7 +46,17 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
   protected INodeDirectory parent;
   protected long modificationTime;
   protected volatile long accessTime;
-
+  
+  public static enum INodeType {
+    REGULAR_INODE((byte) 1),
+    HARDLINKED_INODE((byte) 2);
+    
+    public final byte type;
+    INodeType(byte type) {
+      this.type = type;
+    }
+  }
+  
   /** Simple wrapper for two counters : 
    *  nsCount (namespace consumed) and dsCount (diskspace consumed).
    */
@@ -238,7 +250,7 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * @return local file name
    */
   String getLocalName() {
-    return DFSUtil.bytes2String(name);
+    return name==null? null: DFSUtil.bytes2String(name);
   }
 
   /**
@@ -263,13 +275,13 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
     this.name = name;
   }
 
-  /** {@inheritDoc} */
-  public String getFullPathName() {
+  @Override
+  public String getFullPathName() throws IOException {
     // Get the full path name of this inode.
     return FSDirectory.getFullPathName(this);
   }
 
-  /** {@inheritDoc} */
+  @Override
   public String toString() {
     return "\"" + getLocalName() + "\":" + getPermissionStatus();
   }
@@ -304,7 +316,6 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * Always set the last modification time of inode.
    */
   void setModificationTimeForce(long modtime) {
-    assert !isDirectory();
     this.modificationTime = modtime;
   }
 
@@ -328,6 +339,10 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    */
   boolean isUnderConstruction() {
     return false;
+  }
+  
+  public int getStartPosForQuoteUpdate() {
+    return 0;
   }
 
   /**
@@ -454,6 +469,9 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
    * @param nsQuota namespace quota
    * @param dsQuota disk quota
    * @param preferredBlockSize block size
+   * @param inodeType The INode type
+   * @param hardLinkID The HardLinkID
+   * @param context The context when loading the fsImage
    * @return an inode
    */
   static INode newINode(PermissionStatus permissions,
@@ -463,17 +481,46 @@ public abstract class INode implements Comparable<byte[]>, FSInodeInfo {
                         long atime,
                         long nsQuota,
                         long dsQuota,
-                        long preferredBlockSize) {
-    if (blocks == null) { // directory
-      if (nsQuota >= 0 || dsQuota >= 0) { // directory with quota
-        return new INodeDirectoryWithQuota(
-            permissions, modificationTime, nsQuota, dsQuota);
+                        long preferredBlockSize,
+                        byte inodeType,
+                        long hardLinkID,
+                        FSImageLoadingContext context) {
+    if (inodeType == INode.INodeType.REGULAR_INODE.type) {
+      // Process the regular INode file
+      if (blocks == null) { // directory
+        if (nsQuota >= 0 || dsQuota >= 0) { // directory with quota
+          return new INodeDirectoryWithQuota(
+              permissions, modificationTime, nsQuota, dsQuota);
+        }
+        // regular directory
+        return new INodeDirectory(permissions, modificationTime);
       }
-      // regular directory
-      return new INodeDirectory(permissions, modificationTime);
+      // file
+      return new INodeFile(permissions, blocks, replication,
+                                modificationTime, atime, preferredBlockSize);
+    } else if (inodeType == INode.INodeType.HARDLINKED_INODE.type) {
+      // Process the HardLink INode file
+      // create and register the hard link file info  
+      HardLinkFileInfo hardLinkFileInfo =   
+        INodeHardLinkFile.loadHardLinkFileInfo(hardLinkID, context); 
+      
+      // Reuse the same blocks for the hardlinked files
+      if (hardLinkFileInfo.getReferenceCnt() > 0) {
+        blocks = hardLinkFileInfo.getHardLinkedFile(0).getBlocks();
+      }
+      
+      // Create the INodeHardLinkFile and increment the reference cnt
+      INodeHardLinkFile hardLinkFile = new INodeHardLinkFile(permissions, 
+                                                            blocks, 
+                                                            replication,  
+                                                            modificationTime, 
+                                                            atime,  
+                                                            preferredBlockSize,   
+                                                            hardLinkFileInfo);
+      hardLinkFile.incReferenceCnt();
+      return hardLinkFile;
+    } else {
+      throw new IllegalArgumentException("Invalide inode type: " + inodeType);
     }
-    // file
-    return new INodeFile(permissions, blocks, replication,
-                              modificationTime, atime, preferredBlockSize);
   }
 }

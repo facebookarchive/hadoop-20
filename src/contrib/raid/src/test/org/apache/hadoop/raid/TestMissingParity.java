@@ -17,11 +17,16 @@
  */
 package org.apache.hadoop.raid;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.FileWriter;
+import java.io.PrintStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.io.PrintWriter;
 import java.net.URI;
 import java.util.Set;
 import java.util.HashSet;
@@ -81,7 +86,7 @@ public class TestMissingParity extends TestCase {
   FileSystem fileSys = null;
   String jobTrackerName = null;
   Path root = null;
-  Set<Path> allExpectedMissingFiles = null;
+  Set<String> allExpectedMissingFiles = null;
 
   private void createClusters(boolean local) throws Exception {
     if (System.getProperty("hadoop.log.dir") == null) {
@@ -92,9 +97,10 @@ public class TestMissingParity extends TestCase {
     new File(TEST_DIR).mkdirs(); // Make sure data directory exists
     conf = new Configuration();
     conf.set("raid.config.file", CONFIG_FILE);
-    conf.set(RaidNode.RAID_LOCATION_KEY, "/destraid");
     conf.setBoolean("raid.config.reload", true);
     conf.setLong("raid.config.reload.interval", RELOAD_INTERVAL);
+
+    Utils.loadTestCodecs(conf);
 
     // scan all policies once every 100 second
     conf.setLong("raid.policy.rescan.interval", 100 * 1000L);
@@ -119,8 +125,9 @@ public class TestMissingParity extends TestCase {
     dfs = new MiniDFSCluster(conf, 6, true, null);
     dfs.waitActive();
     fileSys = dfs.getFileSystem();
-    root = RaidNode.getDestinationPath(ErasureCodeType.XOR, conf).getParent();
-    Path raidRoot = RaidNode.getDestinationPath(ErasureCodeType.XOR, conf);
+
+    Path raidRoot = new Path(Codec.getCodec("xor").parityDirectory);
+    root = raidRoot.getParent();
     String file1 = "/p1/f1.txt";
     String file2 = "/p1/f2.txt";
     String file3 = "/p2/f3.txt";
@@ -130,10 +137,10 @@ public class TestMissingParity extends TestCase {
     Path fPath3 = new Path(root + file3);
     Path fPath4 = new Path(root + file4);
     Path rPath3 = new Path(raidRoot + file3);
-    allExpectedMissingFiles = new HashSet<Path>();
-    allExpectedMissingFiles.add(fPath2);
-    allExpectedMissingFiles.add(fPath3);
-    allExpectedMissingFiles.add(fPath4);
+    allExpectedMissingFiles = new HashSet<String>();
+    allExpectedMissingFiles.add(fPath2.toUri().getPath());
+    allExpectedMissingFiles.add(fPath3.toUri().getPath());
+    allExpectedMissingFiles.add(fPath4.toUri().getPath());
     fileSys.create(fPath1, (short)3);
     fileSys.create(fPath2, (short)2);
     fileSys.create(fPath3, (short)2);
@@ -157,7 +164,16 @@ public class TestMissingParity extends TestCase {
       System.out.println("Test unraided files with < 3 replication");
       createClusters(true);
       MissingParityFiles mf1 = new MissingParityFiles(conf);
-      Set<Path> missingFiles = mf1.findMissingParityFiles(root);
+      ByteArrayOutputStream bout = new ByteArrayOutputStream();
+      PrintStream ps = new PrintStream(bout, true);
+      mf1.findMissingParityFiles(root, ps);
+      ByteArrayInputStream bin = new ByteArrayInputStream(bout.toByteArray());
+      BufferedReader r = new BufferedReader(new InputStreamReader(bin));
+      String l = null;
+      Set<String> missingFiles = new HashSet<String>();
+      while ((l = r.readLine()) != null) {
+        missingFiles.add(l);
+      }
       System.out.println("Missing files count = " + missingFiles.size());
       assertEquals(allExpectedMissingFiles, missingFiles);
     } catch (Exception e) {

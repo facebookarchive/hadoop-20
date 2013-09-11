@@ -17,12 +17,11 @@
  */
 package org.apache.hadoop.hdfs.util;
 
-import java.io.PrintStream;
+import java.io.PrintWriter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.ConcurrentModificationException;
 import java.util.Iterator;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.NoSuchElementException;
 
@@ -493,7 +492,7 @@ public class LightWeightHashSet<T> implements Collection<T> {
   }
 
   /** Print detailed information of this object. */
-  public void printDetails(final PrintStream out) {
+  public void printDetails(final PrintWriter out) {
     out.print(this + ", entries = [");
     for (int i = 0; i < entries.length; i++) {
       if (entries[i] != null) {

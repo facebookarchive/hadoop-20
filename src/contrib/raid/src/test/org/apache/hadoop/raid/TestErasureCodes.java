@@ -17,9 +17,12 @@
  */
 package org.apache.hadoop.raid;
 
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Random;
 import java.util.Set;
+
+import org.junit.Assert;
 
 import junit.framework.TestCase;
 
@@ -129,6 +132,64 @@ public class TestErasureCodes extends TestCase {
     assertTrue("Decode failed", java.util.Arrays.equals(copy, message[0]));
   }
 
+  public void testRSEncodeDecodeBulk() {
+    // verify the production size.
+    verifyRSEncodeDecodeBulk(10, 4);
+    
+    // verify a test size
+    verifyRSEncodeDecodeBulk(3, 3);
+  }
+  
+  public void verifyRSEncodeDecodeBulk(int stripeSize, int paritySize) {
+    ReedSolomonCode rsCode = new ReedSolomonCode(stripeSize, paritySize);
+    int symbolMax = (int) Math.pow(2, rsCode.symbolSize());
+    byte[][] message = new byte[stripeSize][];
+    byte[][] cpMessage = new byte[stripeSize][];
+    int bufsize = 1024 * 1024 * 10;
+    for (int i = 0; i < stripeSize; i++) {
+      message[i] = new byte[bufsize];
+      cpMessage[i] = new byte[bufsize];
+      for (int j = 0; j < bufsize; j++) {
+        message[i][j] = (byte) RAND.nextInt(symbolMax);
+        cpMessage[i][j] = message[i][j];
+      }
+    }
+    byte[][] parity = new byte[paritySize][];
+    for (int i = 0; i < paritySize; i++) {
+      parity[i] = new byte[bufsize];
+    }
+    
+    // encode.
+    rsCode.encodeBulk(cpMessage, parity);
+    
+    int erasedLocation = RAND.nextInt(stripeSize);
+    byte[] copy = new byte[bufsize];
+    for (int i = 0; i < bufsize; i++) {
+      copy[i] = message[erasedLocation][i];
+      message[erasedLocation][i] = (byte) 0;
+    }
+    
+    // test decode
+    byte[][] data = new byte[stripeSize + paritySize][];
+    for (int i = 0; i < paritySize; i++) {
+      data[i] = new byte[bufsize];
+      for (int j = 0; j < bufsize; j++) {
+        data[i][j] = parity[i][j];
+      }
+    }
+    
+    for (int i = 0; i< stripeSize; i++) {
+      data[i + paritySize] = new byte[bufsize];
+      for (int j = 0; j < bufsize; j++) {
+        data[i + paritySize][j] = message[i][j];
+      }
+    }
+    byte[][] writeBufs = new byte[1][];
+    writeBufs[0] = new byte[bufsize];
+    rsCode.decodeBulk(data, writeBufs, new int[] {erasedLocation + paritySize});
+    assertTrue("Decode failed", Arrays.equals(copy, writeBufs[0]));
+  }
+  
   public void testXorPerformance() {
     java.util.Random RAND = new java.util.Random();
     int stripeSize = 10;

@@ -41,6 +41,7 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
 import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
+import org.apache.hadoop.hdfs.server.namenode.FSImageTestUtil;
 
 /**
  * Test function of OfflineImageViewer by:
@@ -52,22 +53,45 @@ import org.apache.hadoop.hdfs.protocol.FSConstants.SafeModeAction;
  *     file that ends suddenly.
  */
 public class TestOfflineImageViewer extends TestCase {
-  private static final int NUM_DIRS = 3;
-  private static final int FILES_PER_DIR = 4;
+  private static final int NUM_DIRS = 10;
+  private static final int FILES_PER_DIR = 5;
+
+  private class FileStatusWithHardLink {
+    public FileStatus stat;
+    public long hardLinkId;
+
+    public FileStatusWithHardLink(FileStatus stat, long hardlinkId) {
+      this.stat = stat;
+      this.hardLinkId = hardlinkId;
+    }
+  }
 
   // Elements of lines of ls-file output to be compared to FileStatus instance
   private class LsElements {
     public String perms;
     public int replication;
+    public long hardlinkId;
     public String username;
     public String groupname;
     public long filesize;
     public char dir; // d if dir, - otherwise
+    
+    public boolean equals(Object obj) {
+      if (!(obj instanceof LsElements))
+        return false;
+      LsElements o = (LsElements) obj;
+      return perms.equals(o.perms) &&
+          replication == o.replication &&
+          hardlinkId == o.hardlinkId &&
+          username.equals(o.username) &&
+          groupname.equals(o.groupname) &&
+          filesize == o.filesize &&
+          dir == o.dir;
+    }
   }
   
   // namespace as written to dfs, to be compared with viewer's output
-  final HashMap<String, FileStatus> writtenFiles 
-                                           = new HashMap<String, FileStatus>();
+  final HashMap<String, FileStatusWithHardLink> writtenFiles = new HashMap<String, FileStatusWithHardLink>();
   
   
   private static String ROOT = System.getProperty("test.build.data",
@@ -83,6 +107,7 @@ public class TestOfflineImageViewer extends TestCase {
     
     // Tests:
     outputOfLSVisitor(originalFsimage);
+    outputOfLSVisitorPartitioned(originalFsimage);
     outputOfFileDistributionVisitor(originalFsimage);
     
     unsupportedFSLayoutVersion(originalFsimage);
@@ -111,15 +136,27 @@ public class TestOfflineImageViewer extends TestCase {
       // Create a reasonable namespace 
       for(int i = 0; i < NUM_DIRS; i++)  {
         Path dir = new Path("/dir" + i);
+        Path hardLinkDstDir = new Path("/hardLinkDstDir" + i);
         hdfs.mkdirs(dir);
-        writtenFiles.put(dir.toString(), pathToFileEntry(hdfs, dir.toString()));
+        writtenFiles.put(dir.toString(),
+            pathToFileEntry(hdfs, dir.toString(), cluster));
+        
+        hdfs.mkdirs(hardLinkDstDir);
+        writtenFiles.put(hardLinkDstDir.toString(),
+            pathToFileEntry(hdfs, hardLinkDstDir.toString(), cluster));
+
         for(int j = 0; j < FILES_PER_DIR; j++) {
           Path file = new Path(dir, "file" + j);
           FSDataOutputStream o = hdfs.create(file);
           o.write(new byte[ filesize++ ]);
           o.close();
           
-          writtenFiles.put(file.toString(), pathToFileEntry(hdfs, file.toString()));
+          Path dstFile = new Path(hardLinkDstDir, "hardlinkDstFile" + j);
+          hdfs.hardLink(file, dstFile);
+          writtenFiles.put(dstFile.toString(),
+              pathToFileEntry(hdfs, dstFile.toString(), cluster));
+          writtenFiles.put(file.toString(),
+              pathToFileEntry(hdfs, file.toString(), cluster));
         }
       }
 
@@ -129,7 +166,7 @@ public class TestOfflineImageViewer extends TestCase {
       
       // Determine location of fsimage file
       File [] files = cluster.getNameDirs().toArray(new File[0]);
-      orig =  new File(files[0].getPath(), "current/fsimage");
+      orig = FSImageTestUtil.findNewestImageFile(files[0].getPath() + "/current/");
       
       if (!orig.exists()) {
         fail("Didn't generate or can't find fsimage.");
@@ -143,30 +180,94 @@ public class TestOfflineImageViewer extends TestCase {
   
   // Convenience method to generate a file status from file system for 
   // later comparison
-  private FileStatus pathToFileEntry(FileSystem hdfs, String file) 
+  private FileStatusWithHardLink pathToFileEntry(FileSystem hdfs, String file,
+      MiniDFSCluster cluster)
         throws IOException {
-    return hdfs.getFileStatus(new Path(file));
+    long hardlinkId = -1;
+    try {
+      hardlinkId = cluster.getNameNode().namesystem.dir.getHardLinkId(file);
+    } catch (IOException ie) {
+      System.out.println("IOException for file : " + file + " " + ie);
+    }
+    return new FileStatusWithHardLink(hdfs.getFileStatus(new Path(file)),
+        hardlinkId);
   }
 
   // Verify that we can correctly generate an ls-style output for a valid 
   // fsimage
+  @SuppressWarnings("unchecked")
   private void outputOfLSVisitor(File originalFsimage) throws IOException {
     File testFile = new File(ROOT, "/basicCheck");
     File outputFile = new File(ROOT, "/basicCheckOutput");
-    
+    HashMap<String, FileStatusWithHardLink> tempWritten = (HashMap<String, FileStatusWithHardLink>) writtenFiles
+        .clone();
+
     try {
       copyFile(originalFsimage, testFile);
       
-      ImageVisitor v = new LsImageVisitor(outputFile.getPath(), true);
+      ImageVisitor v = new LsImageVisitor(outputFile.getPath(), true, 1, true);
       OfflineImageViewer oiv = new OfflineImageViewer(testFile.getPath(), v, false);
 
       oiv.go();
       
       HashMap<String, LsElements> fileOutput = readLsfile(outputFile);
       
-      compareNamespaces(writtenFiles, fileOutput);
+      compareNamespaces(tempWritten, fileOutput);
     } finally {
       if(testFile.exists()) testFile.delete();
+      if(outputFile.exists()) outputFile.delete();
+    }
+    System.out.println("Correctly generated ls-style output.");
+  }
+  
+  @SuppressWarnings("unchecked")
+  private void outputOfLSVisitorPartitioned(File originalFsimage) throws IOException {
+    File testFile = new File(ROOT, "/partCheck");
+    File outputFile = new File(ROOT, "/partCheckOutput");
+    HashMap<String, FileStatusWithHardLink> tempWritten = (HashMap<String, FileStatusWithHardLink>) writtenFiles
+        .clone();
+    int parts = 10;
+    
+    try {
+      copyFile(originalFsimage, testFile);
+      
+      ImageVisitor v = new LsImageVisitor(outputFile.getPath(), true, parts, true);
+      OfflineImageViewer oiv = new OfflineImageViewer(testFile.getPath(), v, false);
+      oiv.go();
+      
+      HashMap<String, LsElements> fileOutputParts = new HashMap<String, LsElements>();      
+      for (int i = 0; i < parts; i++) {
+        File partFile = new File(ROOT, "/partCheckOutput"
+            + TextWriterImageVisitor.PART_SUFFIX + i);
+        fileOutputParts.putAll(readLsfile(partFile));
+      }
+      
+      compareNamespaces(tempWritten, fileOutputParts);
+      
+      // compare that the output is the same as for one part
+      v = new LsImageVisitor(outputFile.getPath(), true, 1, true);
+      oiv = new OfflineImageViewer(testFile.getPath(), v, false);
+      oiv.go();
+      // if number of parts is 1, the output file name does not change
+      assertTrue(outputFile.exists());
+      
+      HashMap<String, LsElements> fileOutput = readLsfile(outputFile);
+      assertEquals(fileOutput, fileOutputParts);
+      
+      try {
+        v = new LsImageVisitor(outputFile.getPath(), true, -1, true);
+        fail("Should fail because the number of parts is < 1");
+      } catch(Exception e) { }
+           
+    } finally {
+      if(testFile.exists()) testFile.delete();
+      for (int i = 0; i < parts; i++) {
+        File partFile = new File(ROOT, "/partCheckOutput"
+            + TextWriterImageVisitor.PART_SUFFIX + i);
+        if(partFile.exists()) {
+          partFile.delete();
+        }
+      }
       if(outputFile.exists()) outputFile.delete();
     }
     System.out.println("Correctly generated ls-style output.");
@@ -223,7 +324,8 @@ public class TestOfflineImageViewer extends TestCase {
   }
   
   // Test that our ls file has all the same compenents of the original namespace
-  private void compareNamespaces(HashMap<String, FileStatus> written,
+  private void compareNamespaces(
+      HashMap<String, FileStatusWithHardLink> written,
       HashMap<String, LsElements> fileOutput) {
     assertEquals( "Should be the same number of files in both, plus one for root"
             + " in fileoutput", fileOutput.keySet().size(), 
@@ -249,9 +351,16 @@ public class TestOfflineImageViewer extends TestCase {
   
   // Compare two files as listed in the original namespace FileStatus and
   // the output of the ls file from the image processor
-  private void compareFiles(FileStatus fs, LsElements elements) {
-    assertEquals("directory listed as such",  
-                 fs.isDir() ? 'd' : '-', elements.dir);
+  private void compareFiles(FileStatusWithHardLink fsh, LsElements elements) {
+    FileStatus fs = fsh.stat;
+    char type = '-';
+    if (fs.isDir()) {
+      type = 'd';
+    } else if (fsh.hardLinkId != -1) {
+      type = 'h';
+    }
+    assertEquals("file type not equal for : " + fs.getPath(), type,
+        elements.dir);
     assertEquals("perms string equal", 
                                 fs.getPermission().toString(), elements.perms);
     assertEquals("replication equal", fs.getReplication(), elements.replication);
@@ -262,6 +371,7 @@ public class TestOfflineImageViewer extends TestCase {
 
   // Read the contents of the file created by the Ls processor
   private HashMap<String, LsElements> readLsfile(File lsFile) throws IOException {
+    assertTrue(lsFile.exists());
     BufferedReader br = new BufferedReader(new FileReader(lsFile));
     String line = null;
     HashMap<String, LsElements> fileContents = new HashMap<String, LsElements>();
@@ -277,7 +387,7 @@ public class TestOfflineImageViewer extends TestCase {
   private void readLsLine(String line, HashMap<String, LsElements> fileContents) {
     String elements [] = line.split("\\s+");
     
-    assertEquals("Not enough elements in ls output", 8, elements.length);
+    assertEquals("Not enough elements in ls output", 9, elements.length);
     
     LsElements lsLine = new LsElements();
     
@@ -285,12 +395,14 @@ public class TestOfflineImageViewer extends TestCase {
     lsLine.perms = elements[0].substring(1);
     lsLine.replication = elements[1].equals("-") 
                                              ? 0 : Integer.valueOf(elements[1]);
-    lsLine.username = elements[2];
-    lsLine.groupname = elements[3];
-    lsLine.filesize = Long.valueOf(elements[4]);
+    lsLine.hardlinkId = elements[2].equals("-") ? -1 : Long
+        .valueOf(elements[2]);
+    lsLine.username = elements[3];
+    lsLine.groupname = elements[4];
+    lsLine.filesize = Long.valueOf(elements[5]);
     // skipping date and time 
     
-    String path = elements[7];
+    String path = elements[8];
     
     // Check that each file in the ls output was listed once
     assertFalse("LS file had duplicate file entries", 
@@ -390,6 +502,6 @@ public class TestOfflineImageViewer extends TestCase {
       if(testFile.exists()) testFile.delete();
       if(outputFile.exists()) outputFile.delete();
     }
-    assertEquals(totalFiles, NUM_DIRS * FILES_PER_DIR);
+    assertEquals(totalFiles, 2 * NUM_DIRS * FILES_PER_DIR);
   }
 }

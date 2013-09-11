@@ -5,6 +5,7 @@ import junit.framework.TestCase;
 
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.RandomAccessFile;
@@ -20,8 +21,8 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hdfs.DFSClient.DFSInputStream;
-import org.apache.hadoop.hdfs.DFSClient.DFSOutputStream;
+import org.apache.hadoop.hdfs.DFSInputStream;
+import org.apache.hadoop.hdfs.DFSOutputStream;
 import org.apache.hadoop.hdfs.MiniDFSCluster.DataNodeProperties;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.ClientProtocol;
@@ -74,7 +75,7 @@ public class TestDFSClientUpdateNameNodeSignature extends TestCase {
     ((Log4JLogger)FSNamesystem.LOG).getLogger().setLevel(Level.ALL);
     ((Log4JLogger)NameNode.LOG).getLogger().setLevel(Level.ALL);
   }
-  
+ 
   MiniDFSCluster cluster;
   @Override
   protected void setUp() throws Exception{
@@ -182,5 +183,19 @@ public class TestDFSClientUpdateNameNodeSignature extends TestCase {
     // Since we didn't change method list of name-node, the fingerprint
     // got from the new proxy should be the same as the previous one.
     TestCase.assertNotSame(namenode1, client.namenode);
+  }
+  
+  /**
+   * Test when file not exist, client open should get FileNotFoundException
+   */
+  public void testClientOpenFileNotExist() throws IOException {
+    InetSocketAddress addr = cluster.getNameNode().getNameNodeDNAddress();
+    DFSClient client = new DFSClient(addr, cluster.getNameNode().getConf());
+    try {
+      client.open("/testFileNotFound.txt");
+      fail("Expected exception not thrown");
+    } catch (IOException e) {
+      TestCase.assertTrue(e instanceof FileNotFoundException);
+    }
   }
 }

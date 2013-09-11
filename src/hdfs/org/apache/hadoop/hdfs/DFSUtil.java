@@ -18,17 +18,28 @@
 
 package org.apache.hadoop.hdfs;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.SocketTimeoutException;
+import java.net.URI;
+import java.net.URL;
+import java.net.URLConnection;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Random;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Comparator;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.BlockAndLocation;
 import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FilterFileSystem;
@@ -46,6 +57,18 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.net.NodeBase;
 
 public class DFSUtil {
+  private static final ThreadLocal<Random> RANDOM = new ThreadLocal<Random>() {
+    @Override
+    protected Random initialValue() {
+      return new Random();
+    }
+  };
+  
+  /** @return a pseudo random number generator. */
+  public static Random getRandom() {
+    return RANDOM.get();
+  }
+  
   /**
    * Compartor for sorting DataNodeInfo[] based on decommissioned states.
    * Decommissioned nodes are moved to the end of the array on sorting with
@@ -55,8 +78,14 @@ public class DFSUtil {
     new Comparator<DatanodeInfo>() {
     @Override
     public int compare(DatanodeInfo a, DatanodeInfo b) {
-      return a.isDecommissioned() == b.isDecommissioned() ? 0 :
-        a.isDecommissioned() ? 1 : -1;
+      if (a.isDecommissioned() != b.isDecommissioned()) {
+        return a.isDecommissioned() ? 1 : -1;
+      } else if (a.isSuspectFail() != b.isSuspectFail()) {
+        return a.isSuspectFail() ? 1 : -1;
+      } else {
+        return 0;
+      }
+      
     }
   };
   
@@ -203,6 +232,33 @@ public class DFSUtil {
     }
     return result;
   }
+  
+  /**
+   * An implementation of the String.split(String);
+   */
+  public static String[] split(String str, char separator) {
+    final int len;
+    if (str == null 
+        || ((len = str.length()) == 0)) {
+      return null;
+    }
+
+    List<String> componentList = new ArrayList<String>();
+    int startIndex = 0;
+
+    for (int i = 0; i < len; i++) {
+      if (str.charAt(i) == separator) {
+        componentList.add(str.substring(startIndex, i));
+        startIndex = i + 1;
+      }
+    }
+
+    if (str.charAt(len - 1) != separator) {
+      componentList.add(str.substring(startIndex, len));
+    }
+
+    return componentList.toArray(new String[componentList.size()]);
+  }
 
   public static byte[][] splitAndGetPathComponents(String str) {
     try {
@@ -276,7 +332,7 @@ public class DFSUtil {
     return str.substring(startIndex, endIndex).getBytes(utf8charsetName);
   }
   
-  /**
+   /**
    * Convert a LocatedBlocks to BlockLocations[]
    * @param blocks a LocatedBlocks
    * @return an array of BlockLocations
@@ -312,6 +368,48 @@ public class DFSUtil {
     }
     return blkLocations;
   }
+
+  
+  /**
+  * Convert a LocatedBlocks to BlockAndLocations[]
+  * @param blocks a LocatedBlocks
+  * @return an array of BlockLocations
+  */
+ public static BlockAndLocation[] locatedBlocks2BlockLocations(
+     LocatedBlocks blocks) {
+   if (blocks == null) {
+     return new BlockAndLocation[0];
+   }
+   int nrBlocks = blocks.locatedBlockCount();
+   BlockAndLocation[] blkLocations = new BlockAndLocation[nrBlocks];
+   if (nrBlocks == 0) {
+     return blkLocations;
+   }
+   int idx = 0;
+   for (LocatedBlock blk : blocks.getLocatedBlocks()) {
+     assert idx < nrBlocks : "Incorrect index";
+     DatanodeInfo[] locations = blk.getLocations();
+     String[] hosts = new String[locations.length];
+     String[] names = new String[locations.length];
+     String[] racks = new String[locations.length];
+     for (int hCnt = 0; hCnt < locations.length; hCnt++) {
+       hosts[hCnt] = locations[hCnt].getHostName();
+       names[hCnt] = locations[hCnt].getName();
+       NodeBase node = new NodeBase(names[hCnt],
+                                    locations[hCnt].getNetworkLocation());
+       racks[hCnt] = node.toString();
+     }
+     Block block = blk.getBlock();
+     blkLocations[idx] = new BlockAndLocation(block.getBlockId(),
+                                           block.getGenerationStamp(),
+                                           names, hosts, racks,
+                                           blk.getStartOffset(),
+                                           block.getNumBytes(),
+                                           blk.isCorrupt());
+     idx++;
+   }
+   return blkLocations;
+ }
 
   /**
    * @return all corrupt files in dfs
@@ -641,32 +739,73 @@ public class DFSUtil {
    * return server http address from the configuration
    * @param conf
    * @param namenode - namenode address
+   * @param isAvatar - whether it's avatar config
    * @return server http
    */
   public static String getInfoServer(
-      InetSocketAddress namenode, Configuration conf) {
+      InetSocketAddress namenode, Configuration conf, boolean isAvatar) {
     String httpAddressDefault = 
         NetUtils.getServerAddress(conf, "dfs.info.bindAddress", 
                                   "dfs.info.port", "dfs.http.address"); 
     String httpAddress = null;
     if(namenode != null) {
-      // if non-default namenode, try reverse look up 
-      // the nameServiceID if it is available
-      String nameServiceId = DFSUtil.getNameServiceIdFromAddress(
-          conf, namenode,
-          FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
+      if (!isAvatar) {
+        // if non-default namenode, try reverse look up 
+        // the nameServiceID if it is available
+        String nameServiceId = DFSUtil.getNameServiceIdFromAddress(
+            conf, namenode,
+            FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY);
 
-      if (nameServiceId != null) {
-        httpAddress = conf.get(DFSUtil.getNameServiceIdKey(
-            FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY, nameServiceId));
+        if (nameServiceId != null) {
+          httpAddress = conf.get(DFSUtil.getNameServiceIdKey(
+              FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY, nameServiceId));
+        }
+      } else {
+        // federated, avatar addresses
+        String suffix = "0";
+        String nameServiceId = DFSUtil.getNameServiceIdFromAddress(
+            conf, namenode,
+            FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY + "0");
+        if (nameServiceId == null) {
+          nameServiceId = DFSUtil.getNameServiceIdFromAddress(
+              conf, namenode,
+              FSConstants.DFS_NAMENODE_RPC_ADDRESS_KEY + "1");
+          suffix = "1";
+        }
+        if (nameServiceId != null) {
+          httpAddress = conf.get(DFSUtil.getNameServiceIdKey(
+              FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY + suffix, nameServiceId));
+        }
+        
+        // federated, avatar addresses - ok
+        if (httpAddress != null) {
+          return httpAddress;
+        }
+        
+        // non-federated, avatar adresses
+        httpAddress = getNonFederatedAvatarInfoServer(namenode, "0", conf);
+        if (httpAddress != null) {
+          return httpAddress;
+        }
+        httpAddress = getNonFederatedAvatarInfoServer(namenode, "1", conf);     
       }
     }
-    // else - Use non-federation style configuration
-    if (httpAddress == null) {
-      httpAddress = conf.get("dfs.http.address", httpAddressDefault);
-    }
 
+    // else - Use non-federation, non-avatar configuration
+    if (httpAddress == null) {
+      httpAddress = conf.get(FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY, httpAddressDefault);
+    }
     return httpAddress;
+  }
+  
+  private static String getNonFederatedAvatarInfoServer(
+      InetSocketAddress namenode, String suffix, Configuration conf) {
+    String rpcAddress = conf.get("fs.default.name" + suffix);
+    if (rpcAddress != null && !rpcAddress.isEmpty()
+        && NetUtils.createSocketAddr(rpcAddress).equals(namenode)) {
+      return conf.get(FSConstants.DFS_NAMENODE_HTTP_ADDRESS_KEY + suffix);
+    }
+    return null;
   }
   
   /**
@@ -753,5 +892,76 @@ public class DFSUtil {
       return (DistributedFileSystem) fs;
     else
       return null;
+  }
+  
+  /*
+   * Connect to the some url to get the html content
+   */
+  public static String getHTMLContent(URI uri) throws IOException,
+      SocketTimeoutException {
+    return getHTMLContentWithTimeout(uri.toURL(), 0, 0); 
+  }
+  
+  public static String getHTMLContentWithTimeout(URL path, int connectTimeout, 
+      int readTimeout) throws IOException, SocketTimeoutException  {
+    InputStream stream = null;
+    URLConnection connection = path.openConnection();
+    if (connectTimeout > 0) {
+      connection.setConnectTimeout(connectTimeout);
+    }
+    if (readTimeout > 0) {
+      connection.setReadTimeout(readTimeout);
+    }
+    stream = connection.getInputStream();
+    BufferedReader input = new BufferedReader(
+        new InputStreamReader(stream));
+    StringBuilder sb = new StringBuilder();
+    String line = null;
+    try {
+      while (true) {
+        line = input.readLine();
+        if (line == null) {
+          break;
+        }
+        sb.append(line + "\n");
+      }
+      return sb.toString();
+    } finally {
+      input.close();
+    }
+  }
+  
+  /**
+   * Given the start time in nano seconds, return the elapsed time in
+   * microseconds.
+   */
+  public static long getElapsedTimeMicroSeconds(long start) {
+    return (System.nanoTime() - start) / 1000;
+  }
+  
+  public static String getStackTrace() {
+    StringBuilder sb = new StringBuilder();
+    sb.append("------------------------------------\n");
+    sb.append("Current stack trace:\n\n");
+    StackTraceElement[] trace = Thread.currentThread().getStackTrace();    
+    for(StackTraceElement se : trace) {
+      sb.append(se + "\n");
+    }
+    return sb.toString();   
+  }
+  
+  public static String getAllStackTraces() {
+    StringBuilder sb = new StringBuilder();
+    sb.append("------------------------------------\n");
+    sb.append("All stack traces:\n\n");
+    Map<Thread, StackTraceElement[]> traces = Thread.getAllStackTraces();    
+    for(Entry<Thread, StackTraceElement[]> e : traces.entrySet()) {
+      sb.append("------------------------------------\n");
+      sb.append(e.getKey() + "\n\n");
+      for(StackTraceElement se : e.getValue()) {
+        sb.append(se + "\n");
+      }
+    }
+    return sb.toString();   
   }
 }

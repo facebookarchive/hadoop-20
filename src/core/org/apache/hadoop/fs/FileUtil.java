@@ -19,23 +19,30 @@
 package org.apache.hadoop.fs;
 
 import java.io.*;
+import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.io.DataInputBuffer;
 import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.util.IOThrottler;
+import org.apache.hadoop.util.InjectionEventCore;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.util.Shell.ShellCommandExecutor;
-import org.mortbay.log.Log;
 
 /**
  * A collection of file-processing util methods
  */
 public class FileUtil {
+  static final Log LOG = LogFactory.getLog(FileUtil.class.getName());
+  
   /**
    * convert an array of FileStatus to an array of Path
    * 
@@ -68,7 +75,7 @@ public class FileUtil {
     else
       return stat2Paths(stats);
   }
-  
+
   /**
    * Delete a directory and all its contents.  If
    * we return false, the directory may be partially-deleted.
@@ -104,14 +111,14 @@ public class FileUtil {
 
   /**
    * Recursively delete a directory.
-   * 
+   *
    * @param fs {@link FileSystem} on which the path is present
-   * @param dir directory to recursively delete 
+   * @param dir directory to recursively delete
    * @throws IOException
    * @deprecated Use {@link FileSystem#delete(Path, boolean)}
    */
   @Deprecated
-  public static void fullyDelete(FileSystem fs, Path dir) 
+  public static void fullyDelete(FileSystem fs, Path dir)
   throws IOException {
     fs.delete(dir, true);
   }
@@ -120,9 +127,9 @@ public class FileUtil {
   // If the destination is a subdirectory of the source, then
   // generate exception
   //
-  private static void checkDependencies(FileSystem srcFS, 
-                                        Path src, 
-                                        FileSystem dstFS, 
+  private static void checkDependencies(FileSystem srcFS,
+                                        Path src,
+                                        FileSystem dstFS,
                                         Path dst)
                                         throws IOException {
     if (srcFS == dstFS) {
@@ -152,12 +159,63 @@ public class FileUtil {
                              boolean deleteSource, 
                              boolean overwrite, Configuration conf)
                              throws IOException {
+    return copy(srcFS, srcs, dstFS, dst, deleteSource, overwrite, false, conf);
+  }
+  
+  /**
+   * copy a list of files from a source file system to a directory dst 
+   * in a destination file system
+   * 
+   * @param srcFS source file system
+   * @param srcs a list of source files
+   * @param dstFS destination file system
+   * @param dst destination directory
+   * @param deleteSource if source should be deleted
+   * @param overwrite if destination should be overwritten
+   * @param validate if destination file should be validated
+   * @param conf configuration
+   * @return true if copy succeeds
+   * @throws IOException if error occurs
+   */
+  public static boolean copy(FileSystem srcFS, Path[] srcs, 
+      FileSystem dstFS, Path dst,
+      boolean deleteSource, 
+      boolean overwrite, boolean validate, Configuration conf)
+      throws IOException {
+      return copy(srcFS, srcs, dstFS, dst, deleteSource,
+          overwrite, validate, conf, null);
+  }
+
+  /**
+   * copy a list of files from a source file system to a directory dst 
+   * in a destination file system
+   * 
+   * @param srcFS source file system
+   * @param srcs a list of source files
+   * @param dstFS destination file system
+   * @param dst destination directory
+   * @param deleteSource if source should be deleted
+   * @param overwrite if destination should be overwritten
+   * @param validate if destination file should be validated
+   * @param conf configuration
+   * @param throttler IOThrottler for copy
+   * @return true if copy succeeds
+   * @throws IOException if error occurs
+   */
+  public static boolean copy(FileSystem srcFS, Path[] srcs, 
+      FileSystem dstFS, Path dst,
+      boolean deleteSource, 
+      boolean overwrite, boolean validate,
+      Configuration conf,
+      IOThrottler throttler)
+      throws IOException {
     boolean gotException = false;
     boolean returnVal = true;
     StringBuffer exceptions = new StringBuffer();
 
     if (srcs.length == 1)
-      return copy(srcFS, srcs[0], dstFS, dst, deleteSource, overwrite, conf);
+      return copy(srcFS, srcs[0], dstFS, dst, deleteSource, overwrite, 
+          validate, conf, throttler);
 
     // Check if dest is directory
     if (!dstFS.exists(dst)) {
@@ -165,14 +223,15 @@ public class FileUtil {
                             "doest not exist");
     } else {
       FileStatus sdst = dstFS.getFileStatus(dst);
-      if (!sdst.isDir()) 
+      if (!sdst.isDir())
         throw new IOException("copying multiple files, but last argument `" +
                               dst + "' is not a directory");
     }
 
     for (Path src : srcs) {
       try {
-        if (!copy(srcFS, src, dstFS, dst, deleteSource, overwrite, conf))
+        if (!copy(srcFS, src, dstFS, dst, deleteSource, overwrite, 
+            validate, conf, throttler))
           returnVal = false;
       } catch (IOException e) {
         gotException = true;
@@ -188,13 +247,62 @@ public class FileUtil {
 
   /** Copy files between FileSystems. */
   public static boolean copy(FileSystem srcFS, Path src, 
+      FileSystem dstFS, Path dst, 
+      boolean deleteSource,
+      boolean overwrite,
+      Configuration conf) throws IOException {
+    return copy(srcFS, src, dstFS, dst, deleteSource, overwrite, false, conf);
+  }
+
+  /**
+   * Copy files between file systems
+   * @param srcFS source file system
+   * @param src source file
+   * @param dstFS destination file system
+   * @param dst destination file
+   * @param deleteSource if source should be deleted
+   * @param overwrite if destination could be overwritten if exists
+   * @param validate if source and destination should be validated
+   * @param conf configuration
+   * @return true if succeed
+   * @throws IOException if error occurs
+   */
+  public static boolean copy(FileSystem srcFS, Path src, 
                              FileSystem dstFS, Path dst, 
                              boolean deleteSource,
-                             boolean overwrite,
+                             boolean overwrite, boolean validate,
                              Configuration conf) throws IOException {
+    return copy(srcFS, src, dstFS, dst, deleteSource,
+        overwrite, validate, conf, null);
+  }
+
+  /**
+   * Copy files between file systems
+   * @param srcFS source file system
+   * @param src source file
+   * @param dstFS destination file system
+   * @param dst destination file
+   * @param deleteSource if source should be deleted
+   * @param overwrite if destination could be overwritten if exists
+   * @param validate if source and destination should be validated
+   * @param conf configuration
+   * @param throttler IOThrottler for copy
+   * @return true if succeed
+   * @throws IOException if error occurs
+   */
+  public static boolean copy(FileSystem srcFS, Path src, 
+                             FileSystem dstFS, Path dst, 
+                             boolean deleteSource,
+                             boolean overwrite, boolean validate,
+                             Configuration conf,
+                             IOThrottler throttler) throws IOException {
     dst = checkDest(src.getName(), dstFS, dst, overwrite);
 
-    if (srcFS.getFileStatus(src).isDir()) {
+    FileStatus srcFileStatus = srcFS.getFileStatus(src);
+    if (srcFileStatus == null) {
+      throw new FileNotFoundException("File not found: " + src);
+    }
+    if (srcFileStatus.isDir()) {
       checkDependencies(srcFS, src, dstFS, dst);
       if (!dstFS.mkdirs(dst)) {
         return false;
@@ -203,7 +311,7 @@ public class FileUtil {
       for (int i = 0; i < contents.length; i++) {
         copy(srcFS, contents[i].getPath(), dstFS, 
              new Path(dst, contents[i].getPath().getName()),
-             deleteSource, overwrite, conf);
+             deleteSource, overwrite, validate, conf, throttler);
       }
     } else {
       InputStream in=null;
@@ -211,10 +319,23 @@ public class FileUtil {
       try {
         in = srcFS.open(src);
         out = dstFS.create(dst, overwrite);
-        IOUtils.copyBytes(in, out, conf, true);
+        IOUtils.copyBytes(in, out, conf.getInt("io.file.buffer.size", 4096),
+            true, throttler);
+        // validate file size
+        if (validate) {
+          InjectionHandler.processEventIO(
+              InjectionEventCore.FILE_TRUNCATION, dstFS, dst);
+          FileStatus dstFileStatus = dstFS.getFileStatus(dst);
+          if (dstFileStatus == null || 
+              dstFileStatus.getLen() != srcFileStatus.getLen()) {
+            throw new IOException("Mismatched file length: src=" + src +
+                " dst=" + dst);
+          }
+        }
       } catch (IOException e) {
         IOUtils.closeStream(out);
         IOUtils.closeStream(in);
+        dstFS.delete(dst, true);
         throw e;
       }
     }
@@ -223,7 +344,6 @@ public class FileUtil {
     } else {
       return true;
     }
-  
   }
 
   /** Copy all files in a directory to one output file (merge). */
@@ -247,24 +367,29 @@ public class FileUtil {
             IOUtils.copyBytes(in, out, conf, false);
             if (addString!=null)
               out.write(addString.getBytes("UTF-8"));
-                
+
           } finally {
             in.close();
-          } 
+          }
         }
       }
     } finally {
       out.close();
     }
-    
+
 
     if (deleteSource) {
       return srcFS.delete(srcDir, true);
     } else {
       return true;
     }
-  }  
-  
+  }
+
+  public static boolean copy(File src, FileSystem dstFS, File dst,
+      boolean deleteSource, Configuration conf) throws IOException {
+    return copy(src, dstFS, new Path(dst.getAbsolutePath()), deleteSource, conf);
+  }
+
   /** Copy local files to a FileSystem. */
   public static boolean copy(File src,
                              FileSystem dstFS, Path dst,
@@ -308,18 +433,43 @@ public class FileUtil {
   public static boolean copy(FileSystem srcFS, Path src, 
                              File dst, boolean deleteSource,
                              Configuration conf) throws IOException {
-    return copy(srcFS, src, dst, deleteSource, conf, false);
+    return copy(srcFS, src, dst, deleteSource, conf, false, 0L);
   }
   
   public static void printChecksumToStderr(long checksum, Path file) {
     System.err.println(Long.toHexString(checksum) + " " + file);
   }
 
-  /** Copy FileSystem files to local files. */
+  /** Copy FileSystem files to local files.
+   * If src is a file:
+   *    genCrc = true: print the CRC checksum of file to stderr
+   *    offset >=0 : copy starts from offset
+   *    offset < 0 : copy starts from fileLen + offset (throw exception if 
+   *                 file is still under-construction) 
+   */
   public static boolean copy(FileSystem srcFS, Path src, 
                              File dst, boolean deleteSource,
-                             Configuration conf, boolean genCrc) throws IOException {
-    if (srcFS.getFileStatus(src).isDir()) {
+                             Configuration conf, boolean genCrc, 
+                             long offset) throws IOException {
+    return copy(srcFS, src, dst, deleteSource, false, conf, genCrc, offset);
+  }
+
+  public static boolean copy(FileSystem srcFS, Path src, File dst,
+      boolean deleteSource, boolean validate,
+      Configuration conf, boolean genCrc, long offset) throws IOException {
+    return copy(srcFS, src, dst, deleteSource, validate,
+        conf, genCrc, offset, null);
+  }
+
+  public static boolean copy(FileSystem srcFS, Path src, File dst,
+      boolean deleteSource, boolean validate,
+      Configuration conf, boolean genCrc, long offset,
+      IOThrottler throttler) throws IOException {
+    FileStatus fStat = srcFS.getFileStatus(src);
+    if (fStat == null) {
+      throw new FileNotFoundException(src.toString());
+    }
+    if (fStat.isDir()) {
       if (!dst.mkdirs()) {
         return false;
       }
@@ -327,15 +477,34 @@ public class FileUtil {
       for (int i = 0; i < contents.length; i++) {
         copy(srcFS, contents[i].getPath(), 
              new File(dst, contents[i].getPath().getName()),
-             deleteSource, conf);
+             deleteSource, validate, conf, genCrc, offset, throttler);
       }
     } else {
-      InputStream in = srcFS.open(src);
+      FSDataInputStream in = srcFS.open(src);
+      if (offset < 0) {
+        if (in.isUnderConstruction()) {
+          throw new IOException("Couldn't copy under-construction file with " +
+                                "negative offset " + offset);
+        }
+        offset += fStat.getLen();
+      }
+      in.seek(offset);
       if (!genCrc) {
-        IOUtils.copyBytes(in, new FileOutputStream(dst), conf);
+        IOUtils.copyBytes(in, new FileOutputStream(dst),
+            conf.getInt("io.file.buffer.size", 4096), true, throttler);
       } else {
-        long checksum = IOUtils.copyBytesAndGenerateCRC(in, new FileOutputStream(dst), conf, true);
+        long checksum = IOUtils.copyBytesAndGenerateCRC(in,
+            new FileOutputStream(dst), conf.getInt("io.file.buffer.size", 4096),
+            true, throttler);
         printChecksumToStderr(checksum, src);
+      }
+      if (validate) {
+        InjectionHandler.processEventIO(
+            InjectionEventCore.FILE_TRUNCATION, FileSystem.getLocal(conf), dst);
+        if (fStat.getLen() - offset != dst.length()) {
+          throw new IOException("Mismatched file length: src=" + src +
+              " dst=" + dst);
+        }
       }
     } 
 
@@ -381,7 +550,7 @@ public class FileUtil {
     protected void parseExecResult(BufferedReader lines) throws IOException {
       String line = lines.readLine();
       if (line == null) {
-        throw new IOException("Can't convert '" + command[2] + 
+        throw new IOException("Can't convert '" + command[2] +
                               " to a cygwin path");
       }
       result = line;
@@ -399,9 +568,9 @@ public class FileUtil {
       return new CygPathCommand(filename).getResult();
     } else {
       return filename;
-    }    
+    }
   }
-  
+
   /**
    * Convert a os-native filename to a path that works for the shell.
    * @param file The filename to convert
@@ -415,12 +584,12 @@ public class FileUtil {
   /**
    * Convert a os-native filename to a path that works for the shell.
    * @param file The filename to convert
-   * @param makeCanonicalPath 
+   * @param makeCanonicalPath
    *          Whether to make canonical path for the file passed
    * @return The unix pathname
    * @throws IOException on windows, there can be problems with the subprocess
    */
-  public static String makeShellPath(File file, boolean makeCanonicalPath) 
+  public static String makeShellPath(File file, boolean makeCanonicalPath)
   throws IOException {
     if (makeCanonicalPath) {
       return makeShellPath(file.getCanonicalPath());
@@ -432,7 +601,7 @@ public class FileUtil {
   /**
    * Takes an input dir and returns the du on that local directory. Very basic
    * implementation.
-   * 
+   *
    * @param dir
    *          The input dir to get the disk space of this local dir
    * @return The total disk space of the input local directory
@@ -452,7 +621,7 @@ public class FileUtil {
       return size;
     }
   }
-    
+
   /**
    * Given a File input it will unzip the file in a the unzip directory
    * passed as the second parameter
@@ -472,9 +641,9 @@ public class FileUtil {
           InputStream in = zipFile.getInputStream(entry);
           try {
             File file = new File(unzipDir, entry.getName());
-            if (!file.getParentFile().mkdirs()) {           
+            if (!file.getParentFile().mkdirs()) {
               if (!file.getParentFile().isDirectory()) {
-                throw new IOException("Mkdirs failed to create " + 
+                throw new IOException("Mkdirs failed to create " +
                                       file.getParentFile().toString());
               }
             }
@@ -501,15 +670,15 @@ public class FileUtil {
   /**
    * Given a Tar File as input it will untar the file in a the untar directory
    * passed as the second parameter
-   * 
+   *
    * This utility will untar ".tar" files and ".tar.gz","tgz" files.
-   *  
-   * @param inFile The tar file as input. 
+   *
+   * @param inFile The tar file as input.
    * @param untarDir The untar directory where to untar the tar file.
    * @throws IOException
    */
   public static void unTar(File inFile, File untarDir) throws IOException {
-    if (!untarDir.mkdirs()) {           
+    if (!untarDir.mkdirs()) {
       if (!untarDir.isDirectory()) {
         throw new IOException("Mkdirs failed to create " + untarDir);
       }
@@ -521,12 +690,12 @@ public class FileUtil {
       untarCommand.append(" gzip -dc '");
       untarCommand.append(FileUtil.makeShellPath(inFile));
       untarCommand.append("' | (");
-    } 
+    }
     untarCommand.append("cd '");
-    untarCommand.append(FileUtil.makeShellPath(untarDir)); 
+    untarCommand.append(FileUtil.makeShellPath(untarDir));
     untarCommand.append("' ; ");
     untarCommand.append("tar -xf ");
-    
+
     if (gzipped) {
       untarCommand.append(" -)");
     } else {
@@ -537,7 +706,7 @@ public class FileUtil {
     shexec.execute();
     int exitcode = shexec.getExitCode();
     if (exitcode != 0) {
-      throw new IOException("Error untarring file " + inFile + 
+      throw new IOException("Error untarring file " + inFile +
                   ". Tar process exited with exit code " + exitcode);
     }
   }
@@ -545,7 +714,7 @@ public class FileUtil {
   /**
    * Create a soft link between a src and destination
    * only on a local disk. HDFS does not support this
-   * @param target the target for symlink 
+   * @param target the target for symlink
    * @param linkname the symlink
    * @return value returned by the command
    */
@@ -560,7 +729,7 @@ public class FileUtil {
     }
     return returnVal;
   }
-  
+
   /**
    * Change the permissions on a filename.
    * @param filename the name of the file to change
@@ -598,8 +767,8 @@ public class FileUtil {
     try {
       shExec.execute();
     }catch(IOException e) {
-      if(Log.isDebugEnabled()) {
-        Log.debug("Error while changing permission : " + filename 
+      if(LOG.isDebugEnabled()) {
+        LOG.debug("Error while changing permission : " + filename 
             +" Exception: " + StringUtils.stringifyException(e));
       }
     }
@@ -627,16 +796,16 @@ public class FileUtil {
     }
     return tmp;
   }
-  
+
   /**
-   * Return an array of FileStatus objects for each file beneath 
-   * the given path to a specified depth (inclusive). Directories at 
-   * the given depth will be returned, while directories above that 
-   * depth will not. 
+   * Return an array of FileStatus objects for each file beneath
+   * the given path to a specified depth (inclusive). Directories at
+   * the given depth will be returned, while directories above that
+   * depth will not.
    * @param fs FileSystem on which to operate
    * @param f starting path
-   * @param depth the depth of recursion. If 0 the function will 
-   *        return the status of the current file or directory.    
+   * @param depth the depth of recursion. If 0 the function will
+   *        return the status of the current file or directory.
    * @exception IOException If this operation fails
    */
   public static FileStatus[] listStatus(FileSystem fs, Path f, int depth)
@@ -703,7 +872,7 @@ public class FileUtil {
     if (fileStatusResults == null) {
       throw new IOException("Path does not exist: " + pathStatus.getPath());
     }
-    
+
     boolean leafDir = true;
     for (FileStatus f : fileStatusResults) {
       if (f.isDir()) {
@@ -714,6 +883,27 @@ public class FileUtil {
     if (leafDir) {
       acc.add(pathStatus); // Accumulate leaf dir
     }
+  }
+  
+  /**
+   * A wrapper for {@link File#listFiles()}. This java.io API returns null when
+   * a dir is not a directory or for any I/O error. Instead of having null check
+   * everywhere File#listFiles() is used, we will add utility API to get around
+   * this problem. For the majority of cases where we prefer an IOException to
+   * be thrown.
+   * 
+   * @param dir  directory for which listing should be performed
+   * @return list of files or empty list
+   * @exception IOException
+   *              for invalid directory or for a bad disk.
+   */
+  public static File[] listFiles(File dir) throws IOException {
+    File[] files = dir.listFiles();
+    if (files == null) {
+      throw new IOException("Invalid directory or I/O error occurred for dir: "
+          + dir.toString());
+    }
+    return files;
   }
 
   /**

@@ -22,7 +22,7 @@
 <html>
   <head>
     <title><%=name %> Hadoop RaidNode Administration</title>
-    <link rel="stylesheet" type="text/css" href="/static/hadoop.css">
+    <link rel="stylesheet" type="text/css" href="static/hadoop.css">
   </head>
 <body>
 <h1><%=name %> Hadoop RaidNode Administration</h1>

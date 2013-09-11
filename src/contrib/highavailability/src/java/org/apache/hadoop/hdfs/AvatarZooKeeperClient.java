@@ -6,13 +6,16 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.server.namenode.ZookeeperTxId;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
+import org.apache.hadoop.util.InjectionHandler;
 import org.apache.hadoop.util.SerializableUtils;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.zookeeper.AsyncCallback;
 import org.apache.zookeeper.CreateMode;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.WatchedEvent;
@@ -24,6 +27,9 @@ import org.apache.zookeeper.data.Id;
 import org.apache.zookeeper.data.Stat;
 
 public class AvatarZooKeeperClient {
+  
+  private static Log LOG = LogFactory.getLog(AvatarZooKeeperClient.class.getName());
+  
   private String connection;
   private int timeout;
   private int connectTimeout;
@@ -38,6 +44,7 @@ public class AvatarZooKeeperClient {
   private Watcher watcher;
   private ZooKeeper zk;
   private final int failoverCheckPeriod;
+  private final boolean closeConnOnEachOp;
 
   // Making it large enough to be sure that the cluster is down
   // these retries go one after another so they do not take long
@@ -46,6 +53,11 @@ public class AvatarZooKeeperClient {
   public static final int ZK_CONNECT_TIMEOUT_DEFAULT = 10000; // 10 seconds
   
   public AvatarZooKeeperClient(Configuration conf, Watcher watcher) {
+    this(conf, watcher, true);
+  }
+
+  public AvatarZooKeeperClient(Configuration conf, Watcher watcher,
+      boolean closeConnOnEachOp) {
     this.connection = conf.get("fs.ha.zookeeper.quorum");
     this.timeout = conf.getInt("fs.ha.zookeeper.timeout", 3000);
     this.connectTimeout = conf.getInt("fs.ha.zookeeper.connect.timeout",
@@ -60,6 +72,7 @@ public class AvatarZooKeeperClient {
     }
     this.failoverCheckPeriod = conf.getInt("fs.avatar.failover.checkperiod",
         FailoverClientHandler.FAILOVER_CHECK_PERIOD);
+    this.closeConnOnEachOp = closeConnOnEachOp;
   }
 
   private static class ProxyWatcher implements Watcher {
@@ -128,11 +141,6 @@ public class AvatarZooKeeperClient {
     zkCreateRecursively(node, realAddress.getBytes("UTF-8"), overwrite);
   }
   
-  public synchronized void registerPrimary(String address, String realAddress)
-      throws UnsupportedEncodingException, IOException {
-    registerPrimary(address, realAddress, true);
-  }
-
   private void zkCreateRecursively(String zNode, byte[] data,
       boolean overwrite) throws IOException {
     try {
@@ -155,12 +163,11 @@ public class AvatarZooKeeperClient {
         if (i == parts.length - 1) {
           payLoad = data;
         }
-        Stat stat;
         boolean created = false;
         while (!created) {
           // While loop to keep trying through the ConnectionLoss exceptions
           try {
-            if ((stat = zk.exists(path, false)) != null) {
+            if ((zk.exists(path, false)) != null) {
               // -1 indicates that we should update zNode regardless of its
               // version
               // since we are not utilizing versions in zNode - this is the best
@@ -170,7 +177,7 @@ public class AvatarZooKeeperClient {
               zk.setData(path, payLoad, -1);
             } else {
               zk.create(path, payLoad, acls, CreateMode.PERSISTENT);
-            }
+            }            
             created = true;
           } catch (KeeperException ex) {
             ex.printStackTrace();
@@ -188,7 +195,9 @@ public class AvatarZooKeeperClient {
       Thread.currentThread().interrupt();
     } finally {
       try {
-        stopZK();
+        if (closeConnOnEachOp) {
+          stopZK();
+        }
       } catch (InterruptedException ex) {
         Thread.currentThread().interrupt();
       }
@@ -231,6 +240,8 @@ public class AvatarZooKeeperClient {
         watcher.wait(this.connectTimeout);
       }
       if (zk.getState() != ZooKeeper.States.CONNECTED) {
+        // Close any open connections to avoid fd leak.
+        zk.close();
         throw new IOException("Timed out trying to connect to ZooKeeper");
       }
     }
@@ -257,7 +268,8 @@ public class AvatarZooKeeperClient {
    * @throws KeeperException
    * @throws InterruptedException
    */
-  private synchronized byte[] getNodeData(String node, Stat stat, boolean retry)
+  private synchronized byte[] getNodeData(String node, Stat stat,
+      boolean retry, boolean sync)
       throws IOException, KeeperException, InterruptedException {
     int failures = 0;
     
@@ -265,6 +277,10 @@ public class AvatarZooKeeperClient {
     while (data == null) {
       initZK();
       try {
+        if (sync) {
+          SyncUtil su = new SyncUtil();
+          su.sync(zk, node);
+        }
         data = zk.getData(node, watch, stat);
         if (data == null && retry) {
           // Failover is in progress
@@ -289,7 +305,9 @@ public class AvatarZooKeeperClient {
         }
         throw kex;
       } finally {
-        stopZK();
+        if (closeConnOnEachOp) {
+          stopZK();
+        }
       }
     }
     return data;
@@ -300,15 +318,17 @@ public class AvatarZooKeeperClient {
    * 
    * @param address
    *          the address of the cluster
+   * @param sync
+   *          whether or not to perform a sync before read
    * @throws IOException
    * @throws KeeperException
    * @throws InterruptedException
    */
-  public Long getPrimarySsId(String address) throws IOException,
+  public Long getPrimarySsId(String address, boolean sync) throws IOException,
       KeeperException, InterruptedException, ClassNotFoundException {
     Stat stat = new Stat();
     String node = getSsIdNode(address);
-    byte[] data = getNodeData(node, stat, false);
+    byte[] data = getNodeData(node, stat, false, sync);
     if (data == null) {
       return null;
     }
@@ -320,35 +340,42 @@ public class AvatarZooKeeperClient {
    * 
    * @param address
    *          the address of the cluster
+   * @param sync
+   *          whether or not to perform a sync before read
    * @throws IOException
    * @throws KeeperException
    * @throws InterruptedException
    */
-  public ZookeeperTxId getPrimaryLastTxId(String address) throws IOException,
+  public ZookeeperTxId getPrimaryLastTxId(String address, boolean sync)
+      throws IOException,
       KeeperException, InterruptedException, ClassNotFoundException {
     Stat stat = new Stat();
     String node = getLastTxIdNode(address);
-    byte[] data = getNodeData(node, stat, false);
+    byte[] data = getNodeData(node, stat, false, sync);
     if (data == null) {
       return null;
     }
     return ZookeeperTxId.getFromBytes(data);
   }
 
+  /**
+   * Retrieves the primary address for the cluster, this does not perform a
+   * sync before it reads the znode.
+   */
   public String getPrimaryAvatarAddress(String address, Stat stat, boolean retry)
+      throws IOException, KeeperException, InterruptedException {
+    return getPrimaryAvatarAddress(address, stat, retry, false);
+  }
+
+  public String getPrimaryAvatarAddress(String address, Stat stat,
+      boolean retry, boolean sync)
     throws IOException, KeeperException, InterruptedException {
     String node = getRegistrationNode(address);
-    byte[] data = getNodeData(node, stat, retry);
+    byte[] data = getNodeData(node, stat, retry, sync);
     if (data == null) {
       return null;
     }
     return new String(data, "UTF-8");
-  }
-
-  public String getPrimaryAvatarAddress(URI address, Stat stat, boolean retry) 
-    throws IOException, KeeperException, InterruptedException {
-    InjectionHandler.processEvent(InjectionEvent.AVATARZK_GET_PRIMARY_ADDRESS);
-    return getPrimaryAvatarAddress(address.getAuthority(), stat, retry);
   }
 
   /**
@@ -432,5 +459,31 @@ public class AvatarZooKeeperClient {
 
   public synchronized void shutdown() throws InterruptedException {
     stopZK();
+  }
+  
+  /**
+   * Helper class for syncing data to ZK.
+   */
+  static class SyncUtil implements AsyncCallback.VoidCallback {
+    private static final int MAX_SYNC_WAIT_TIME = 5 * 1000; // 5 sec
+    volatile int rc = -1;
+
+    @Override
+    public synchronized void processResult(int rc, String path, Object ctx) {
+      this.rc = rc;
+      this.notify();
+    }
+
+    synchronized boolean sync(ZooKeeper zk, String path)
+        throws InterruptedException {
+      zk.sync(path, this, null);
+      this.wait(MAX_SYNC_WAIT_TIME);
+      if (rc != KeeperException.Code.OK.intValue()) {
+        LOG.info("Cannot sync ZK for path: " + path + " return code: " + rc);
+        return false;
+      }
+      LOG.info("Synced ZK for path: " + path);
+      return true;
+    }
   }
 }

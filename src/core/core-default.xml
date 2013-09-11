@@ -86,7 +86,7 @@
 
 <property>
   <name>io.compression.codecs</name>
-  <value>org.apache.hadoop.io.compress.DefaultCodec,org.apache.hadoop.io.compress.GzipCodec,org.apache.hadoop.io.compress.BZip2Codec</value>
+  <value>org.apache.hadoop.io.compress.DefaultCodec,org.apache.hadoop.io.compress.GzipCodec,org.apache.hadoop.io.compress.BZip2Codec,org.apache.hadoop.io.compress.SnappyCodec</value>
   <description>A list of the compression codec classes that can be used 
                for compression/decompression.</description>
 </property>
@@ -112,7 +112,7 @@
 
 <property>
   <name>fs.trash.interval</name>
-  <value>0</value>
+  <value>1440</value>
   <description>Number of minutes after which the checkpoint is deleted
   If zero, the trash feature is disabled.
   </description>
@@ -120,7 +120,7 @@
 
 <property>
   <name>fs.trash.checkpoint.interval</name>
-  <value>0</value>
+  <value>60</value>
   <description>Number of minutes between trash checkpoints.
   Should be smaller or equal to fs.trash.interval.
   Every time the checkpointer runs it creates a new checkpoint 
@@ -224,7 +224,7 @@
 <property>
   <name>fs.checkpoint.size</name>
   <value>67108864</value>
-  <description>The size of the current edit log (in bytes) that triggers
+  <description>The size of the current edit log (in transactions) that triggers
        a periodic checkpoint even if the fs.checkpoint.period hasn't expired.
   </description>
 </property>

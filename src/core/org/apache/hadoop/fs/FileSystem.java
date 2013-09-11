@@ -18,6 +18,7 @@
 package org.apache.hadoop.fs;
 
 import java.io.Closeable;
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
@@ -30,6 +31,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
+import java.util.Random;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicLong;
@@ -41,8 +43,11 @@ import org.apache.commons.logging.*;
 
 import org.apache.hadoop.conf.*;
 import org.apache.hadoop.util.*;
+import org.apache.hadoop.fs.FileSystem.Cache.Key;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.io.MultipleIOException;
+import org.apache.hadoop.io.ReadOptions;
+import org.apache.hadoop.io.WriteOptions;
 import org.apache.hadoop.security.UserGroupInformation;
 
 /****************************************************************
@@ -64,9 +69,13 @@ import org.apache.hadoop.security.UserGroupInformation;
  * implementation is DistributedFileSystem.
  *****************************************************************/
 public abstract class FileSystem extends Configured implements Closeable {
+
   public static final String FS_DEFAULT_NAME_KEY = "fs.default.name";
 
   public static final Log LOG = LogFactory.getLog(FileSystem.class);
+
+  public static final Log LogForCollect = LogFactory.getLog(FileSystem.class
+      .getName() + ".collect");
 
   /** FileSystem cache */
   private static final Cache CACHE = new Cache();
@@ -89,6 +98,12 @@ public abstract class FileSystem extends Configured implements Closeable {
    * or the JVM is exited.
    */
   private Set<Path> deleteOnExit = new TreeSet<Path>();
+
+  /**
+   * shutdownHook is true if we should close this FileSystem when
+   * our shutdown hook (clientFinalizer) is invoked.
+   */
+  private boolean shutdownHook = false;
 
   /** Returns the configured filesystem implementation.*/
   public static FileSystem get(Configuration conf) throws IOException {
@@ -139,7 +154,7 @@ public abstract class FileSystem extends Configured implements Closeable {
     throws IOException {
     return get(URI.create(fixName(name)), conf);
   }
-
+  
   /** Update old-format filesystem names, for back-compatibility.  This should
    * eventually be replaced with a checkName() method that throws an exception
    * for old-format names. */ 
@@ -190,7 +205,7 @@ public abstract class FileSystem extends Configured implements Closeable {
 
     String disableCacheName = String.format("fs.%s.impl.disable.cache", scheme);
     if (conf.getBoolean(disableCacheName, false)) {
-      return createFileSystem(uri, conf);
+      return createFileSystem(uri, conf, null);
     }
 
     return CACHE.get(uri, conf);
@@ -237,10 +252,15 @@ public abstract class FileSystem extends Configured implements Closeable {
     return (LocalFileSystem)newInstance(LocalFileSystem.NAME, conf);
   }
 
+  /**
+   * ClientFinalizer is the class we use as a shutdown hook, called
+   * when the JVM shuts down.  It will close all cached FileSystems that
+   * have shutdownHook set.
+   */
   private static class ClientFinalizer extends Thread {
     public synchronized void run() {
       try {
-        FileSystem.closeAll();
+        CACHE.closeAll(new ShutdownSelect());
       } catch (IOException e) {
         LOG.info("FileSystem.closeAll() threw an exception:\n" + e);
       }
@@ -255,8 +275,15 @@ public abstract class FileSystem extends Configured implements Closeable {
    * @throws IOException
    */
   public static void closeAll() throws IOException {
-    CACHE.closeAll();
+    CACHE.closeAll(new AllSelect());
   }
+
+  /**
+   * Close all cached filesystems that match the supplied ugi.
+   */
+  public static void closeAllForUGI(UserGroupInformation ugi) throws IOException {
+    CACHE.closeAll(new UGISelect(ugi));
+}
 
   /** Make sure that a path specifies a FileSystem. */
   public Path makeQualified(Path path) {
@@ -316,6 +343,14 @@ public abstract class FileSystem extends Configured implements Closeable {
     super(null);
   }
 
+  protected long getUniqueId() {
+    if (key == null) {
+      return 0;
+    } else {
+      return key.unique;
+    }
+  }
+  
   /** Check that a Path belongs to this FileSystem. */
   protected void checkPath(Path path) {
     URI uri = path.toUri();
@@ -388,6 +423,21 @@ public abstract class FileSystem extends Configured implements Closeable {
    */
   public abstract FSDataInputStream open(Path f, int bufferSize)
     throws IOException;
+
+  /**
+   * Opens an FSDataInputStream at the indicated Path.
+   *
+   * @param f
+   *          the file name to open
+   * @param bufferSize
+   *          the size of the buffer to be used.
+   * @param options
+   *          the read options passed by the user
+   */
+  public FSDataInputStream open(Path f, int bufferSize, ReadOptions options)
+      throws IOException {
+    throw new IOException("operation not supported for this filesystem");
+  }
     
   /**
    * Opens an FSDataInputStream at the indicated Path.
@@ -395,6 +445,18 @@ public abstract class FileSystem extends Configured implements Closeable {
    */
   public FSDataInputStream open(Path f) throws IOException {
     return open(f, getConf().getInt("io.file.buffer.size", 4096));
+  }
+
+  /**
+   * Opens an FSDataInputStream at the indicated Path.
+   *
+   * @param f
+   *          the file to open
+   * @param options
+   *          the read options for this file
+   */
+  public FSDataInputStream open(Path f, ReadOptions options) throws IOException {
+    return open(f, getConf().getInt("io.file.buffer.size", 4096), options);
   }
 
   /**
@@ -574,7 +636,7 @@ public abstract class FileSystem extends Configured implements Closeable {
 	return create(f, permission, overwrite, bufferSize,
 			replication, blockSize, progress);
   }
-
+  
   public FSDataOutputStream create(Path f, FsPermission permission,
       boolean overwrite,
       int bufferSize, short replication, long blockSize,
@@ -633,6 +695,16 @@ public abstract class FileSystem extends Configured implements Closeable {
           + this.getClass());
     }
 
+  public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
+      boolean overwrite,
+      int bufferSize, short replication, long blockSize,
+      Progressable progress, boolean forceSync, boolean doParallelWrites)
+      throws IOException {
+    return createNonRecursive(f, permission, overwrite, bufferSize,
+        replication, blockSize, progress, forceSync, doParallelWrites,
+        new WriteOptions());
+  }
+
   /**
   * Opens an FSDataOutputStream at the indicated Path with write-progress
   * reporting. Same as create(), except fails if parent directory doesn't
@@ -654,7 +726,8 @@ public abstract class FileSystem extends Configured implements Closeable {
   public FSDataOutputStream createNonRecursive(Path f, FsPermission permission,
       boolean overwrite,
       int bufferSize, short replication, long blockSize,
-      Progressable progress, boolean forceSync, boolean doParallelWrites)
+      Progressable progress, boolean forceSync, boolean doParallelWrites,
+      WriteOptions options)
     throws IOException {
     throw new IOException("createNonRecursive unsupported for this filesystem"
         + this.getClass());
@@ -731,6 +804,19 @@ public abstract class FileSystem extends Configured implements Closeable {
   }
 
   /**
+   * hard link Path dst to Path src. Can take place on DFS.
+   */
+  public boolean hardLink(Path src, Path dst) throws IOException {
+    throw new UnsupportedOperationException(getClass().getCanonicalName()
+        + " does not support hard link");
+  }
+
+  public String[] getHardLinkedFiles(Path src) throws IOException {
+    throw new UnsupportedOperationException(getClass().getCanonicalName()
+        + " does not support hard link");
+  }
+   
+  /**
    * Renames Path src to Path dst.  Can take place on local fs
    * or remote DFS.
    */
@@ -750,7 +836,32 @@ public abstract class FileSystem extends Configured implements Closeable {
    * @throws IOException
    */
   public abstract boolean delete(Path f, boolean recursive) throws IOException;
-  
+
+  /**
+   * Delete a file. Underlying FileSystem needs to override this method if
+   * it implements a trash logic. The default behavior is to assume this
+   * FileSystem doesn't have trash and all delete() is skipTrash.
+   * 
+   * @param f
+   *          the path to delete.
+   * @param recursive
+   *          if path is a directory and set to true, the directory is deleted
+   *          else throws an exception. In case of a file the recursive can be
+   *          set to either true or false.
+   * @param skipTrash
+   *          make sure the file won't be moved to trash if set to true. If the
+   *          parameter is false, it doesn't mean the file will be moved to
+   *          trash, as the underlying implementation file system might
+   *          determine the file shouldn't go to trash, no trash is implemented
+   *          or it is disabled.
+   * @return true if delete is successful else false.
+   * @throws IOException
+   */
+  public boolean delete(Path f, boolean recursive, boolean skipTrash)
+      throws IOException {
+    return delete(f, recursive);
+  }
+
   /**
    * Undelete a file from trash.
    * 
@@ -863,7 +974,7 @@ public abstract class FileSystem extends Configured implements Closeable {
     return new ContentSummary(summary[0], summary[1], summary[2]);
   }
 
-  final private static PathFilter DEFAULT_FILTER = new PathFilter() {
+  private final static PathFilter DEFAULT_FILTER = new PathFilter() {
       public boolean accept(Path file) {
         return true;
       }     
@@ -895,6 +1006,7 @@ public abstract class FileSystem extends Configured implements Closeable {
    * @throws FileNotFoundException If <code>f</code> does not exist
    * @throws IOException If an I/O error occurred
    */
+  @Deprecated
   public RemoteIterator<LocatedFileStatus> listLocatedStatus(final Path f)
   throws FileNotFoundException, IOException {
     return listLocatedStatus(f, DEFAULT_FILTER);
@@ -911,6 +1023,7 @@ public abstract class FileSystem extends Configured implements Closeable {
    * @throws FileNotFoundException if <code>f</code> does not exist
    * @throws IOException if any I/O error occurred
    */
+  @Deprecated
   public RemoteIterator<LocatedFileStatus> listLocatedStatus(final Path f,
       final PathFilter filter)
   throws FileNotFoundException, IOException {
@@ -939,6 +1052,78 @@ public abstract class FileSystem extends Configured implements Closeable {
         BlockLocation[] locs = result.isDir() ? null :
             getFileBlockLocations(result, 0, result.getLen());
         return new LocatedFileStatus(result, locs);
+      }
+    };
+  }
+
+  /**
+   * List the statuses of the files/directories in the given path if the path is
+   * a directory.
+   * Return the file's status, blocks and locations if the path is a file.
+   *
+   * If a returned status is a file, it contains the file's blocks and locations.
+   *
+   * @param f is the path
+   *
+   * @return an iterator that traverses statuses of the files/directories
+   *         in the given path
+   *
+   * @throws FileNotFoundException If <code>f</code> does not exist
+   * @throws IOException If an I/O error occurred
+   */
+  public RemoteIterator<LocatedBlockFileStatus> listLocatedBlockStatus(
+      final Path f) throws FileNotFoundException, IOException {
+    return listLocatedBlockStatus(f, DEFAULT_FILTER);
+  }
+
+  /**
+   * Listing a directory
+   * The returned results include its blocks and locations if it is a file
+   * The results are filtered by the given path filter
+   * @param f a path
+   * @param filter a path filter
+   * @return an iterator that traverses statuses of the files/directories
+   *         in the given path
+   * @throws FileNotFoundException if <code>f</code> does not exist
+   * @throws IOException if any I/O error occurred
+   */
+  public RemoteIterator<LocatedBlockFileStatus> listLocatedBlockStatus(
+      final Path f,
+      final PathFilter filter)
+  throws FileNotFoundException, IOException {
+    return new RemoteIterator<LocatedBlockFileStatus>() {
+      private final FileStatus[] stats;
+      private int i = 0;
+
+      { // initializer
+        stats = listStatus(f, filter);
+        if (stats == null) {
+          throw new FileNotFoundException( "File " + f + " does not exist.");
+        }
+      }
+      
+      @Override
+      public boolean hasNext() {
+        return i<stats.length;
+      }
+
+      @Override
+      public LocatedBlockFileStatus next() throws IOException {
+        if (!hasNext()) {
+          throw new NoSuchElementException("No more entry in " + f);
+        }
+        FileStatus result = stats[i++];
+        BlockAndLocation[] locs = null;
+        if (!result.isDir()) {
+          String[] name = { "localhost:50010" };
+          String[] host = { "localhost" };
+          
+          // create a dummy blockandlocation
+          locs = new BlockAndLocation[] {
+              new BlockAndLocation(0L, 0L, name, host, 
+                  new String[0], 0, result.getLen(), false) };
+        }
+        return new LocatedBlockFileStatus(result, locs, false);
       }
     };
   }
@@ -984,6 +1169,7 @@ public abstract class FileSystem extends Configured implements Closeable {
    *         after applying the filter
    * @throws IOException
    *           if encounter any problem while fetching the status
+   *           FileNotFoundException is thrown if path f doesn't exist
    */
   public FileStatus[] listStatus(Path f, PathFilter filter) throws IOException {
     ArrayList<FileStatus> results = new ArrayList<FileStatus>();
@@ -998,7 +1184,10 @@ public abstract class FileSystem extends Configured implements Closeable {
    * @param files
    *          a list of paths
    * @return a list of statuses for the files under the given paths after
-   *         applying the filter default Path filter
+   *         applying the filter default Path filter. If one or more of the files
+   *         don't exist, there won't be FileNotFoundException thrown.
+   *         Just no FileStatus will be added to the result array for that path.
+   *         
    * @exception IOException
    */
   public FileStatus[] listStatus(Path[] files)
@@ -1027,7 +1216,7 @@ public abstract class FileSystem extends Configured implements Closeable {
       try {
         listStatus(results, files[i], filter);
       } catch (FileNotFoundException e) {
-        LOG.info(e);
+        LOG.info("Parent path doesn't exist: " + e.getMessage());
       }
     }
     return results.toArray(new FileStatus[results.size()]);
@@ -1393,9 +1582,10 @@ public abstract class FileSystem extends Configured implements Closeable {
    * The src file is on the local disk.  Add it to FS at
    * the given dst name and the source is kept intact afterwards
    */
+  @Deprecated
   public void copyFromLocalFile(Path src, Path dst)
     throws IOException {
-    copyFromLocalFile(false, src, dst);
+    copyFromLocalFile(false, true, false, src, dst);
   }
 
   /**
@@ -1404,7 +1594,7 @@ public abstract class FileSystem extends Configured implements Closeable {
    */
   public void moveFromLocalFile(Path[] srcs, Path dst)
     throws IOException {
-    copyFromLocalFile(true, true, srcs, dst);
+    copyFromLocalFile(true, true, false, srcs, dst);
   }
 
   /**
@@ -1413,7 +1603,7 @@ public abstract class FileSystem extends Configured implements Closeable {
    */
   public void moveFromLocalFile(Path src, Path dst)
     throws IOException {
-    copyFromLocalFile(true, src, dst);
+    copyFromLocalFile(true, true, false, src, dst);
   }
 
   /**
@@ -1421,6 +1611,7 @@ public abstract class FileSystem extends Configured implements Closeable {
    * the given dst name.
    * delSrc indicates if the source should be removed
    */
+  @Deprecated
   public void copyFromLocalFile(boolean delSrc, Path src, Path dst)
     throws IOException {
     copyFromLocalFile(delSrc, true, src, dst);
@@ -1431,11 +1622,28 @@ public abstract class FileSystem extends Configured implements Closeable {
    * the given dst name.
    * delSrc indicates if the source should be removed
    */
+  @Deprecated
   public void copyFromLocalFile(boolean delSrc, boolean overwrite, 
                                 Path[] srcs, Path dst)
     throws IOException {
+    copyFromLocalFile(delSrc, overwrite, false, srcs, dst);
+  }
+  
+  /**
+   * copy a list of files from local to a directory in this file system
+   * 
+   * @param delSrc if source should be deleted
+   * @param overwrite if destination should be overwritten
+   * @param validate if copied destination should be validated against source
+   * @param srcs a list of source files
+   * @param dst destination
+   * @throws IOException
+   */
+  public void copyFromLocalFile(boolean delSrc, boolean overwrite,
+      boolean validate, Path[] srcs, Path dst) throws IOException {
     Configuration conf = getConf();
-    FileUtil.copy(getLocal(conf), srcs, this, dst, delSrc, overwrite, conf);
+    FileUtil.copy(getLocal(conf), srcs, this, dst, delSrc, overwrite,
+        validate, conf);
   }
   
   /**
@@ -1443,19 +1651,38 @@ public abstract class FileSystem extends Configured implements Closeable {
    * the given dst name.
    * delSrc indicates if the source should be removed
    */
+  @Deprecated
   public void copyFromLocalFile(boolean delSrc, boolean overwrite, 
                                 Path src, Path dst)
     throws IOException {
+    copyFromLocalFile(delSrc, overwrite, false, src, dst);
+  }
+
+  /**
+   * copy a file from local to a file in this file system
+   * 
+   * @param delSrc if source should be deleted
+   * @param overwrite if destination should be overwritten
+   * @param validate if copied destination should be validated against source
+   * @param src source file
+   * @param dst destination path
+   * @throws IOException
+   */
+  public void copyFromLocalFile(boolean delSrc, boolean overwrite, 
+      boolean validate, Path src, Path dst)
+    throws IOException {
     Configuration conf = getConf();
-    FileUtil.copy(getLocal(conf), src, this, dst, delSrc, overwrite, conf);
+    FileUtil.copy(getLocal(conf), src, this, dst, delSrc, overwrite,
+        validate, conf);
   }
     
   /**
    * The src file is under FS, and the dst is on the local disk.
    * Copy it from FS control to the local dst name.
    */
+  @Deprecated
   public void copyToLocalFile(Path src, Path dst) throws IOException {
-    copyToLocalFile(false, src, dst);
+    copyToLocalFile(false, false, src, dst);
   }
     
   /**
@@ -1464,7 +1691,7 @@ public abstract class FileSystem extends Configured implements Closeable {
    * Remove the source afterwards
    */
   public void moveToLocalFile(Path src, Path dst) throws IOException {
-    copyToLocalFile(true, src, dst);
+    copyToLocalFile(true, false, src, dst);
   }
 
   /**
@@ -1472,9 +1699,26 @@ public abstract class FileSystem extends Configured implements Closeable {
    * Copy it from FS control to the local dst name.
    * delSrc indicates if the src will be removed or not.
    */   
+  @Deprecated
   public void copyToLocalFile(boolean delSrc, Path src, Path dst)
     throws IOException {
-    FileUtil.copy(this, src, getLocal(getConf()), dst, delSrc, getConf());
+    copyToLocalFile(delSrc, false, src, dst);
+  }
+  
+  /**
+   * Copy a file from this file system to local
+   * 
+   * @param delSrc if source should be deleted
+   * @param validate if copied destination should be validated against source
+   * @param src source file
+   * @param dst destination file
+   * @throws IOException if error occurs
+   */
+  public void copyToLocalFile(boolean delSrc, boolean validate,
+      Path src, Path dst)
+  throws IOException {
+    FileUtil.copy(this, src, getLocal(getConf()), dst, delSrc,
+        validate, getConf());
   }
 
   /**
@@ -1506,7 +1750,7 @@ public abstract class FileSystem extends Configured implements Closeable {
   public void close() throws IOException {
     // delete all files that were marked as delete-on-exit.
     processDeleteOnExit();
-    CACHE.remove(this.key, this);
+    CACHE.remove(this);
   }
 
   /**
@@ -1514,7 +1758,7 @@ public abstract class FileSystem extends Configured implements Closeable {
    * specified amount of time.
    * @param prefix path prefix specifying subset of files to examine
    * @param millis select files that have been open longer that this
-   * @param where to start searching in the case of subsequent calls, or null
+   * @param start where to start searching in the case of subsequent calls, or null
    * @return array of OpenFileInfo objects
    * @throw IOException
    */
@@ -1576,6 +1820,17 @@ public abstract class FileSystem extends Configured implements Closeable {
   public FileChecksum getFileChecksum(Path f) throws IOException {
     return null;
   }
+
+  /**
+   * Get the CRC checksum of a file.
+   *
+   * @param f The file path
+   * @return The file checksum. 
+   */
+  public int getFileCrc(Path f) throws IOException {
+    throw new IOException("Not implemented");
+  }
+
   
   /**
    * Set the verify checksum flag. This is only applicable if the 
@@ -1655,13 +1910,17 @@ public abstract class FileSystem extends Configured implements Closeable {
       ) throws IOException {
   }
 
-  private static FileSystem createFileSystem(URI uri, Configuration conf
+  private static FileSystem createFileSystem(URI uri, Configuration conf, Key key
       ) throws IOException {
+    conf = ClientConfigurationUtil.mergeConfiguration(uri, conf);
     Class<?> clazz = conf.getClass("fs." + uri.getScheme() + ".impl", null);
     if (clazz == null) {
       throw new IOException("No FileSystem for scheme: " + uri.getScheme());
     }
     FileSystem fs = (FileSystem)ReflectionUtils.newInstance(clazz, conf);
+    if (key != null) {
+      fs.key = key;
+    }
     fs.initialize(uri, conf);
     return fs;
   }
@@ -1670,6 +1929,12 @@ public abstract class FileSystem extends Configured implements Closeable {
   static class Cache {
     private final Map<Key, FileSystem> map = new HashMap<Key, FileSystem>();
     private final Set<Key> pending = new HashSet<Key>();
+
+    /** 
+     * shutdownHookCount is the number of open FileSystems 
+     * with shutdownHook set.
+     */
+    private static int shutdownHookCount = 0;
 
     /** A variable that makes all objects in the cache unique */
     private static AtomicLong unique = new AtomicLong(1);
@@ -1709,15 +1974,27 @@ public abstract class FileSystem extends Configured implements Closeable {
       
       try {
         // Create one
-        fs = createFileSystem(uri, conf);
-        fs.key = key;
+        fs = createFileSystem(uri, conf, key);
+
+        // if sampling is enabled, and fs is the specified type of file system,
+        // and this instance is randomly chosen to be in the sample set, then
+        // wrap fs with a sample FS.
+        if (conf.get("fs.sample.impl", null) != null) {
+          Class<?> underlying = conf.getClass("fs.sample.underlying", null);
+          if (underlying != null && underlying.equals(fs.getClass())) {
+            if (inSampleSet(conf)) {
+              fs = createSampleFsWrapper(conf, fs);
+              fs.key = key;
+            }
+          }
+        }
         
         // Add it back to the cache
         synchronized (this) {
-          if (map.isEmpty() && !clientFinalizer.isAlive()) {
-            Runtime.getRuntime().addShutdownHook(clientFinalizer);
-          }
           map.put(key, fs);
+          if (conf.getBoolean("dfs.client.shutdownhook.enable", true)) {
+            enableShutdownHook(fs);
+          }
         }
       } finally {
         // Make sure we remove the pending key even if createFileSystem 
@@ -1727,50 +2004,129 @@ public abstract class FileSystem extends Configured implements Closeable {
           notifyAll();
         }
       }
-      
       return fs;
     }
 
-    synchronized void remove(Key key, FileSystem fs) {
-      if (map.containsKey(key) && fs == map.get(key)) {
-        map.remove(key);
-        if (map.isEmpty() && !clientFinalizer.isAlive()) {
-          if (!Runtime.getRuntime().removeShutdownHook(clientFinalizer)) {
-            LOG.info("Could not cancel cleanup thread, though no " +
-                     "FileSystems are open");
-          }
+    /** Determines whether a given FS session is part of a sample,
+     *  in which case a sample FS is used.  Based on the config
+     *  options, it is possible for the sample to consist of a
+     *  determined subset of machines, or a random subset of the
+     *  sessions on a given machine.
+     */
+    private boolean inSampleSet(Configuration conf) {
+      String flagPath = conf.get("fs.sample.machine.flagfile", "");
+      float sampleRate = conf.getFloat("fs.sample.session.rate",
+                                       (float)1.0);
+      boolean sample = true;
+
+      if (!flagPath.equals("")) {
+        if (!(new File(flagPath).exists())) {
+          // a path for the enable flag file is specified,
+          // but the file does not exist
+          sample = false;
         }
+      }
+
+      if (sampleRate < (float)1.0) {
+        float rand = (new Random()).nextFloat();
+        if (rand > sampleRate) {
+          // this FS was randomly chosen not to be in the sample
+          sample = false;
+        }
+      }
+
+      return sample;
+    }
+
+    /** Creates a sample FS layer over an underlying FS.  The sample FS
+     *  should be a FilterFileSystem.  Also, the sample FS should
+     *  assume the underlying FS is already initialized, and not perform
+     *  a second initialization of the underlying FS when the sample FS
+     *  is initialized.
+     */
+    private FileSystem createSampleFsWrapper(Configuration conf,
+                                             FileSystem underlying)throws IOException {
+
+      Class<?> clazz = conf.getClass("fs.sample.impl", null);
+      if (clazz == null) {
+        throw new IOException("No sample SampleFileSystem specified");
+      }
+      Object newFsObj = ReflectionUtils.newInstance(clazz,
+                                                    new Class[] {FileSystem.class},
+                                                    new Object[] {underlying});
+      FilterFileSystem sampleFs = (FilterFileSystem)newFsObj;
+      sampleFs.initialize(underlying.getUri(), conf);
+      return sampleFs;
+    }
+
+    /**
+     * Remove removes the given fs from the cache.
+     */
+    synchronized void remove(FileSystem fs) {
+      Key key = fs.key;
+      if (fs == map.get(key)) {
+        map.remove(key);
+        disableShutdownHook(fs);
       }
     }
 
-    void closeAll() throws IOException {
+    /**
+     * Close and unmap all FileSystems selected by the given FSSselect,
+     * which is either AllSelect, UGISelect, or ShutdownSelect.
+     */
+    private void closeAll(FSSelect select) throws IOException {
+      List<FileSystem> targetFSList = new ArrayList<FileSystem>();
+      //Make a pass over the list and collect the filesystems to close
+      //we cannot close inline since close() removes the entry from the Map
+      synchronized(this) {
+        for (Map.Entry<Key, FileSystem> entry : map.entrySet()) {
+          final Key key = entry.getKey();
+          final FileSystem fs = entry.getValue();
+          if (select.needClose(fs)) {
+            targetFSList.add(fs);
+          }
+        }
+      }
       List<IOException> exceptions = new ArrayList<IOException>();
-      List<FileSystem> filesystems = new ArrayList<FileSystem>();
-      synchronized (this) {
-        for(; !map.isEmpty(); ) {
-          Map.Entry<Key, FileSystem> e = map.entrySet().iterator().next();
-          final Key key = e.getKey();
-          final FileSystem fs = e.getValue();
-          filesystems.add(fs);
-
-          //remove from cache
-          remove(key, fs);
+      for (FileSystem fs : targetFSList) {
+        try {
+          fs.close();
+        }
+        catch(IOException ioe) {
+          exceptions.add(ioe);
         }
       }
-      for (FileSystem fs: filesystems) {
-        if (fs != null) {
-          try {
-            fs.close();
-          }
-          catch(IOException ioe) {
-            exceptions.add(ioe);
-          }
-        }
-      }
-
       if (!exceptions.isEmpty()) {
         throw MultipleIOException.createIOException(exceptions);
       }
+    }
+
+    /**
+     * enableShutdownHook turns on the shutdownHook for this FileSystem.
+     * Caller must hold cache object lock.
+     */
+    private static void enableShutdownHook(FileSystem fs) {
+      if (fs.shutdownHook) {
+        return;
+      }
+      fs.shutdownHook = true;
+      if (shutdownHookCount++ == 0 && !clientFinalizer.isAlive()) {
+        Runtime.getRuntime().addShutdownHook(clientFinalizer);
+      } 
+    }
+
+    /**
+     * disableShutdownHook turns off the shutdownHook for this FileSystem.
+     * Caller must hold cache object lock.
+     */
+    private static void disableShutdownHook(FileSystem fs) {
+      if (!fs.shutdownHook) {
+        return;
+      }
+      fs.shutdownHook = false;
+      if (--shutdownHookCount == 0 && !clientFinalizer.isAlive()) {
+        Runtime.getRuntime().removeShutdownHook(clientFinalizer);
+      } 
     }
 
     /** FileSystem.Cache.Key */
@@ -1788,13 +2144,11 @@ public abstract class FileSystem extends Configured implements Closeable {
         scheme = uri.getScheme()==null?"":uri.getScheme().toLowerCase();
         authority = uri.getAuthority()==null?"":uri.getAuthority().toLowerCase();
         this.unique = unique;
-        UserGroupInformation ugi = UserGroupInformation.readFrom(conf);
-        if (ugi == null) {
-          try {
-            ugi = UserGroupInformation.login(conf);
-          } catch(LoginException e) {
-            LOG.warn("uri=" + uri, e);
-          }
+        UserGroupInformation ugi = null;
+        try {
+          ugi = UserGroupInformation.getUGI(conf);
+        } catch(LoginException e) {
+          LOG.warn("uri=" + uri, e);
         }
         username = ugi == null? null: ugi.getUserName();
       }
@@ -2070,4 +2424,45 @@ public abstract class FileSystem extends Configured implements Closeable {
     return false;
   }
 
+  /** 
+   * FSSelect is an interface for figuring out which FileSystems to
+   * close in a closeAll() call.
+   * Its method needClose() returns true if this FS should be closed.
+   */
+  interface FSSelect {
+    public boolean needClose(FileSystem fs);
+  }
+
+  /** 
+   * AllSelect is for closing all FileSystems.
+   */
+  static class AllSelect implements FSSelect {
+    public boolean needClose(FileSystem fs) {
+      return fs != null;
+    }
+  }
+
+  /** 
+   * ShutdownSelect is for closing FileSystems configured with
+   * shutdownHook.
+   */
+  static class ShutdownSelect implements FSSelect {
+    public boolean needClose(FileSystem fs) {
+        return fs != null && fs.shutdownHook;
+    }
+  }
+
+  /** 
+   * UGISelect is for closing FileSystems that match this 
+   * UserGroupinformation.
+   */
+  static class UGISelect implements FSSelect {
+    UGISelect(UserGroupInformation ugi) {
+      this.uginame = ugi.getUserName();
+    }
+    public boolean needClose(FileSystem fs) {
+      return fs != null && fs.key != null && uginame.equals(fs.key.username);
+    }
+    private String uginame;
+  }
 }

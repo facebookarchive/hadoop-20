@@ -22,6 +22,9 @@ import java.io.*;
 import java.util.zip.GZIPOutputStream;
 import java.util.zip.GZIPInputStream;
 
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+
 import org.apache.hadoop.io.compress.DefaultCodec;
 import org.apache.hadoop.io.compress.zlib.*;
 
@@ -33,6 +36,9 @@ public class GzipCodec extends DefaultCodec {
    * A bridge that wraps around a DeflaterOutputStream to make it 
    * a CompressionOutputStream.
    */
+  public static final String IO_COMPRESSION_CODEC_GZIP_BUFFERSIZE_KEY = "io.compression.codec.gzip.buffersize";
+  public static final Log LOG = LogFactory.getLog(GzipCodec.class);
+  
   protected static class GzipOutputStream extends CompressorStream {
 
     private static class ResetableGZIPOutputStream extends GZIPOutputStream {
@@ -153,8 +159,10 @@ public class GzipCodec extends DefaultCodec {
   }
 
   public Compressor createCompressor() {
+    int bufferSize = conf.getInt(IO_COMPRESSION_CODEC_GZIP_BUFFERSIZE_KEY, 64 * 1024);
+    LOG.info("Buffer size used is " + bufferSize);
     return (ZlibFactory.isNativeZlibLoaded(conf))
-      ? new GzipZlibCompressor()
+      ? new GzipZlibCompressor(bufferSize)
       : null;
   }
 
@@ -184,8 +192,10 @@ public class GzipCodec extends DefaultCodec {
   }
 
   public Decompressor createDecompressor() {
+    int bufferSize = conf.getInt(IO_COMPRESSION_CODEC_GZIP_BUFFERSIZE_KEY, 64 * 1024);
+    LOG.info("Buffer size used is " + bufferSize);
     return (ZlibFactory.isNativeZlibLoaded(conf))
-      ? new GzipZlibDecompressor()
+      ? new GzipZlibDecompressor(bufferSize)
       : null;
   }
 
@@ -200,16 +210,18 @@ public class GzipCodec extends DefaultCodec {
   }
 
   static final class GzipZlibCompressor extends ZlibCompressor {
-    public GzipZlibCompressor() {
+    public GzipZlibCompressor(int bufferSize) {
       super(ZlibCompressor.CompressionLevel.DEFAULT_COMPRESSION,
           ZlibCompressor.CompressionStrategy.DEFAULT_STRATEGY,
-          ZlibCompressor.CompressionHeader.GZIP_FORMAT, 64*1024);
+          ZlibCompressor.CompressionHeader.GZIP_FORMAT, 
+          bufferSize);
     }
   }
 
   static final class GzipZlibDecompressor extends ZlibDecompressor {
-    public GzipZlibDecompressor() {
-      super(ZlibDecompressor.CompressionHeader.AUTODETECT_GZIP_ZLIB, 64*1024);
+    public GzipZlibDecompressor(int bufferSize) {
+      super(ZlibDecompressor.CompressionHeader.AUTODETECT_GZIP_ZLIB, 
+          bufferSize);
     }
   }
 

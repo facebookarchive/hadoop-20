@@ -18,7 +18,10 @@
 package org.apache.hadoop.hdfs.tools.offlineImageViewer;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedList;
+import java.util.Map;
 
 /**
  * File size distribution visitor.
@@ -63,6 +66,8 @@ class FileDistributionVisitor extends TextWriterImageVisitor {
   private int totalBlocks;
   private long totalSpace;
   private long maxFileSize;
+  
+  private Map<String, ArrayList<String>> hardlinkIDToFilesMap;
 
   private FileContext current;
 
@@ -93,6 +98,7 @@ class FileDistributionVisitor extends TextWriterImageVisitor {
     this.totalBlocks = 0;
     this.totalSpace = 0;
     this.maxFileSize = 0;
+    this.hardlinkIDToFilesMap = new HashMap<String, ArrayList<String>>();
   }
 
   @Override
@@ -109,6 +115,13 @@ class FileDistributionVisitor extends TextWriterImageVisitor {
     System.out.println("totalBlocks = " + totalBlocks);
     System.out.println("totalSpace = " + totalSpace);
     System.out.println("maxFileSize = " + maxFileSize);
+    
+    System.out.println("total hardlinked files = " + this.hardlinkIDToFilesMap.size());
+    for (Map.Entry<String, ArrayList<String>> entry : this.hardlinkIDToFilesMap.entrySet()) {
+      for (String filePath : entry.getValue()) {
+        System.out.println("HardLinkID: " + entry.getKey() + "\t" + filePath);
+      }
+    }
     super.finish();
   }
 
@@ -153,6 +166,14 @@ class FileDistributionVisitor extends TextWriterImageVisitor {
       case NUM_BYTES:
         current.fileSize += Long.valueOf(value);
         break;
+      case INODE_HARDLINK_ID:
+        if (this.hardlinkIDToFilesMap.containsKey(value)) {
+          this.hardlinkIDToFilesMap.get(value).add(current.path);
+        } else {
+          ArrayList<String> filePathList = new ArrayList<String>();
+          filePathList.add(current.path);
+          this.hardlinkIDToFilesMap.put(value, filePathList);
+        }
       default:
         break;
       }

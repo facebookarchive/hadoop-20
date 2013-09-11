@@ -9,6 +9,7 @@
   import="org.apache.hadoop.util.*"
   import="org.apache.hadoop.hdfs.*"
   import="org.apache.hadoop.hdfs.DistributedFileSystem.*"
+  import="org.apache.hadoop.raid.DistBlockIntegrityMonitor.CorruptFileCounter"
   import="java.lang.Integer"
   import="java.text.SimpleDateFormat"
 %>
@@ -16,11 +17,10 @@
   RaidNode raidNode = (RaidNode) application.getAttribute("raidnode");
   StatisticsCollector stats = (StatisticsCollector) raidNode
       .getStatsCollector();
-  Statistics xorSt = stats.getRaidStatistics(ErasureCodeType.XOR);
-  Statistics rsSt = stats.getRaidStatistics(ErasureCodeType.RS);
   PurgeMonitor purge = raidNode.getPurgeMonitor();
+  CorruptFileCounter counter = raidNode.getCorruptFileCounter();
   PlacementMonitor place = raidNode.getPlacementMonitor();
-  DiskStatus ds = new DFSClient(raidNode.getConf()).getDiskStatus();
+  DiskStatus ds = new DFSClient(raidNode.getConf()).getNSDiskStatus();
   String name = raidNode.getHostName();
   name = name.substring(0, name.indexOf(".")).toUpperCase();
 %>
@@ -43,7 +43,7 @@
 
 <html>
   <head>
-    <title><%=name%> Hadoop RaidNode Administration</title> <link rel="stylesheet" type="text/css" href="/static/hadoop.css">
+    <title><%=name%> Hadoop RaidNode Administration</title> <link rel="stylesheet" type="text/css" href="static/hadoop.css">
   </head>
 <body>
 <h1><%=name%> Hadoop RaidNode Administration</h1>
@@ -71,7 +71,7 @@
   if (stats.getLastUpdateTime() != 0L) {
     tableStr += tr(td("Effective Replication") + td(":") + td(repl));
     tableStr += tr(td("Total") + td(":") + td(total));
-    tableStr += tr(td("Used") + td(":") + td(used));
+    tableStr += tr(td("Namespace Used") + td(":") + td(used));
     tableStr += tr(td("Saving") + td(":") + td(saving));
     tableStr += tr(td("Done Saving") + td(":") + td(doneSaving));
     tableStr += tr(td("File Scanned") + td(":") + td(filesScanned));
@@ -79,57 +79,41 @@
     tableStr += tr(td("Last Update") + td(":") + td(lastUpdate));
   } else {
     tableStr += tr(td("Total") + td(":") + td(total));
-    tableStr += tr(td("Used") + td(":") + td(used));
+    tableStr += tr(td("Namespace Used") + td(":") + td(used));
     tableStr += tr(td("File Scanned") + td(":") + td(filesScanned));
   }
   out.print(table(tableStr));
 %>
 <hr>
-<h2>XOR</h2>
 <%
-  String paritySize, estParitySize;
-  if (xorSt != null) {
-    out.print(xorSt.htmlTable());
-    saving = StringUtils.byteDesc(xorSt.getSaving());
-    doneSaving = StringUtils.byteDesc(xorSt.getDoneSaving());
-    repl = StringUtils.limitDecimalTo2(xorSt.getEffectiveReplication());
-    paritySize = StringUtils.byteDesc(xorSt.getParityCounters()
-        .getNumBytes());
-    estParitySize = StringUtils.byteDesc(xorSt.getEstimatedParitySize());
-    tableStr = "";
-    tableStr += tr(td("Effective Replication") + td(":") + td(repl));
-    tableStr += tr(td("Saving") + td(":") + td(saving));
-    tableStr += tr(td("Done Saving") + td(":") + td(doneSaving));
-    tableStr += tr(td("Parity / Expected") + td(":")
-        + td(paritySize + " / " + estParitySize));
-    out.print(table(tableStr));
-  } else {
-    out.print("Wait for collecting");
+  for (Codec codec: Codec.getCodecs()) {
+    out.print("\n<h2>" + codec.id + " (" +
+              (codec.isDirRaid?"Directory-level":
+                               "File-level") +
+              ") " + "</h2>\n");
+    Statistics codeStats = stats.getRaidStatistics(codec.id);
+    String paritySize, estParitySize;
+    if (codeStats != null) {
+      out.print(codeStats.htmlTable());
+      saving = StringUtils.byteDesc(codeStats.getSaving());
+      doneSaving = StringUtils.byteDesc(codeStats.getDoneSaving());
+      repl = StringUtils.limitDecimalTo2(codeStats.getEffectiveReplication());
+      paritySize = StringUtils.byteDesc(codeStats.getParityCounters()
+          .getNumBytes());
+      estParitySize = StringUtils.byteDesc(codeStats.getEstimatedParitySize());
+      tableStr = "";
+      tableStr += tr(td("Effective Replication") + td(":") + td(repl));
+      tableStr += tr(td("Saving") + td(":") + td(saving));
+      tableStr += tr(td("Done Saving") + td(":") + td(doneSaving));
+      tableStr += tr(td("Parity / Expected") + td(":")
+          + td(paritySize + " / " + estParitySize));
+      out.print(table(tableStr));
+    } else {
+      out.print("Wait for collecting");
+    }
+    out.print("\n<hr>\n");
   }
 %>
-<hr>
-<h2>RS</h2>
-<%
-  if (rsSt != null) {
-    out.print(rsSt.htmlTable());
-    saving = StringUtils.byteDesc(rsSt.getSaving());
-    doneSaving = StringUtils.byteDesc(rsSt.getDoneSaving());
-    repl = StringUtils.limitDecimalTo2(rsSt.getEffectiveReplication());
-    paritySize = StringUtils.byteDesc(rsSt.getParityCounters()
-        .getNumBytes());
-    estParitySize = StringUtils.byteDesc(rsSt.getEstimatedParitySize());
-    tableStr = "";
-    tableStr += tr(td("Effective Replication") + td(":") + td(repl));
-    tableStr += tr(td("Saving") + td(":") + td(saving));
-    tableStr += tr(td("Done Saving") + td(":") + td(doneSaving));
-    tableStr += tr(td("Parity / Expected") + td(":")
-        + td(paritySize + " / " + estParitySize));
-    out.print(table(tableStr));
-  } else {
-    out.print("Wait for collecting");
-  }
-%>
-<hr>
 <h2>Purge Progress</h2>
 <%
   out.print(purge.htmlTable());
@@ -138,7 +122,11 @@
 <h2>Block Placement</h2>
 <%
   if (place.lastUpdateTime() != 0) {
+    out.println("Block Placement Per Node");
     out.print(place.htmlTable());
+    out.println();
+    out.println("Block Placement Per Rack");
+    out.print(place.htmlTablePerRack());
     tableStr = "";
     lastUpdate =
         StringUtils.formatTime(now() - place.lastUpdateTime()) + " ago";
@@ -156,6 +144,20 @@
     out.print(table(tableStr));
   }
 %>
+<%
+  String metricsUrl = raidNode.getReadReconstructionMetricsUrl();
+  if (metricsUrl != null && !metricsUrl.trim().equals("")) {
+    out.print("<hr>\n");
+    out.print("<h2>Read Reconstruction Metrics "
+        + JspUtils.link("see details", metricsUrl)
+        + "</h2>");
+  }
+%>
+<h2>Missing Blocks</h2>
+<%
+  out.print(counter.getMissingBlksHtmlTable());
+%>
+
 <%
   BlockIntegrityMonitor.Status status = null;
   boolean unsupported = false;

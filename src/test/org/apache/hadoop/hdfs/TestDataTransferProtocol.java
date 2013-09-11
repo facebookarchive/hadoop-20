@@ -157,10 +157,15 @@ public class TestDataTransferProtocol extends TestCase {
     recvBuf.reset();
     sendBuf.reset();
     
-    // bad version
-    recvOut.writeShort((short)(DataTransferProtocol.DATA_TRANSFER_VERSION-1));
-    sendOut.writeShort((short)(DataTransferProtocol.DATA_TRANSFER_VERSION-1));
-    sendRecvData("Wrong Version", true);
+    // bad low version
+    recvOut.writeShort((short)(DataTransferProtocol.BACKWARD_COMPATIBLE_VERSION-1));
+    sendOut.writeShort((short)(DataTransferProtocol.BACKWARD_COMPATIBLE_VERSION-1));
+    sendRecvData("Wrong Low Version", true);
+    
+    // bad high version
+    recvOut.writeShort((short)(DataTransferProtocol.DATA_TRANSFER_VERSION+1));
+    sendOut.writeShort((short)(DataTransferProtocol.DATA_TRANSFER_VERSION+1));
+    sendRecvData("Wrong High Version", true);
 
     // bad ops
     sendBuf.reset();
@@ -180,6 +185,7 @@ public class TestDataTransferProtocol extends TestCase {
     Text.writeString(sendOut, "cl");// clientID
     sendOut.writeBoolean(false); // no src node info
     sendOut.writeInt(0);           // number of downstream targets
+    sendOut.writeInt(0); // The size for bitset of options.
     sendOut.writeByte((byte)DataChecksum.CHECKSUM_CRC32);
     
     // bad bytes per checksum
@@ -217,9 +223,11 @@ public class TestDataTransferProtocol extends TestCase {
     Text.writeString(sendOut, "cl");// clientID
     sendOut.writeBoolean(false); // no src node info
     sendOut.writeInt(0);
+    sendOut.writeInt(0); // number of options
     sendOut.writeByte((byte)DataChecksum.CHECKSUM_CRC32);
     sendOut.writeInt((int)512);
     sendOut.writeInt(4);           // size of packet
+    sendOut.writeInt(2); // packet version
     sendOut.writeLong(0);          // OffsetInBlock
     sendOut.writeLong(100);        // sequencenumber
     sendOut.writeBoolean(false);   // lastPacketInBlock
@@ -245,9 +253,11 @@ public class TestDataTransferProtocol extends TestCase {
     Text.writeString(sendOut, "cl");// clientID
     sendOut.writeBoolean(false); // no src node info
     sendOut.writeInt(0);
+    sendOut.writeInt(0); // number of options.
     sendOut.writeByte((byte)DataChecksum.CHECKSUM_CRC32);
     sendOut.writeInt((int)512);    // checksum size
     sendOut.writeInt(8);           // size of packet
+    sendOut.writeInt(1);           // packet version
     sendOut.writeLong(0);          // OffsetInBlock
     sendOut.writeLong(100);        // sequencenumber
     sendOut.writeBoolean(true);    // lastPacketInBlock
@@ -256,8 +266,9 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeInt(0);           // zero checksum
     //ok finally write a block with 0 len
     Text.writeString(recvOut, "");
-    new DataTransferProtocol.PipelineAck(100, 
-        new short[]{DataTransferProtocol.OP_STATUS_SUCCESS}).write(recvOut);
+    new DataTransferProtocol.PipelineAck(100,
+        new short[] { DataTransferProtocol.OP_STATUS_SUCCESS }, null)
+        .write(recvOut);
     sendRecvData("Writing a zero len block blockid " + newBlockId, false);
     
     /* Test OP_READ_BLOCK */
@@ -275,6 +286,9 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(fileLen);
     recvOut.writeShort((short)DataTransferProtocol.OP_STATUS_ERROR);
     Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(false);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); // The size for bitset of options.
     sendRecvData("Wrong block ID " + newBlockId + " for read", false); 
 
     // negative block start offset
@@ -287,6 +301,9 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(-1L);
     sendOut.writeLong(fileLen);
     Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(false);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); //bitset options.
     sendRecvData("Negative start-offset for read for block " + 
                  firstBlock.getBlockId(), false);
 
@@ -300,6 +317,9 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(fileLen);
     sendOut.writeLong(fileLen);
     Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(false);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); //bitset options.
     sendRecvData("Wrong start-offset for reading block " +
                  firstBlock.getBlockId(), false);
     
@@ -315,6 +335,9 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(0);
     sendOut.writeLong(-1-random.nextInt(oneMil));
     Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(false);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); //bitset options.
     sendRecvData("Negative length for reading block " +
                  firstBlock.getBlockId(), false);
     
@@ -330,12 +353,30 @@ public class TestDataTransferProtocol extends TestCase {
     sendOut.writeLong(0);
     sendOut.writeLong(fileLen + 1);
     Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(false);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); //bitset options.
     sendRecvData("Wrong length for reading block " +
                  firstBlock.getBlockId(), false);
     
     //At the end of all this, read the file to make sure that succeeds finally.
     sendBuf.reset();
     sendOut.writeShort((short)DataTransferProtocol.DATA_TRANSFER_VERSION);
+    sendOut.writeByte((byte)DataTransferProtocol.OP_READ_BLOCK);
+    sendOut.writeInt(namespaceId); // namespace id
+    sendOut.writeLong(firstBlock.getBlockId());
+    sendOut.writeLong(firstBlock.getGenerationStamp());
+    sendOut.writeLong(0);
+    sendOut.writeLong(fileLen);
+    Text.writeString(sendOut, "cl");
+    sendOut.writeBoolean(true);
+    sendOut.writeBoolean(false);
+    sendOut.writeInt(0); //bitset options.
+    readFile(fileSys, file, fileLen);
+    
+    // not support REUSE_CONNECTION
+    sendBuf.reset();
+    sendOut.writeShort((short)DataTransferProtocol.READ_REUSE_CONNECTION_VERSION - 1);
     sendOut.writeByte((byte)DataTransferProtocol.OP_READ_BLOCK);
     sendOut.writeInt(namespaceId); // namespace id
     sendOut.writeLong(firstBlock.getBlockId());

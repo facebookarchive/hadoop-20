@@ -74,26 +74,6 @@ OPTIONAL CONFIGIURATION:
 
 The following properties can be set in hdfs-site.xml to further tune you configuration:
 
-    Specifies the location where parity files are located.
-        <property>
-          <name>hdfs.raid.locations</name>
-          <value>hdfs://newdfs.data:8000/raid</value>
-          <description>The location for parity files. If this is
-          is not defined, then defaults to /raid.
-          </descrition>
-        </property>
-
-    Specify the parity stripe length
-        <property>
-          <name>hdfs.raid.stripeLength</name>
-          <value>10</value>
-          <description>The number of blocks in a file to be combined into
-          a single raid parity block. The default value is 5. The lower
-          the number the greater is the disk space you will save when you
-          enable raid.
-          </description>
-        </property>
-
     Specify the size of HAR part-files
         <property>
           <name>raid.har.partfile.size</name>

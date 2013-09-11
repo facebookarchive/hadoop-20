@@ -41,8 +41,10 @@ public class TestAvatarMergeNamespaces {
     
     try {
       LOG.info("Start cluster1 and cluster2");
-      cluster1 = new MiniAvatarCluster(conf1, 1, true, null, null, 1, true);
-      cluster2 = new MiniAvatarCluster(conf2, 1, true, null, null, 2, true);
+      cluster1 = new MiniAvatarCluster.Builder(conf1)
+      				.federation(true).enableQJM(false).build();
+      cluster2 = new MiniAvatarCluster.Builder(conf2)
+      				.numNameNodes(2).federation(true).enableQJM(false).build();
       LOG.info("Write data to cluster2 and cluster1");
       Path p = new Path("/testFile");
       TestMergeNamespaces.createFile(cluster1.getFileSystem(0), p, 512 * 1024L);

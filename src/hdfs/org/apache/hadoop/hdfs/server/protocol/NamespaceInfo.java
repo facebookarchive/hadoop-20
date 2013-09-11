@@ -44,6 +44,11 @@ public class NamespaceInfo extends StorageInfo implements Writable {
     buildVersion = null;
   }
   
+  public NamespaceInfo(StorageInfo from) {
+    super(from);
+    buildVersion = "";
+  }
+  
   public NamespaceInfo(int nsID, long cT, int duVersion) {
     super(FSConstants.LAYOUT_VERSION, nsID, cT);
     buildVersion = Storage.getBuildVersion();

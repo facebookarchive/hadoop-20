@@ -27,10 +27,10 @@ import java.util.Collection;
 public class Pool {
   /** Name of the default pool, where jobs with no pool parameter go. */
   public static final String DEFAULT_POOL_NAME = "default";
-  
+
   /** Pool name. */
   private String name;
-  
+
   /** Jobs in this specific pool; does not include children pools' jobs. */
   private Collection<JobInProgress> jobs = new ArrayList<JobInProgress>();
 
@@ -41,19 +41,25 @@ public class Pool {
     this.name = name;
     this.isConfigured = isConfigured;
   }
-  
+
   public Collection<JobInProgress> getJobs() {
     return jobs;
   }
-  
+
   public void addJob(JobInProgress job) {
     jobs.add(job);
   }
-  
-  public void removeJob(JobInProgress job) {
-    jobs.remove(job);
+
+  /**
+   * Remove the job from the pool
+   *
+   * @param job Job to remove from the pool
+   * @return True if the job was removed
+   */
+  public boolean removeJob(JobInProgress job) {
+    return jobs.remove(job);
   }
-  
+
   public String getName() {
     return name;
   }

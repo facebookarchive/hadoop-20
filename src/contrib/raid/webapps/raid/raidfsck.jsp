@@ -12,12 +12,20 @@
 %>
 <%!
   String error = null;
-  public BufferedReader runFsck(RaidNode raidNode, String dir) throws Exception {
+  final static int FILE_DISPLAY_LIMIT = 500;
+  public BufferedReader runFsck(RaidNode raidNode, 
+      String dir, boolean listRecoverableFiles) throws Exception {
     try {
       ByteArrayOutputStream bout = new ByteArrayOutputStream();
       PrintStream ps = new PrintStream(bout, true);
       RaidShell shell = new RaidShell(raidNode.getConf(), ps);
-      int res = ToolRunner.run(shell, new String[]{"-fsck", dir});
+      String[] arguments;
+      if (listRecoverableFiles) {
+        arguments = new String[] {"-fsck", dir, "-listrecoverablefiles"};
+      } else {
+        arguments = new String[] {"-fsck", dir};
+      }
+      int res = ToolRunner.run(shell, arguments);
       ByteArrayInputStream bin = new ByteArrayInputStream(bout.toByteArray());
       shell.close();
       return new BufferedReader(new InputStreamReader(bin));
@@ -36,7 +44,7 @@
 <html>
   <head>
     <title><%=name %> Hadoop RaidNode Administration</title>
-    <link rel="stylesheet" type="text/css" href="/static/hadoop.css">
+    <link rel="stylesheet" type="text/css" href="static/hadoop.css">
   </head>
 <body>
 <h1><%=name %> Hadoop RaidNode Administration</h1>
@@ -55,7 +63,16 @@ out.print("<h2>Raid Corrupt Files</h2>");
   if (dir == null || dir.length() == 0) {
     dir = "/";
   }
-  BufferedReader reader = runFsck(raidNode, dir);
+  String recoverableStr = request.getParameter("recoverable");
+  int recoverable = 0;
+  try {
+    if (recoverableStr != null && recoverableStr.length() > 0) {
+      recoverable = Integer.valueOf(recoverableStr);
+    } 
+  } catch (NumberFormatException e) {
+    error = e.getMessage();
+  }
+  BufferedReader reader = runFsck(raidNode, dir, recoverable != 0);
   if (error != null) {
 %>
     <%=error%> <br>
@@ -63,13 +80,14 @@ out.print("<h2>Raid Corrupt Files</h2>");
   } else {
     String file = null;
     int total = 0;
-    while (reader != null && (file = reader.readLine()) != null) {
+    while (reader != null && (file = reader.readLine()) != null 
+        && total < FILE_DISPLAY_LIMIT) {
       total++;
       out.println(file + "<br>");
     }
 %>
     <p>
-      <b>Total:</b> <%=total%> corrupt file(s)
+      <b>Total:</b> At least <%=total%> corrupt file(s).
     </p>
 <%
   }

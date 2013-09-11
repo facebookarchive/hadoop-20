@@ -36,7 +36,7 @@ public class Trash extends Configured {
    * @param conf a Configuration
    */
   public Trash(Configuration conf) throws IOException {
-    this(FileSystem.get(conf), conf, null);
+    this(FileSystem.get(conf), conf);
   }
 
   /**
@@ -71,6 +71,10 @@ public class Trash extends Configured {
   public void setDeleteInterval(long deleteInterval) {
     trashPolicy.deletionInterval = deleteInterval;
   }
+  
+  public long getDeletionInterval(){
+    return trashPolicy.deletionInterval;
+  }
 
   /** Move a file or directory to the current trash directory.
    * @return false if the item is already in the trash or trash is disabled
@@ -100,7 +104,7 @@ public class Trash extends Configured {
   }
 
   /** get the current working directory */
-  Path getCurrentTrashDir() {
+  Path getCurrentTrashDir() throws IOException {
     return trashPolicy.getCurrentTrashDir();
   }
 

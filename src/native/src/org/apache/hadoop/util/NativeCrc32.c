@@ -57,7 +57,7 @@ static void throw_checksum_exception(JNIEnv *env,
   if ((jstr_message = (*env)->NewStringUTF(env, message)) == NULL) {
     goto cleanup;
   }
- 
+
   // Throw exception
   jclass checksum_exception_clazz = (*env)->FindClass(
     env, "org/apache/hadoop/fs/ChecksumException");
@@ -95,6 +95,40 @@ static int convert_java_crc_type(JNIEnv *env, jint crc_type) {
         "Invalid checksum type");
       return -1;
   }
+}
+
+JNIEXPORT jint JNICALL Java_org_apache_hadoop_util_NativeCrc32_update
+  (JNIEnv *env, jobject object, jint crc,
+    jbyteArray bytes, jint offset, jint len, jint checksum_type)
+{
+  if (unlikely(!bytes)) {
+    THROW(env, "java/lang/NullPointerException",
+      "input byte array must not be null");
+    return -1;
+  }
+
+  uint8_t *buf = (*env)->GetPrimitiveArrayCritical(env, bytes, 0);
+
+  if (unlikely(!buf)) {
+    THROW(env, "java/lang/IllegalArgumentException",
+      "input byte array is not valid");
+    return -1;
+  }
+
+  if (unlikely(offset < 0 || len < 0 || (checksum_type !=
+          org_apache_hadoop_util_NativeCrc32_CHECKSUM_CRC32 && checksum_type !=
+          org_apache_hadoop_util_NativeCrc32_CHECKSUM_CRC32C))) {
+    THROW(env, "java/lang/IllegalArgumentException",
+      "invalid offset, length or checksum type");
+    return -1;
+  }
+
+  if (buf) {
+    int crc_type = convert_java_crc_type(env, checksum_type);
+    crc = update(crc, buf + offset, len, crc_type);
+    (*env)->ReleasePrimitiveArrayCritical(env, bytes, buf, 0);
+  }
+  return crc;
 }
 
 JNIEXPORT void JNICALL Java_org_apache_hadoop_util_NativeCrc32_nativeVerifyChunkedSums

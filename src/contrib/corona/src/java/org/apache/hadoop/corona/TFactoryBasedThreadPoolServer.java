@@ -1,22 +1,22 @@
 package org.apache.hadoop.corona;
 
+import java.io.IOException;
+import java.net.ServerSocket;
 import java.util.concurrent.ThreadFactory;
-import org.apache.thrift.server.*;
-import org.apache.thrift.server.TThreadPoolServer.Args;
 
+import org.apache.thrift.protocol.TBinaryProtocol;
+import org.apache.thrift.server.*;
+
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
 import org.apache.thrift.TException;
 import org.apache.thrift.TProcessor;
-import org.apache.thrift.TProcessorFactory;
 import org.apache.thrift.protocol.TProtocol;
-import org.apache.thrift.protocol.TProtocolFactory;
-import org.apache.thrift.protocol.TBinaryProtocol;
+import org.apache.thrift.transport.TFramedTransport;
+import org.apache.thrift.transport.TServerSocket;
 import org.apache.thrift.transport.TServerTransport;
 import org.apache.thrift.transport.TTransport;
 import org.apache.thrift.transport.TTransportException;
-import org.apache.thrift.transport.TTransportFactory;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -34,6 +34,32 @@ import java.util.concurrent.TimeUnit;
  * class allows a clean exit of the process.
  */
 public class TFactoryBasedThreadPoolServer extends TServer {
+
+  /**
+   * This is a helper method which creates a TFactoryBased..Server object using
+   * the processor, ServerSocket object and socket timeout limit. This is useful
+   * when we change the mechanism of server object creation. As a result,
+   * we don't have to change code in multiple places.
+   * @param processor
+   * @param serverSocket
+   * @param socketTimeOut
+   * @return A TFactoryBasedThreadPoolServer object
+   * @throws IOException
+   */
+  public static TFactoryBasedThreadPoolServer createNewServer(
+    TProcessor processor, ServerSocket serverSocket, int socketTimeOut)
+    throws IOException {
+    TServerSocket socket = new TServerSocket(serverSocket, socketTimeOut);
+    TFactoryBasedThreadPoolServer.Args args =
+      new TFactoryBasedThreadPoolServer.Args(socket);
+    args.stopTimeoutVal = 0;
+    args.processor(processor);
+    args.transportFactory(new TFramedTransport.Factory());
+    args.protocolFactory(new TBinaryProtocol.Factory(true, true));
+    return new TFactoryBasedThreadPoolServer(
+      args, new TFactoryBasedThreadPoolServer.DaemonThreadFactory());
+
+  }
 
   public static class DaemonThreadFactory implements ThreadFactory {
     ThreadFactory defaultFactory = Executors.defaultThreadFactory();
@@ -65,7 +91,7 @@ public class TFactoryBasedThreadPoolServer extends TServer {
   }
 
   /**************************** Code from TThreadPoolServer ******************/
-  private static final Logger LOGGER = LoggerFactory.getLogger(TThreadPoolServer.class.getName());
+  private static final Log LOG = LogFactory.getLog(TFactoryBasedThreadPoolServer.class);
 
   public static class Args extends AbstractServerArgs<Args> {
     public int minWorkerThreads = 5;
@@ -102,7 +128,7 @@ public class TFactoryBasedThreadPoolServer extends TServer {
     try {
       serverTransport_.listen();
     } catch (TTransportException ttx) {
-      LOGGER.error("Error occurred during listening.", ttx);
+      LOG.error("Error occurred during listening.", ttx);
       return;
     }
 
@@ -117,7 +143,7 @@ public class TFactoryBasedThreadPoolServer extends TServer {
       } catch (TTransportException ttx) {
         if (!stopped_) {
           ++failureCount;
-          LOGGER.warn("Transport error occurred during acceptance of message.", ttx);
+          LOG.warn("Transport error occurred during acceptance of message.", ttx);
         }
       }
     }
@@ -185,9 +211,9 @@ public class TFactoryBasedThreadPoolServer extends TServer {
       } catch (TTransportException ttx) {
         // Assume the client died and continue silently
       } catch (TException tx) {
-        LOGGER.error("Thrift error occurred during processing of message.", tx);
+        LOG.error("Thrift error occurred during processing of message.", tx);
       } catch (Exception x) {
-        LOGGER.error("Error occurred during processing of message.", x);
+        LOG.error("Error occurred during processing of message.", x);
       }
 
       if (inputTransport != null) {

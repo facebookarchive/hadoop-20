@@ -231,6 +231,11 @@ public class AvatarZKShell extends Configured implements Tool {
     String serviceName = null;
     String instance = null;
     boolean force = false;
+    
+    // enforce to specify service if configured
+    if (!AvatarShell.isServiceSpecified("AvatarZKShell", conf, argv)) {
+      return -1;
+    }
 
     for(int i=0; i < argv.length; i++) {
       String cmd = argv[i];
@@ -348,13 +353,28 @@ public class AvatarZKShell extends Configured implements Tool {
     if (connection == null)
       return;
     AvatarZooKeeperClient zk = new AvatarZooKeeperClient(conf, null);
+    System.out.println("ZooKeeper entries:");
+    
+    // client protocol
     InetSocketAddress defaultAddr = NameNode.getClientProtocolAddress(originalConf);
     String defaultName = defaultAddr.getHostName() + ":"
         + defaultAddr.getPort();
     System.out.println("Default name is " + defaultName);
     String registration = zk.getPrimaryAvatarAddress(defaultName, new Stat(), false);
-
     System.out.println("Primary node according to ZooKeeper: " + registration);
+    
+    // datanode protocol
+    defaultAddr = NameNode.getDNProtocolAddress(originalConf);
+    defaultName = defaultAddr.getHostName() + ":" + defaultAddr.getPort();
+    registration = zk.getPrimaryAvatarAddress(defaultName, new Stat(), false);
+    System.out.println("Primary node DN protocol     : " + registration);
+
+    // http address
+    defaultAddr = NetUtils.createSocketAddr(originalConf
+        .get("dfs.http.address"));
+    defaultName = defaultAddr.getHostName() + ":" + defaultAddr.getPort();
+    registration = zk.getPrimaryAvatarAddress(defaultName, new Stat(), false);
+    System.out.println("Primary node http address    : " + registration);
   }
   public void clearZooKeeper() throws IOException {
     String connection = conf.get("fs.ha.zookeeper.quorum");
@@ -501,7 +521,7 @@ public class AvatarZKShell extends Configured implements Tool {
     // Stolen from NameNode so we have the same code in both places
     addr = NetUtils.createSocketAddr(conf.get("dfs.http.address"));
     String primaryHttpAddress = addr.getHostName() + ":" + addr.getPort();
-    defaultAddr = NetUtils.createSocketAddr(conf
+    defaultAddr = NetUtils.createSocketAddr(originalConf
         .get("dfs.http.address"));
 
     String defaultHttpAddress = defaultAddr.getHostName() + ":"

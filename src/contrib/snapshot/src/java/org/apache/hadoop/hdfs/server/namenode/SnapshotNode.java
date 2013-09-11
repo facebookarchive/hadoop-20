@@ -23,15 +23,20 @@ import org.apache.hadoop.fs.*;
 import org.apache.hadoop.conf.*;
 import org.apache.hadoop.hdfs.DFSClient;
 import org.apache.hadoop.hdfs.DFSLocatedBlocks;
-import org.apache.hadoop.hdfs.DFSClient.DFSInputStream;
+import org.apache.hadoop.hdfs.DFSInputStream;
 import org.apache.hadoop.hdfs.protocol.*;
 import org.apache.hadoop.hdfs.server.common.Storage.*;
 import org.apache.hadoop.hdfs.server.namenode.BlocksMap.BlockInfo;
 import org.apache.hadoop.hdfs.server.namenode.FSImage.CheckpointStates;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeFile;
 import org.apache.hadoop.hdfs.server.namenode.LeaseManager.*;
 import org.apache.hadoop.hdfs.server.namenode.WaitingRoom.*;
 import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
+import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.server.protocol.SnapshotProtocol;
+import org.apache.hadoop.hdfs.server.common.HdfsConstants;
+import org.apache.hadoop.hdfs.server.common.Util;
 import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.ipc.*;
 import org.apache.hadoop.util.Daemon;
@@ -42,8 +47,6 @@ import java.io.*;
 import java.net.*;
 import java.util.*;
 import java.util.concurrent.*;
-
-import org.apache.hadoop.metrics.jvm.JvmMetrics;
 
 /**********************************************************
  * The SnapshotNode is responsible for taking periodic 
@@ -258,7 +261,7 @@ public class SnapshotNode implements SnapshotProtocol {
     FSNamesystem namesystem = new FSNamesystem(fsImage, conf);
     Path ssPath = new Path(ssDir + "/" + SSNAME + snapshotId);
     FSDataInputStream in = dfs.open(ssPath);
-    fsImage.loadFSImage(ssPath.toString(), in);
+    fsImage.loadFSImage(new File(ssPath.toString()), in);
     INode inode = namesystem.dir.getInode(path);
 
     if (inode == null) {
@@ -282,7 +285,7 @@ public class SnapshotNode implements SnapshotProtocol {
   @Override
   public void createSnapshot(String snapshotId, boolean updateLeases) throws IOException {
     // Create new SnapshotStore
-    SnapshotStorage ssStore = new SnapshotStorage(conf, new File(tempDir));
+    SnapshotStorage ssStore = new SnapshotStorage(conf, Util.stringAsURI(tempDir));
 
     // Download image & edit files from namenode
     downloadSnapshotFiles(ssStore);
@@ -418,6 +421,7 @@ public class SnapshotNode implements SnapshotProtocol {
    */
   void downloadSnapshotFiles(SnapshotStorage ssStore) throws IOException {
     CheckpointSignature start = namenode.getCheckpointSignature();
+    ssStore.storage.setStorageInfo(start);
     CheckpointSignature end = null;
     boolean success;
 
@@ -426,27 +430,24 @@ public class SnapshotNode implements SnapshotProtocol {
       prepareDownloadDirs();
 
       // get fsimage
-      String fileId = "getimage=1";
       File[] srcNames = ssStore.getImageFiles();
       assert srcNames.length == 1 : "No snapshot temporary dir.";
-      TransferFsImage.getFileClient(fileServer, fileId, srcNames, false);
+      TransferFsImage.downloadImageToStorage(fileServer, HdfsConstants.INVALID_TXID, ssStore, true, srcNames);
       LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
                srcNames[0].length() + " bytes.");
 
       // get edits file
-      fileId = "getedit=1";
       srcNames = ssStore.getEditsFiles();
       assert srcNames.length == 1 : "No snapshot temporary dir.";
-      TransferFsImage.getFileClient(fileServer, fileId, srcNames, false);
+      TransferFsImage.downloadEditsToStorage(fileServer, new RemoteEditLog(), ssStore, false);
       LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
                srcNames[0].length() + " bytes.");
 
       // get edits.new file (only if in the middle of ckpt)
       try {
-        fileId = "geteditnew=1";
         srcNames = ssStore.getEditsNewFiles();
         assert srcNames.length == 1 : "No snapshot temporary dir.";
-        TransferFsImage.getFileClient(fileServer, fileId, srcNames, false);
+        TransferFsImage.downloadEditsToStorage(fileServer, new RemoteEditLog(), ssStore, true);
         LOG.info("Downloaded file " + srcNames[0].getName() + " size " +
                srcNames[0].length() + " bytes.");
       } catch (FileNotFoundException e) {
@@ -483,15 +484,10 @@ public class SnapshotNode implements SnapshotProtocol {
     File tempDir;
     DataOutputStream out;
 
-    public SnapshotStorage(Configuration conf, File tempDir) throws IOException {
+    public SnapshotStorage(Configuration conf, URI tempDir) throws IOException {
       super(tempDir);
       this.conf = conf;
-      this.tempDir = tempDir;
-    }
-
-    @Override
-    public boolean isConversionNeeded(StorageDirectory sd) {
-      return false;
+      this.tempDir = new File(tempDir.getPath());
     }
 
     /**
@@ -508,8 +504,16 @@ public class SnapshotNode implements SnapshotProtocol {
         throw new IOException("Could not locate snapshot temp directory.");
       }
 
-      loadFSImage(getImageFile(sdTemp, NameNodeFile.IMAGE));
-      loadFSEdits(sdTemp);
+      loadFSImage(NNStorage.getStorageFile(sdTemp, NameNodeFile.IMAGE));
+      Collection<EditLogInputStream> editStreams = new ArrayList<EditLogInputStream>(); 
+      EditLogInputStream is = new EditLogFileInputStream(NNStorage.getStorageFile(sdTemp, NameNodeFile.EDITS));
+      editStreams.add(is);
+      File editsNew = NNStorage.getStorageFile(sdTemp, NameNodeFile.EDITS_NEW);
+      if (editsNew.exists()) {
+        is = new EditLogFileInputStream(editsNew);
+        editStreams.add(is);
+      }
+      loadEdits(editStreams);
     }
 
     /** 

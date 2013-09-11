@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.SortedMap;
@@ -34,8 +35,8 @@ import org.apache.hadoop.fs.OpenFileInfo;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.protocol.FSConstants;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.LightWeightLinkedSet;
+import org.apache.hadoop.util.InjectionHandler;
 
 /**
  * LeaseManager does the lease housekeeping for writing on files.   
@@ -71,6 +72,7 @@ public class LeaseManager {
   private int maxPathsPerCheck = Integer.MAX_VALUE; 
   /** if lease recovery could discard the last block without sync data */
   private boolean discardLastBlockIfNoSync = false;
+  private long leaseCheckInterval = 2000;
 
   //
   // Used for handling lock-leases
@@ -110,6 +112,7 @@ public class LeaseManager {
           "dfs.namenode.leasemanager.maxpathspercheck", Integer.MAX_VALUE);
       this.discardLastBlockIfNoSync = conf.getBoolean(
           "dfs.leaserecovery.discardlastblock.ifnosync", false);
+      this.leaseCheckInterval = conf.getLong("lease.check.interval", 2000);
     }
     
   }
@@ -176,6 +179,22 @@ public class LeaseManager {
                      leaseOpenTime != null ?
                      leaseOpenTime.openTime :
                      System.currentTimeMillis());
+   }
+   
+   /**
+    * Find the pathname for the specified pendingFile
+    */
+   synchronized String findPath(INodeFileUnderConstruction pendingFile) 
+         throws IOException {
+     Lease lease = getLease(pendingFile.getClientName());
+     if (lease != null) {
+       String src = lease.findPath(pendingFile);
+       if (src != null) {
+         return src;
+       }
+     }
+     throw new IOException("pendingFile (=" + pendingFile + ") not found."
+           + "(lease=" + lease + ")");
    }
  
   /**
@@ -260,11 +279,13 @@ public class LeaseManager {
         new OpenFileInfo[entries.size()]);
       return result;
     }
-
-  synchronized void renewAllLeases() {
-    for (String holder : leases.keySet()) {
-      renewLease(holder);
-    }
+  
+  /**
+   * Return the current view of all lease holders.
+   * The view is unmodifiable to prevent outside changes.
+   */
+  synchronized Collection<String> getLeaseHolders() {
+    return Collections.unmodifiableSet(leases.keySet());
   }
 
   /**
@@ -324,6 +345,18 @@ public class LeaseManager {
     /** @return true if the Soft Limit Timer has expired */
     public boolean expiredSoftLimit() {
       return FSNamesystem.now() - lastUpdate > softLimit;
+    }
+    
+    /**
+     * @return the path associated with the pendingFile and null if not found
+     */
+    private String findPath(INodeFileUnderConstruction pendingFile) {
+      for (String src : paths) {
+        if (fsnamesystem.dir.getFileINode(src) == pendingFile) {
+          return src;
+        }
+      }
+      return null;
     }
 
     /** Does this lease contain any path? */
@@ -467,6 +500,16 @@ public class LeaseManager {
         InjectionHandler.processEvent(InjectionEvent.LEASEMANAGER_CHECKLEASES);
         fsnamesystem.writeLock();
         try {
+          // this check needs to be done when holding write lock to ensure
+          // the interruption from FSNamesystem.stopLeaseMonitor() does not
+          // come during checkLeases(). Please see
+          // FSNamesystem.stopLeaseMonitor(). This is crucial during failover!!
+          if ((Thread.currentThread().isInterrupted() || !running)
+              && InjectionHandler
+                  .trueCondition(InjectionEvent.LEASEMANAGER_CHECKINTERRUPTION)) {
+            LOG.info("LeaseManager received shutdown signal - exiting");
+            break;
+          }
           if (!fsnamesystem.isInSafeMode()) {
             checkLeases();
           }
@@ -475,7 +518,8 @@ public class LeaseManager {
         }
 
         try {
-          Thread.sleep(2000);
+          // The interruption should only affect the sleep()
+          Thread.sleep(leaseCheckInterval);
         } catch(InterruptedException ie) {
           if (LOG.isDebugEnabled()) {
             LOG.debug(name + " is interrupted", ie);
@@ -513,6 +557,7 @@ public class LeaseManager {
         } catch (IOException e) {
           LOG.error("Cannot release the path "+p+" in the lease "+oldest, e);
           removeLease(oldest, p);
+          fsnamesystem.getFSNamesystemMetrics().numLeaseManagerMonitorExceptions.inc();
         }
       }
     }

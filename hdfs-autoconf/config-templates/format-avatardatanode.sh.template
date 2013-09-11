@@ -1,0 +1,53 @@
+#!/bin/bash
+set -e
+
+usage="USAGE
+  bash $(basename $0) [--help] [--soft]
+
+DESCRIPTION
+  Formats all the directories needed for every datanodes' volume.
+  In case the directory for volume already exists, it recreates it
+  thus deleting all the underlying data (this is also called HARD mode),
+  unless --soft option is given
+
+OPTIONS
+  --help - shows this help message
+  --soft - does not recreate directory if it already exists. This
+      option is used to preserve the data of the datanode
+"
+
+if (( $# >= 1 )); then
+  if [[ "$1" == "--help" ]]; then
+    echo "$usage"
+    exit 0
+  fi
+fi
+
+soft="false";
+if (( $# >= 1 )); then
+  if [[ "$1" == "--soft" ]]; then
+    soft="true";
+    shift;
+  fi
+fi
+
+volumeDirs=$(echo {{DataNode-volumes}} | tr ',' '\n');
+echo "Volume dirs: $volumeDirs"
+
+if [[ "$soft" == "true" ]]; then
+  echo "Datanode is formatted in a SOFT mode"
+  for i in $volumeDirs; do
+    if ! [[ -d $i ]]; then
+      mkdir $i;
+    fi
+  done;
+elif [[ "$soft" == "false" ]]; then
+  echo "Datanode is formatted in a HARD mode"
+  for i in $volumeDirs; do
+    rm -rf $i;
+    mkdir $i;
+  done;
+else
+  echo "This is a bug. Local variable \$soft has a bad value of $soft"
+  exit 1
+fi

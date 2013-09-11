@@ -10,6 +10,7 @@ import junit.framework.TestCase;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.net.TopologyCache;
 import org.apache.thrift.TException;
 
 public class TestResourceCheck extends TestCase {
@@ -52,18 +53,20 @@ public class TestResourceCheck extends TestCase {
                                      new InetAddress(TstUtils.getNodeHost(i),
                                                      TstUtils.getNodePort(i)),
                                      TstUtils.std_spec);
-      nodes[i].setUsed(TstUtils.free_spec);
+      nodes[i].setFree(TstUtils.std_spec);
       nodes[i].setResourceInfos(resourceInfos);
     }
     sessionInfo = new SessionInfo(
         new InetAddress(sessionHost, getSessionPort(0)), "s", "hadoop");
     sessionInfo.setPriority(SessionPriority.NORMAL);
+    sessionInfo.setPoolInfoStrings(
+        PoolInfo.createPoolInfoStrings(PoolGroupManager.DEFAULT_POOL_INFO));
   }
 
   public void testMemoryCheck() throws Exception {
     // Set a high memory limit
     setUp(TstUtils.std_spec.memoryMB + 1, 0);
-    String handle = cm.sessionStart(sessionInfo).handle;
+    String handle = TstUtils.startSession(cm, sessionInfo);
     Session session = cm.getSessionManager().getSession(handle);
     int maps = 800;
     int reduces = 100;
@@ -79,7 +82,10 @@ public class TestResourceCheck extends TestCase {
     verifySession(session, ResourceType.MAP, maps, 0);
     verifySession(session, ResourceType.REDUCE, reduces, 0);
 
-    cm.getNodeManager().setNodeReservedMemoryMB(TstUtils.std_spec.memoryMB - 1);
+    cm.getNodeManager().getResourceLimit().setNodeReservedMemoryMB(
+      TstUtils.std_spec.memoryMB - 1);
+    // Perform heartbeats.
+    addAllNodes();
     TstUtils.reliableSleep(500);
     int maxMaps = cm.getNodeManager().getMaxCpuForType(ResourceType.MAP);
     int maxReduces = cm.getNodeManager().getMaxCpuForType(ResourceType.REDUCE);
@@ -94,7 +100,7 @@ public class TestResourceCheck extends TestCase {
   public void testDiskCheck() throws Exception {
     // Set a high memory limit
     setUp(0, TstUtils.std_spec.diskGB + 1);
-    String handle = cm.sessionStart(sessionInfo).handle;
+    String handle = TstUtils.startSession(cm, sessionInfo);
     Session session = cm.getSessionManager().getSession(handle);
     int maps = 800;
     int reduces = 100;
@@ -110,7 +116,10 @@ public class TestResourceCheck extends TestCase {
     verifySession(session, ResourceType.MAP, maps, 0);
     verifySession(session, ResourceType.REDUCE, reduces, 0);
 
-    cm.getNodeManager().setNodeReservedDiskGB(TstUtils.std_spec.diskGB - 1);
+    cm.getNodeManager().getResourceLimit().setNodeReservedDiskGB(
+      TstUtils.std_spec.diskGB - 1);
+    // Perform heartbeats.
+    addAllNodes();
     TstUtils.reliableSleep(500);
     int maxMaps = cm.getNodeManager().getMaxCpuForType(ResourceType.MAP);
     int maxReduces = cm.getNodeManager().getMaxCpuForType(ResourceType.REDUCE);
@@ -122,8 +131,40 @@ public class TestResourceCheck extends TestCase {
     cm.sessionEnd(handle, SessionStatus.SUCCESSFUL);
   }
 
+  public void testResourceUpdate() throws Exception {
+    setUp(1, 0);
+    addSomeNodes(1);
+    ClusterNodeInfo newInfo = new ClusterNodeInfo(nodes[0]);
+    // Fully used.
+    newInfo.setFree(TstUtils.nothing_free_spec);
+    cm.nodeHeartbeat(newInfo);
+
+    String handle = TstUtils.startSession(cm, sessionInfo);
+    Session session = cm.getSessionManager().getSession(handle);
+    int maps = 80;
+    int reduces = 10;
+    submitRequests(handle, maps, reduces);
+
+    TstUtils.reliableSleep(100);
+
+    // Nothing granted.
+    verifySession(session, ResourceType.MAP, maps, 0);
+    verifySession(session, ResourceType.REDUCE, reduces, 0);
+
+    // Node is free
+    newInfo = new ClusterNodeInfo(newInfo);
+    newInfo.setFree(TstUtils.std_spec);
+    cm.nodeHeartbeat(newInfo);
+
+    TstUtils.reliableSleep(500);
+    int maxMaps = cm.getNodeManager().getMaxCpuForType(ResourceType.MAP);
+    int maxReduces = cm.getNodeManager().getMaxCpuForType(ResourceType.REDUCE);
+    verifySession(session, ResourceType.MAP, maps, maxMaps);
+    verifySession(session, ResourceType.REDUCE, reduces, maxReduces);
+  }
+
   private void submitRequests(String handle, int maps, int reduces)
-      throws TException, InvalidSessionHandle {
+      throws TException, InvalidSessionHandle, SafeModeException {
     List<ResourceRequest> requests =
       TstUtils.createRequests(this.numNodes, maps, reduces);
     cm.requestResource(handle, requests);
@@ -145,6 +186,8 @@ public class TestResourceCheck extends TestCase {
         cm.nodeHeartbeat(nodes[i]);
       } catch (DisallowedNode e) {
         throw new TException(e);
+      } catch (SafeModeException e) {
+        LOG.info("Cluster Manager is in Safe Mode");
       }
     }
   }

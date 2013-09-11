@@ -19,9 +19,11 @@ package org.apache.hadoop.hdfs.server.namenode;
 
 import junit.framework.TestCase;
 import java.io.*;
+import java.util.List;
 import java.util.Random;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.server.namenode.NNStorage.NameNodeDirType;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
@@ -49,7 +51,7 @@ public class TestNameEditsConfigs extends TestCase {
   }
 
   protected void tearDown() throws java.lang.Exception {
-    if (!FileUtil.fullyDelete(base_dir)) 
+    if (base_dir.exists() && !FileUtil.fullyDelete(base_dir)) 
       throw new IOException("Cannot remove directory " + base_dir);
   }
 
@@ -65,11 +67,29 @@ public class TestNameEditsConfigs extends TestCase {
     stm.close();
   }
 
-  void checkImageAndEditsFilesExistence(File dir, 
-                                        boolean imageMustExist,
-                                        boolean editsMustExist) {
-    assertTrue(imageMustExist == new File(dir, FILE_IMAGE).exists());
-    assertTrue(editsMustExist == new File(dir, FILE_EDITS).exists());
+  void checkImageAndEditsFilesExistence(File dir, boolean shouldHaveImages,
+      boolean shouldHaveEdits) throws IOException {
+    FSImageTransactionalStorageInspector ins = inspect(dir);
+
+    if (shouldHaveImages) {
+      assertTrue("Expect images in " + dir, ins.foundImages.size() > 0);
+    } else {
+      assertTrue("Expect no images in " + dir, ins.foundImages.isEmpty());
+    }
+
+    List<FileJournalManager.EditLogFile> editlogs = FileJournalManager
+        .matchEditLogs(new File(dir, "current").listFiles());
+    if (shouldHaveEdits) {
+      assertTrue("Expect edits in " + dir, editlogs.size() > 0);
+    } else {
+      assertTrue("Expect no edits in " + dir, editlogs.isEmpty());
+    }
+  }
+  
+  private FSImageTransactionalStorageInspector inspect(File storageDir)
+      throws IOException {
+    return FSImageTestUtil.inspectStorageDirectory(
+        new File(storageDir, "current"), NameNodeDirType.IMAGE_AND_EDITS);
   }
 
   private void checkFile(FileSystem fileSys, Path name, int repl)
@@ -93,6 +113,69 @@ public class TestNameEditsConfigs extends TestCase {
     conf.set("dfs.secondary.http.address", "0.0.0.0:0");
     return new SecondaryNameNode(conf);
   }
+
+  // Test dfs.name.dir.policy configuration with 0: success
+  public void testNameDirPolicy0() throws IOException {
+    MiniDFSCluster cluster = null;
+    SecondaryNameNode secondary = null;
+    Configuration conf = null;
+    FileSystem fileSys = null;
+    File nameAndEdits = new File(base_dir, "name_and_edits");
+    File checkpointNameAndEdits = new File(base_dir, "second_name_and_edits");
+    Path file1 = new Path("TestNameEditsConfigs1");
+
+    conf = new Configuration();
+    conf.set("dfs.name.dir.policy", "0");
+    conf.set("dfs.name.dir", nameAndEdits.getPath());
+    conf.set("dfs.name.edits.dir", nameAndEdits.getPath());
+    conf.set("fs.checkpoint.dir", checkpointNameAndEdits.getPath());
+    conf.set("fs.checkpoint.edits.dir", checkpointNameAndEdits.getPath());
+    replication = (short)conf.getInt("dfs.replication", 3);
+
+    cluster = new MiniDFSCluster(0, conf, NUM_DATA_NODES, true, false, true, null,
+                                  null, null, null);
+    cluster.waitActive();
+    secondary = startSecondaryNameNode(conf);
+    fileSys = cluster.getFileSystem();
+
+    try {
+      assertTrue(!fileSys.exists(file1));
+      writeFile(fileSys, file1, replication);
+      checkFile(fileSys, file1, replication);
+      secondary.doCheckpoint();
+    } finally {
+      fileSys.close();
+      cluster.shutdown();
+      secondary.shutdown();
+    }
+  }
+
+  // Test dfs.name.dir.policy configuration failure cases
+  private void testNameDirPolicyFailure(int policy, boolean useUri)
+      throws IOException {
+    Configuration conf = null;
+    MiniDFSCluster cluster = null;
+    String prefix = useUri ? "file:" : "";
+    File nameAndEdits = new File(base_dir, "name_and_edits");
+    String policyStr = Integer.toString(policy);
+
+    conf = new Configuration();
+    conf.set("dfs.name.dir.policy", policyStr);
+    conf.set("dfs.name.dir", prefix + nameAndEdits.getPath());
+    conf.set("dfs.name.edits.dir", prefix + nameAndEdits.getPath());
+
+    try {
+      cluster = new MiniDFSCluster(0, conf, NUM_DATA_NODES, false, false, true,
+                                   null, null, null, null);
+      fail("The startup should fail");
+    } catch (IOException e) { // expect to fail
+      System.out.println("cluster start failed due to name/edits dir " +
+                        "violating policy " + policyStr);
+    } finally {
+      cluster = null;
+    }
+  }
+
 
   /**
    * Test various configuration options of dfs.name.dir and dfs.name.edits.dir
@@ -310,7 +393,8 @@ public class TestNameEditsConfigs extends TestCase {
       cluster.shutdown();
     }
 
-    // Start namenode with additional dfs.name.dir and dfs.name.edits.dir
+    // 2
+    // Start namenode with additional dfs.namenode.name.dir and dfs.namenode.edits.dir
     conf =  new Configuration();
     assertTrue(newNameDir.mkdir());
     assertTrue(newEditsDir.mkdir());
@@ -337,6 +421,7 @@ public class TestNameEditsConfigs extends TestCase {
       cluster.shutdown();
     }
     
+    // 3
     // Now remove common directory both have and start namenode with 
     // separate name and edits dirs
     conf =  new Configuration();
@@ -362,6 +447,7 @@ public class TestNameEditsConfigs extends TestCase {
       cluster.shutdown();
     }
 
+    // 4
     // Add old shared directory for name and edits along with latest name
     conf = new Configuration();
     conf.set("dfs.name.dir", newNameDir.getPath() + "," + 
@@ -379,7 +465,10 @@ public class TestNameEditsConfigs extends TestCase {
       cluster = null;
     }
 
-    // Add old shared directory for name and edits along with latest edits
+    // 5
+    // Add old shared directory for name and edits along with latest edits. 
+    // This is OK, since the latest edits will have segments leading all
+    // the way from the image in name_and_edits.
     conf = new Configuration();
     conf.set("dfs.name.dir", nameAndEdits.getPath());
     conf.set("dfs.name.edits.dir", newEditsDir.getPath() +
@@ -388,12 +477,31 @@ public class TestNameEditsConfigs extends TestCase {
     try {
       cluster = new MiniDFSCluster(0, conf, NUM_DATA_NODES, false, false, true,
                                    null, null, null, null);
-      assertTrue(false);
+      fileSys = cluster.getFileSystem();
+      
+      assertFalse(fileSys.exists(file1));
+      assertFalse(fileSys.exists(file2));
+      assertTrue(fileSys.exists(file3));
+      checkFile(fileSys, file3, replication);
+      cleanupFile(fileSys, file3);
+      writeFile(fileSys, file3, replication);
+      checkFile(fileSys, file3, replication);
     } catch (IOException e) { // expect to fail
       System.out.println("cluster start failed due to missing latest name dir");
     } finally {
       cluster = null;
-    }
+    }   
+  }
+  
+  public void testNameDirPolicyFailures() throws Exception {
+    // Test dfs.name.dir.policy configuration
+    // when using uri's
+    testNameDirPolicyFailure(1, true);
+    testNameDirPolicyFailure(2, true);
+
+    // when using simple directory names
+    testNameDirPolicyFailure(1, false);
+    testNameDirPolicyFailure(2, false);
   }
   
   public void testNonEmptyStorageDirectory() throws IOException {

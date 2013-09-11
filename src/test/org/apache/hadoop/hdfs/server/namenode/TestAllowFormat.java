@@ -1,5 +1,7 @@
 package org.apache.hadoop.hdfs.server.namenode;
 
+import static org.junit.Assert.*;
+
 import java.io.File;
 import java.io.IOException;
 
@@ -12,13 +14,17 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.server.namenode.TestGenericJournalConf.DummyJournalManager;
 import org.apache.hadoop.util.StringUtils;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.Test;
 
 /**
  * Startup and checkpoint tests
  * 
  */
-public class TestAllowFormat extends TestCase {
+public class TestAllowFormat {
   public static final String NAME_NODE_HOST = "localhost:";
   public static final String NAME_NODE_HTTP_HOST = "0.0.0.0:";
   private static final Log LOG =
@@ -26,7 +32,8 @@ public class TestAllowFormat extends TestCase {
   private Configuration config;
   private File hdfsDir=null;
 
-  protected void setUp() throws Exception {
+  @Before
+  public void setUp() throws Exception {
     config = new Configuration();
     String baseDir = System.getProperty("test.build.data", "/tmp");
 
@@ -46,6 +53,7 @@ public class TestAllowFormat extends TestCase {
   /**
    * clean up
    */
+  @After
   public void tearDown() throws Exception {
     if ( hdfsDir.exists() && !FileUtil.fullyDelete(hdfsDir) ) {
       throw new IOException("Could not delete hdfs directory in tearDown '"
@@ -57,6 +65,7 @@ public class TestAllowFormat extends TestCase {
    * start MiniDFScluster, try formatting with different settings
    * @throws IOException
    */
+  @Test
   public void testAllowFormat() throws IOException {
     LOG.info("--starting mini cluster");
     // manage dirs parameter set to false 
@@ -105,5 +114,28 @@ public class TestAllowFormat extends TestCase {
         cluster.shutdown();
         LOG.info("--stopping mini cluster");
     }
+  }
+  
+  /**
+   * Test to ensure that format is called for non-file journals.
+   */
+  @Test
+  public void testFormatShouldBeIgnoredForNonFileBasedDirs() throws Exception {
+    Configuration conf = new Configuration();
+    File nameDir = new File(hdfsDir, "name");
+    if (nameDir.exists()) {
+      FileUtil.fullyDelete(nameDir);
+    }
+        
+    conf.setBoolean("dfs.namenode.support.allowformat", true);
+    conf.set("dfs.name.edits.journal-plugin" + ".dummy",
+        DummyJournalManager.class.getName());
+    conf.set("dfs.name.edits.dir",
+        "dummy://test");
+    conf.set("dfs.name.dir", nameDir.getPath());
+
+    NameNode.format(conf, false, true);
+    assertTrue(DummyJournalManager.formatCalled);
+    assertTrue(DummyJournalManager.shouldPromptCalled);
   }
 }

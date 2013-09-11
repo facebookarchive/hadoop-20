@@ -61,6 +61,17 @@ public class LookasideMetrics implements Updater {
       this.numGetAttempts = old.numGetAttempts; old.numGetAttempts = 0;
       this.numGetHits = old.numGetHits; old.numGetHits = 0;
     }
+    
+    public void reset() {
+      this.numAdd = 0;
+      this.numAddNew = 0;
+      this.numAddExisting = 0;
+      this.numRename = 0;
+      this.numRemove = 0;
+      this.numEvict = 0;
+      this.numGetAttempts = 0;
+      this.numGetHits = 0;
+    }
   }
 
   private long numLsCalls = 0;

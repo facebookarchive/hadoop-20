@@ -1,0 +1,58 @@
+#!/bin/bash
+
+if [[ -e scripts ]]; then
+  source scripts/common.sh
+else
+  echo "Lacking /scripts directory. Probably I'm not launched from autoconf
+  directory. Exiting.."
+  exit 1
+fi
+
+if [[ ${PWD##*/} != "hdfs-autoconf" ]]; then
+  fail "The script should be launched from ./hdfs-autoconf directory"
+fi
+
+
+usage="USAGE
+  bash $(basename $0) [--help] <path to node configuration>
+
+DESCRIPTION
+  Creates configuration and launch files for avatar datanode
+  entity by applying given sed script to the template configuration files and
+  bash scripts from $TEMPLATES_DIR. The scripts used for formatting and
+  launching the datanode could be found in $LAUNCHPAD_DIR.
+
+OPTIONS
+  --help - show this help message
+  <path to node configuration> - a path that specifies datanode configuration
+    sed script. More info about this in README.md
+"
+
+if (( $# >= 1 )); then
+  if [[ $1 == "--help" ]]; then
+    echo "$usage";
+    exit 0;
+  fi
+fi
+if [[ $# < 1 ]]; then
+  fail "$usage"
+fi
+
+cleanLaunchpad;
+
+echo -e "Populating ${cWHITE}${HADOOP_VERSION}/conf${cRESET} with hdfs-site.xml.."
+cp $TEMPLATES_DIR/hdfs-site.xml.template ${HADOOP_VERSION}/conf/hdfs-site.xml
+patch ${HADOOP_VERSION}/conf/hdfs-site.xml $1
+cp $TEMPLATES_DIR/hadoop-env-datanode.sh ${HADOOP_VERSION}/conf/hadoop-env.sh
+
+echo -e "Creating $LAUNCHPAD_DIR files.."
+genDatanodeLaunchpadFiles $1
+
+
+# Finish
+echo -e "${cGREEN}DATANODE SUCCESS${cRESET}
+${cWHITE}${HADOOP_VERSION}/conf${cRESET} is configured for data node.
+------
+You can format configured directories via ${cWHITE}./$LAUNCHPAD_DIR/dn-format${cRESET}
+You can start data node ${capitalAvatarName} via ${cWHITE}./$LAUNCHPAD_DIR/run${cRESET}"
+

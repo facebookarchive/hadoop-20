@@ -38,7 +38,7 @@ public abstract class MetricsBase {
     name = nam;
     description = desc;
   }
-  
+
   public abstract void pushMetric(final MetricsRecord mr);
   
   public String getName() { return name; }

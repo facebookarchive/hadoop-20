@@ -28,34 +28,34 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.hadoop.ipc.*;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hdfs.DFSUtil;
-import org.apache.hadoop.util.StringUtils;
+import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
 import org.apache.hadoop.hdfs.protocol.Block;
 import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode.ServicePair;
+import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecoveryTimeoutException;
+import org.apache.hadoop.hdfs.server.datanode.DataNode.KeepAliveHeartbeater;
+import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
 import org.apache.hadoop.hdfs.server.protocol.BlockAlreadyCommittedException;
 import org.apache.hadoop.hdfs.server.protocol.BlockCommand;
 import org.apache.hadoop.hdfs.server.protocol.BlockReport;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
+import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
 import org.apache.hadoop.hdfs.server.protocol.IncrementalBlockReport;
 import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
 import org.apache.hadoop.hdfs.server.protocol.ReceivedBlockInfo;
 import org.apache.hadoop.hdfs.server.protocol.UpgradeCommand;
-import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
-import org.apache.hadoop.hdfs.server.datanode.AvatarDataNode.ServicePair;
-import org.apache.hadoop.hdfs.server.datanode.DataNode.BlockRecord;
-import org.apache.hadoop.hdfs.server.datanode.DataNode.KeepAliveHeartbeater;
-import org.apache.hadoop.hdfs.server.datanode.metrics.DataNodeMetrics;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.LightWeightBitSet;
-import org.apache.hadoop.hdfs.protocol.AvatarProtocol;
+import org.apache.hadoop.ipc.RemoteException;
+import org.apache.hadoop.util.InjectionHandler;
+import org.apache.hadoop.util.StringUtils;
 import org.apache.zookeeper.data.Stat;
 
 public class OfferService implements Runnable {
@@ -89,18 +89,23 @@ public class OfferService implements Runnable {
 
   private long lastBlockReceivedFailed = 0;
   private ServicePair servicePair;
-  
+   
   private boolean shouldBackoff = false;
   private boolean firstBlockReportSent = false;
 
   // Used by the NN to force an incremental block report and not wait for any
   // interval.
   private boolean forceIncrementalReport = false;
+  
+  // after clear primary is called, we will no longer delay any
+  // incremental block reports
+  private boolean donotDelayIncrementalBlockReports = false;
+  
+  // indicate that this offer service received CLEAR PRIMARY
+  // command, which means failover is in progress
+  private boolean clearPrimaryCommandProcessed = false;
 
   private final long fullBlockReportDelay;
-
-  // Only for testing.
-  protected boolean forceFullBlockReportForTesting = false;
 
   /**
    * Offer service to the specified namenode
@@ -146,22 +151,7 @@ public class OfferService implements Runnable {
    * @return whether we are the primary service
    */
   boolean isPrimaryService() throws InterruptedException {
-    try {
-      Stat stat = new Stat();
-      String actual = servicePair.zkClient.getPrimaryAvatarAddress(
-          servicePair.defaultAddr, stat, false);
-      if (actual == null) {
-        return false;
-      }
-      String offerServiceAddress = this.namenodeAddress.getHostName() + ":"
-          + this.namenodeAddress.getPort();
-      return actual.equalsIgnoreCase(offerServiceAddress);
-    } catch (InterruptedException ie) {
-      throw ie;
-    } catch (Exception ex) {
-      LOG.error("Could not get the primary from ZooKeeper", ex);
-    }
-    return false;
+    return servicePair.isPrimary(namenodeAddress);
   }
 
   public void run() {
@@ -253,8 +243,16 @@ public class OfferService implements Runnable {
           //the primary can't switch to standby
           throw new IOException("Primary started acting as standby");
         } else if (!isPrimaryCached && failed == null) {
-          //failover - we need to refresh our knowledge
-          this.clearPrimary();
+          String msg = "Received null response from standby for incremental"
+              + " block report. ";
+          if (clearPrimaryCommandProcessed) {
+            LOG.info(msg + "Failover is in progress"
+                + " - will not clear primary again");
+          } else {
+            LOG.info(msg + "Standby is acting as primary. Clearing primary");
+            // failover - we need to refresh our knowledge
+            this.clearPrimary();
+          }
         }
       } catch (Exception e) {
         processFailedBlocks(
@@ -326,24 +324,27 @@ public class OfferService implements Runnable {
             continue;
         }
 
-        // check if there are newly received blocks (pendingReceivedRequeste > 0
-        // or if the deletedReportInterval passed.
-
-        if ((firstBlockReportSent && !shouldBackoff 
-            && shouldSendIncrementalReport(startTime)) || this.forceIncrementalReport) {
-
-          sendIncrementalBlockReport(startTime);
-          // We also want to send a RBW report when a block report has been
+        // send forced incremental report
+        if (this.forceIncrementalReport) {
+          LOG.info("Forcing incremental block report for " + namenodeAddress);
+          // We want to send a RBW report when a block report has been
           // forced. RBW report might take some time since it scans the
           // disk.
-          if (this.forceIncrementalReport) {
-            LOG.info("Forcing incremental block report for " + namenodeAddress);
-            LOG.info("Generating blocks being written report for " + namenodeAddress);
-            anode.sendBlocksBeingWrittenReport(namenode,
-                servicePair.namespaceId, nsRegistration);
-            avatarnode.primaryCleared(nsRegistration);
-            this.forceIncrementalReport = false;
-          }
+          LOG.info("Generating blocks being written report for " + namenodeAddress);
+          anode.sendBlocksBeingWrittenReport(namenode,
+              servicePair.namespaceId, nsRegistration);
+          LOG.info("Sending incremental block report for " + namenodeAddress);
+          sendIncrementalBlockReport(startTime);
+          avatarnode.primaryCleared(nsRegistration);
+          this.forceIncrementalReport = false;
+        }
+
+        // check if there are newly received blocks (pendingReceivedRequeste > 0
+        // or if the deletedReportInterval passed.
+        // send regular incremental report
+        if ((firstBlockReportSent && !shouldBackoff 
+            && shouldSendIncrementalReport(startTime))) {                    
+          sendIncrementalBlockReport(startTime);
         }
 
         // send block report
@@ -355,65 +356,67 @@ public class OfferService implements Runnable {
               (lastBlockReport + anode.blockReportInterval - startTime) + "ms for " 
                 + namenodeAddress);
           } else {
-          //
-          // Send latest blockinfo report if timer has expired.
-          // Get back a list of local block(s) that are obsolete
-          // and can be safely GC'ed.
-          //
-          long brStartTime = AvatarDataNode.now();
-          // Clear incremental list before full block report. We need to do
-          // this before we compute the entire block report. We need to also
-          // capture a snapshot of the list if the full block report gets a
-          // BACKOFF.
-          List <Block> tempRetryList;
-          int tempPendingReceivedRequests;
-          synchronized (receivedAndDeletedBlockList) {
-            tempRetryList = receivedAndDeletedBlockList;
-            tempPendingReceivedRequests = pendingReceivedRequests;
-            receivedAndDeletedBlockList = new LinkedList<Block>();
-            pendingReceivedRequests = 0;
-          }
-          LOG.info("Generating block report for " + namenodeAddress);
-          Block[] bReport = data.getBlockReport(servicePair.namespaceId);
-          DatanodeCommand cmd = avatarnode.blockReportNew(nsRegistration,
-                  new BlockReport(BlockListAsLongs.convertToArrayLongs(bReport)));
-          if (cmd != null && 
-              cmd.getAction() == DatanodeProtocols.DNA_BACKOFF) {
-            // We have cleared the retry list, but the block report was not
-            // processed due to BACKOFF, add the retry blocks back.
-            processFailedBlocks(tempRetryList, tempPendingReceivedRequests);
-
-            // The Standby is catching up and we need to reschedule
-            scheduleBlockReport(fullBlockReportDelay);
-            continue;
-          }
-
-          firstBlockReportSent = true;
-          long brTime = AvatarDataNode.now() - brStartTime;
-          myMetrics.blockReports.inc(brTime);
-          LOG.info("BlockReport of " + bReport.length +
-              " blocks got processed in " + brTime + " msecs on " +
-              namenodeAddress);
-          if (resetBlockReportTime) {
             //
-            // If we have sent the first block report, then wait a random
-            // time before we start the periodic block reports.
+            // Send latest blockinfo report if timer has expired.
+            // Get back a list of local block(s) that are obsolete
+            // and can be safely GC'ed.
             //
-            lastBlockReport = startTime - R.nextInt((int)(anode.blockReportInterval));
-            resetBlockReportTime = false;
-          } else {
-
-            /* say the last block report was at 8:20:14. The current report 
-             * should have started around 9:20:14 (default 1 hour interval). 
-             * If current time is :
-             *   1) normal like 9:20:18, next report should be at 10:20:14
-             *   2) unexpected like 11:35:43, next report should be at 12:20:14
-             */
-            lastBlockReport += (AvatarDataNode.now() - lastBlockReport) / 
-                               anode.blockReportInterval * anode.blockReportInterval;
+            long brStartTime = AvatarDataNode.now();
+            // Clear incremental list before full block report. We need to do
+            // this before we compute the entire block report. We need to also
+            // capture a snapshot of the list if the full block report gets a
+            // BACKOFF.
+            List <Block> tempRetryList;
+            int tempPendingReceivedRequests;
+            synchronized (receivedAndDeletedBlockList) {
+              tempRetryList = receivedAndDeletedBlockList;
+              tempPendingReceivedRequests = pendingReceivedRequests;
+              receivedAndDeletedBlockList = new LinkedList<Block>();
+              pendingReceivedRequests = 0;
+            }
+            LOG.info("Generating block report for " + namenodeAddress);
+            Block[] bReport = data.getBlockReport(servicePair.namespaceId);
+            DatanodeCommand cmd = avatarnode.blockReportNew(nsRegistration,
+                    new BlockReport(BlockListAsLongs.convertToArrayLongs(bReport)));
+            if (cmd != null && 
+                cmd.getAction() == DatanodeProtocols.DNA_BACKOFF) {
+              // We have cleared the retry list, but the block report was not
+              // processed due to BACKOFF, add the retry blocks back.
+              processFailedBlocks(tempRetryList, tempPendingReceivedRequests);
+  
+              // The Standby is catching up and we need to reschedule
+              scheduleBlockReport(fullBlockReportDelay);
+              continue;
+            }
+  
+            firstBlockReportSent = true;
+            long brTime = AvatarDataNode.now() - brStartTime;
+            myMetrics.blockReports.inc(brTime);
+            LOG.info("BlockReport of " + bReport.length +
+                " blocks got processed in " + brTime + " msecs on " +
+                namenodeAddress);
+            if (resetBlockReportTime) {
+              //
+              // If we have sent the first block report, then wait a random
+              // time before we start the periodic block reports.
+              //
+              lastBlockReport = startTime - R.nextInt((int)(anode.blockReportInterval));
+              resetBlockReportTime = false;
+            } else {
+  
+              /* say the last block report was at 8:20:14. The current report 
+               * should have started around 9:20:14 (default 1 hour interval). 
+               * If current time is :
+               *   1) normal like 9:20:18, next report should be at 10:20:14
+               *   2) unexpected like 11:35:43, next report should be at 12:20:14
+               */
+              lastBlockReport += (AvatarDataNode.now() - lastBlockReport) / 
+                                 anode.blockReportInterval * anode.blockReportInterval;
+            }
+            if (cmd != null) {
+              processCommand(new DatanodeCommand[] { cmd });
+            }
           }
-          processCommand(cmd);
-        }
         }
 
         // start block scanner is moved to the Dataode.run()
@@ -433,7 +436,7 @@ public class OfferService implements Runnable {
           }
         } // synchronized
       } catch(RemoteException re) {
-        anode.handleRegistrationError(re);
+        this.servicePair.handleRegistrationError(re, namenodeAddress);
       } catch (IOException e) {
         LOG.warn(e);
       }
@@ -447,7 +450,8 @@ public class OfferService implements Runnable {
    * @return true if the report should be sent
    */
   private boolean shouldSendIncrementalReport(long startTime){
-    boolean isPrimary = isPrimaryServiceCached();
+    boolean isPrimary = isPrimaryServiceCached() || 
+        donotDelayIncrementalBlockReports;
     boolean deleteIntervalTrigger = 
         (startTime - lastDeletedReport > anode.deletedReportInterval);
     
@@ -523,8 +527,13 @@ public class OfferService implements Runnable {
     }
   }
 
-  private static int[] validStandbyCommands = { DatanodeProtocol.DNA_REGISTER,
-      DatanodeProtocols.DNA_CLEARPRIMARY, DatanodeProtocols.DNA_BACKOFF };
+  private static int[] validStandbyCommands = { 
+      DatanodeProtocol.DNA_REGISTER,
+      DatanodeProtocols.DNA_CLEARPRIMARY, 
+      DatanodeProtocols.DNA_BACKOFF,
+      DatanodeProtocols.DNA_RETRY, 
+      DatanodeProtocols.DNA_PREPAREFAILOVER
+  };
 
   private static boolean isValidStandbyCommand(DatanodeCommand cmd) {
     for (int validCommand : validStandbyCommands) {
@@ -538,41 +547,44 @@ public class OfferService implements Runnable {
   /**
    * Determines whether a failover has happened and accordingly takes the
    * appropriate action.
-   * 
-   * @param cmd
-   *          the command received from the AvatarNode
-   * @return whether or not this service is the primary service
+   * @return whether or not failover happened
    */
-  private boolean checkFailover(DatanodeCommand cmd) throws InterruptedException {
+  private boolean checkFailover() throws InterruptedException {
     boolean isPrimary = isPrimaryServiceCached();
     if (!isPrimary && isPrimaryService()) {
-      // The datanode has received a register command after the failover, this
-      // means that the offerservice thread for the datanode was down for a
-      // while and it most probably did not clean up its deletion queue, hence
-      // force a cleanup.
-      if (cmd.getAction() == DatanodeProtocol.DNA_REGISTER) {
-        this.clearPrimary();
-      }
       this.servicePair.setPrimaryOfferService(this);
+      return true;
     }
-    return isPrimaryServiceCached();
+    return false;
   }
 
   /**
-   * Process an array of datanode commands
+   * Process an array of datanode commands. This function has logic to check for
+   * failover. Any commands should be processed using this function as an
+   * entry point.
    * 
    * @param cmds an array of datanode commands
    * @return true if further processing may be required or false otherwise.
    */
   private boolean processCommand(DatanodeCommand[] cmds) throws InterruptedException {
     if (cmds != null) {
+      // at each heartbeat the standby offer service will talk to ZK!
+      boolean switchedFromStandbyToPrimary = checkFailover();
       for (DatanodeCommand cmd : cmds) {
-        checkFailover(cmd);
         try {
+          // The datanode has received a register command after the failover, this
+          // means that the offerservice thread for the datanode was down for a
+          // while and it most probably did not clean up its deletion queue, hence
+          // force a cleanup.
+          if (switchedFromStandbyToPrimary
+              && cmd.getAction() == DatanodeProtocol.DNA_REGISTER) {
+            this.clearPrimary();
+          }
+          
           // The standby service thread is allowed to process only a small set
           // of valid commands.
-          if (!isValidStandbyCommand(cmd) && !isPrimaryService()) {
-            LOG.warn("Received an invalid command " + cmd
+          if (!isPrimaryServiceCached() && !isValidStandbyCommand(cmd)) {
+            LOG.warn("Received an invalid command " + cmd.getAction()
                 + " from standby " + this.namenodeAddress);
             continue;
           } 
@@ -588,7 +600,11 @@ public class OfferService implements Runnable {
   }
   
   /**
-   *
+   * Process a single command sent by namenode. This function does NOT
+   * check for failover and whether the command is a valid primary/standby command.
+   * It should only be called from processCommand(DatanodeCommand[]), which has that
+   * logic.
+   * 
    * @param cmd
    * @return true if further processing may be required or false otherwise.
    * @throws IOException
@@ -635,13 +651,38 @@ public class OfferService implements Runnable {
       // namenode requested a registration - at start or if NN lost contact
       LOG.info("AvatarDatanodeCommand action: DNA_REGISTER");
       if (shouldRun()) {
-        servicePair.register(namenode, namenodeAddress);
-        firstBlockReportSent = false;
-        scheduleBlockReport(0);
+        try {
+          InjectionHandler
+              .processEventIO(InjectionEvent.OFFERSERVICE_BEFORE_REGISTRATION);
+          servicePair.register(namenode, namenodeAddress, true);
+          firstBlockReportSent = false;
+          cancelPrepareFailover();
+          scheduleBlockReport(0);
+        } catch (IOException e) {
+          LOG.warn("Registration failed, will restart offerservice threads..",
+              e);
+          servicePair.stopService1();
+          servicePair.doneRegister1 = false;
+          servicePair.stopService2();
+          servicePair.doneRegister2 = false;
+          throw e;
+        }
       }
       break;
     case DatanodeProtocol.DNA_FINALIZE:
-      anode.getStorage().finalizedUpgrade(servicePair.namespaceId);
+      boolean shouldProcessUpgradeCommand = servicePair
+          .shouldProcessFinalizeCommand(this);
+      InjectionHandler.processEvent(InjectionEvent.OFFERSERVICE_DNAFINALIZE,
+          shouldProcessUpgradeCommand, isPrimaryServiceCached());
+      if (!shouldProcessUpgradeCommand) {
+        LOG.warn("Received finalize upgrade command from: "
+            + namenodeAddress
+            + ", but the registration "
+            + "version of data-node and name-node were not matching. Skipping command.");
+      } else {
+        LOG.info("Finalize upgrade command received from: " + namenodeAddress);
+        anode.getStorage().finalizedUpgrade(servicePair.namespaceId);
+      }
       break;
     case UpgradeCommand.UC_ACTION_START_UPGRADE:
       // start distributed upgrade here
@@ -656,7 +697,13 @@ public class OfferService implements Runnable {
       break;
     case DatanodeProtocols.DNA_CLEARPRIMARY:
       LOG.info("CLEAR PRIMARY requested by : " + this.avatarnodeAddress);
+      InjectionHandler
+          .processEventIO(InjectionEvent.OFFERSERVICE_BEFORE_CLEARPRIMARY);
       retValue = clearPrimary();
+      this.clearPrimaryCommandProcessed = true;
+      break;
+    case DatanodeProtocols.DNA_PREPAREFAILOVER:
+      prepareFailover();
       break;
     case DatanodeProtocols.DNA_RETRY:
       // We will get a RETRY request as a response to only a full block report.
@@ -682,6 +729,28 @@ public class OfferService implements Runnable {
     }
     return retValue;
   }
+  
+  /**
+   * Take actions in preparation for failover.
+   */
+  private void prepareFailover() {
+    LOG.info("PREPARE FAILOVER requested by : " + this.avatarnodeAddress);
+    // we should start sending incremental block reports and block
+    // reports normally
+    setBackoff(false);
+    this.donotDelayIncrementalBlockReports = true;
+    InjectionHandler.processEvent(InjectionEvent.OFFERSERVICE_PREPARE_FAILOVER,
+        nsRegistration.toString());
+  }
+
+  /**
+   * Cancel prepare failover behavior if any. This should be called when we
+   * re-register, which means that somethign went wrong, and we are reconnecting
+   * to a node within the same offerservice.
+   */
+  private void cancelPrepareFailover() {
+    this.donotDelayIncrementalBlockReports = false;
+  }
 
   /**
    * This is clears up the thread heartbeating to the primary Avatar, by
@@ -706,6 +775,7 @@ public class OfferService implements Runnable {
         LOG.info("Finished Processing CLEAR PRIMARY requested by : "
             + this.avatarnodeAddress);
         this.forceIncrementalReport = true;
+        this.donotDelayIncrementalBlockReports = true;
       }
       InjectionHandler.processEvent(InjectionEvent.OFFERSERVICE_CLEAR_PRIMARY);
     } catch (IOException e) {
@@ -813,8 +883,8 @@ public class OfferService implements Runnable {
   /** Block synchronization */
   LocatedBlock syncBlock(
       Block block, List<BlockRecord> syncList,
-      boolean closeFile, List<InterDatanodeProtocol> datanodeProxies
-  ) 
+      boolean closeFile, List<InterDatanodeProtocol> datanodeProxies,
+      long deadline) 
   throws IOException {
     if (LOG.isDebugEnabled()) {
       LOG.debug("block=" + block + ", (length=" + block.getNumBytes()
@@ -824,6 +894,7 @@ public class OfferService implements Runnable {
     //syncList.isEmpty() that all datanodes do not have the block
     //so the block can be deleted.
     if (syncList.isEmpty()) {
+      DataNode.throwIfAfterTime(deadline);
       namenode.commitBlockSynchronization(block, 0, 0, closeFile, true,
           DatanodeID.EMPTY_ARRAY);
       return null;
@@ -831,6 +902,7 @@ public class OfferService implements Runnable {
 
     List<DatanodeID> successList = new ArrayList<DatanodeID>();
 
+    DataNode.throwIfAfterTime(deadline);
     long generationstamp = -1;
     try {
       generationstamp = namenode.nextGenerationStamp(block, closeFile);
@@ -846,8 +918,11 @@ public class OfferService implements Runnable {
 
     for(BlockRecord r : syncList) {
       try {
+        DataNode.throwIfAfterTime(deadline);
         r.datanode.updateBlock(servicePair.namespaceId, r.info.getBlock(), newblock, closeFile);
         successList.add(r.id);
+      } catch (BlockRecoveryTimeoutException e) {
+        throw e;
       } catch (IOException e) {
         InterDatanodeProtocol.LOG.warn("Failed to updateBlock (newblock="
             + newblock + ", datanode=" + r.id + ")", e);
@@ -859,6 +934,7 @@ public class OfferService implements Runnable {
     if (!successList.isEmpty()) {
       DatanodeID[] nlist = successList.toArray(new DatanodeID[successList.size()]);
 
+      DataNode.throwIfAfterTime(deadline);
       namenode.commitBlockSynchronization(block,
           newblock.getGenerationStamp(), newblock.getNumBytes(), closeFile, false,
           nlist);

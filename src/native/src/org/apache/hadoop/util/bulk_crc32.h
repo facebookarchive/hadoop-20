@@ -36,6 +36,7 @@ typedef struct crc32_error {
   const uint8_t *bad_data; // pointer to start of data chunk with error
 } crc32_error_t;
 
+extern uint32_t update(uint32_t crc, uint8_t *buf, int len, int checksum_type);
 
 /**
  * Verify a buffer of data which is checksummed in chunks

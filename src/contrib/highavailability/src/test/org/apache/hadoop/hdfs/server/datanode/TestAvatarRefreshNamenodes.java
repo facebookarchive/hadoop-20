@@ -76,9 +76,9 @@ public class TestAvatarRefreshNamenodes {
   
   @Test
   public void testRefreshNamenodes() throws Exception {
-    MiniAvatarCluster cluster = null;
+    MiniAvatarCluster cluster =
+      new MiniAvatarCluster(conf, 1, true, null, null, 1, true); 
     try {
-      cluster = new MiniAvatarCluster(conf, 1, true, null, null, 1, true); 
       DataNode dn = cluster.getDataNodes().get(0);
       assertEquals(dn.getAllNamespaceServices().length, 1);
       

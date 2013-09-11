@@ -55,6 +55,7 @@ class TaskMemoryManagerThread extends Thread {
   private long maxRssMemoryAllowedForAllTasks;
   private int maxRssMemoryAllowedUpdateCounter;
   static private boolean doUpdateReservedPhysicalMemory = true;
+  static public final String HIGH_MEMORY_KEYWORD = "high-memory";
   static public final String TT_MEMORY_MANAGER_MONITORING_INTERVAL =
           "mapred.tasktracker.taskmemorymanager.monitoring-interval";
   // The amount of memory which will not be used for running tasks
@@ -187,6 +188,8 @@ class TaskMemoryManagerThread extends Thread {
 
         long memoryStillInUsage = 0;
         long rssMemoryStillInUsage = 0;
+        taskTracker.setTaskTrackerRSSMem(resourceCalculator.getProcResourceValues().getPhysicalMemorySize());
+        
         // Now, check memory usage and kill any overflowing tasks
         for (Iterator<Map.Entry<TaskAttemptID, ProcessTreeInfo>> it = processTreeInfoMap
             .entrySet().iterator(); it.hasNext();) {
@@ -208,7 +211,7 @@ class TaskMemoryManagerThread extends Thread {
 
                 // create process tree object
                 long sleeptimeBeforeSigkill = taskTracker.getJobConf().getLong(
-                    "mapred.tasktracker.tasks.sleeptime-before-sigkill",
+                    JvmManager.SLEEPTIME_BEFORE_SIGKILL_KEY,
                     ProcessTree.DEFAULT_SLEEPTIME_BEFORE_SIGKILL);
 
                 ProcfsBasedProcessTree pt = new ProcfsBasedProcessTree(
@@ -547,7 +550,7 @@ class TaskMemoryManagerThread extends Thread {
         long taskMemoryLimit = getTaskMemoryLimit(tid);
         long taskMemory = getTaskCumulativeRssmem(tid);
         String pid = processTreeInfoMap.get(tid).getPID();
-        String msg = "high-memory task:" + tid +
+        String msg = HIGH_MEMORY_KEYWORD + " task:" + tid +
             " pid:" + pid +
             " taskMemory:" + taskMemory +
             " taskMemoryLimit:" + taskMemoryLimit +

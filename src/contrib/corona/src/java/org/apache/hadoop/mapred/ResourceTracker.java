@@ -230,33 +230,59 @@ public class ResourceTracker {
   }
 
   public void processAvailableGrants(
-        ResourceProcessor processor) throws InterruptedException {
+        ResourceProcessor processor, int maxBatchSize) throws InterruptedException {
+    processAvailableGrants(processor, maxBatchSize, Long.MAX_VALUE);
+  }
+
+  public void processAvailableGrants(
+        ResourceProcessor processor,
+        int maxBatchSize,
+        long timeout) throws InterruptedException {
     synchronized(lockObject) {
       while (availableResources.isEmpty()) {
-        lockObject.wait();
+        lockObject.wait(timeout);
+        if (availableResources.isEmpty()) {
+          LOG.warn("No available resources after timeout of " + timeout);
+          return;
+        }
       }
       List<Integer> resourcesConsumed = new ArrayList<Integer>();
       List<Integer> stillAvailable = new ArrayList<Integer>();
       Iterator<Integer> grantIter = availableResources.iterator();
-
-      while (grantIter.hasNext()) {
+      int processed = 0;
+      while (grantIter.hasNext() && processed < maxBatchSize) {
+        processed++;
         Integer grantId = grantIter.next();
         grantIter.remove();
         Integer requestId = grantId;
         ResourceGrant grant = grantedResources.get(grantId);
         if (processor.processAvailableResource(grant)) {
-          LOG.info("processed available resource with requestId: " + requestId);
+          if (LOG.isDebugEnabled()) {
+            LOG.info("processed available resource with requestId: " +
+              requestId);
+          }
           resourcesConsumed.add(grantId);
         } else {
-          LOG.info("available resource with requestId: " + requestId +
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("available resource with requestId: " + requestId +
               " is not processed and is still available");
+          }
           stillAvailable.add(grantId);
         }
       }
 
       // Remove consumed resources from the available set.
       availableResources.addAll(stillAvailable);
-      lockObject.wait(500); // Wait for some time before next iteration.
+      if (processed < maxBatchSize) {
+        // We did not have enough to process, wait for some time before
+        // next iteration. If more resources become available, the object
+        // will be notified.
+        lockObject.wait(500);
+      } else {
+        // We processed a batch of data, wait for a short time to yield
+        // the lock.
+        lockObject.wait(1);
+      }
     }
   }
 
@@ -318,7 +344,9 @@ public class ResourceTracker {
           hosts.add(host);
         }
       }
-	    req.setHosts(hosts);
+      if (!hosts.isEmpty()) {
+	      req.setHosts(hosts);
+      }
     }
     return req;
   }

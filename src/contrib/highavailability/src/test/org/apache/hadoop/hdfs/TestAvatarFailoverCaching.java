@@ -4,8 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.hdfs.util.InjectionHandler;
 import org.apache.hadoop.hdfs.util.InjectionEvent;
+import org.apache.hadoop.util.InjectionEventI;
+import org.apache.hadoop.util.InjectionHandler;
 
 import static org.junit.Assert.*;
 import org.junit.Test;
@@ -27,7 +28,7 @@ public class TestAvatarFailoverCaching extends FailoverLoadTestUtil {
       threads.add(T);
     }
 
-    Thread.sleep(10000);
+    Thread.sleep(3000);
     cluster.failOver();
 
     for (LoadThread thread : threads) {
@@ -46,7 +47,7 @@ public class TestAvatarFailoverCaching extends FailoverLoadTestUtil {
 
   protected static class TestCacheHandler extends TestHandler {
     @Override
-    public void _processEvent(InjectionEvent event, Object... args) {
+    public void _processEvent(InjectionEventI event, Object... args) {
       super._processEvent(event, args);
       if (event == InjectionEvent.DAFS_CHECK_FAILOVER) {
         check_failovers.incrementAndGet();

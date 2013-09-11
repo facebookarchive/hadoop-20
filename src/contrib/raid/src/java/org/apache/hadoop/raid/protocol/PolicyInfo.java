@@ -38,7 +38,7 @@ import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableFactory;
-import org.apache.hadoop.raid.ErasureCodeType;
+import org.apache.hadoop.raid.Codec;
 import org.apache.hadoop.raid.RaidNode;
 
 /**
@@ -53,7 +53,7 @@ public class PolicyInfo implements Writable {
   private Path srcPath;            // the specified src path
   private Path fileListPath;       // this path to the file containing list of files.
   private String policyName;       // name of policy
-  private ErasureCodeType codeType;// the erasure code used
+  private String codecId;          // the codec used
   private boolean shouldRaid;      // Should we raid files or not.
   private String description;      // A verbose description of this policy
   private Configuration conf;      // Hadoop configuration
@@ -97,8 +97,8 @@ public class PolicyInfo implements Writable {
     if (other.description != null && other.description.length() > 0) {
       this.description = other.description;
     }
-    if (other.codeType != null) {
-      this.codeType = other.codeType;
+    if (other.codecId != null) {
+      this.codecId = other.codecId;
     }
     if (other.srcPath != null) {
       this.srcPath = other.srcPath;
@@ -110,7 +110,7 @@ public class PolicyInfo implements Writable {
       String skey = (String) key;
       this.properties.setProperty(skey, other.properties.getProperty(skey));
     }
-    LOG.info(this.policyName + ".codetype " + codeType);
+    LOG.info(this.policyName + ".codecId " + codecId);
     LOG.info(this.policyName + ".fileListPath " + fileListPath);
     LOG.info(this.policyName + ".srcpath " + srcPath);
   }
@@ -131,16 +131,15 @@ public class PolicyInfo implements Writable {
   }
 
   /**
-   * Set the erasure code type used in this policy
+   * Set the codec used by this policy
    */
-  public void setErasureCode(String code) {
-    this.codeType = ErasureCodeType.valueOf(code.toUpperCase());
+  public void setCodecId(String id) {
+    this.codecId = id;
   }
 
   public void setShouldRaid(boolean val) {
     this.shouldRaid = val;
   }
-
 
   /**
    * Set the description of this policy.
@@ -176,8 +175,8 @@ public class PolicyInfo implements Writable {
   /**
    * Get the destination path of this policy.
    */
-  public ErasureCodeType getErasureCode() {
-    return this.codeType;
+  public String getCodecId() {
+    return this.codecId;
   }
 
   public boolean getShouldRaid() {
@@ -218,7 +217,7 @@ public class PolicyInfo implements Writable {
 
   private List<Path> removeConflictPath(List<Path> expandedPaths)
       throws IOException {
-    String destPrefix = RaidNode.getDestinationPath(codeType, conf).toString();
+    String destPrefix = Codec.getCodec(codecId).parityDirectory;
     destPrefix = normalizePath(destPrefix);
     List<Path> filtered = new ArrayList<Path>(expandedPaths.size());
     for (Path path : expandedPaths) {
@@ -246,7 +245,7 @@ public class PolicyInfo implements Writable {
     StringBuffer buff = new StringBuffer();
     buff.append("Policy Name:\t" + policyName + " --------------------\n");
     buff.append("Source Path:\t" + srcPath + "\n");
-    buff.append("Erasure Code:\t" + codeType + "\n");
+    buff.append("Codec:\t" + codecId + "\n");
     for (Enumeration<?> e = properties.propertyNames(); e.hasMoreElements();) {
       String name = (String) e.nextElement(); 
       buff.append( name + ":\t" + properties.getProperty(name) + "\n");
@@ -283,7 +282,7 @@ public class PolicyInfo implements Writable {
       Text.writeString(out, fileListPath.toString());
     }
     Text.writeString(out, policyName);
-    Text.writeString(out, codeType.toString());
+    Text.writeString(out, codecId);
     Text.writeString(out, description);
     out.writeInt(properties.size());
     for (Enumeration<?> e = properties.propertyNames(); e.hasMoreElements();) {
@@ -307,7 +306,7 @@ public class PolicyInfo implements Writable {
       this.fileListPath = new Path(text);
     }
     this.policyName = Text.readString(in);
-    this.codeType = ErasureCodeType.valueOf(Text.readString(in).toUpperCase());
+    this.codecId = Text.readString(in);
     this.description = Text.readString(in);
     for (int n = in.readInt(); n>0; n--) {
       String name = Text.readString(in);
