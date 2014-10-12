@@ -125,7 +125,12 @@ class ConnectionSet {
     if (c == null || (connString = c.toString()) == null) {
       return 0;
     }
-    int hashCode = Math.abs(connString.hashCode());
+    int hashCode = connString.hashCode();
+    if (hashCode == Integer.MIN_VALUE) {
+      hashCode = Integer.MAX_VALUE;
+    } else {
+      hashCode = Math.abs(hashCode);
+    }
     return hashCode % numBuckets;
   }
 
