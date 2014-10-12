@@ -457,8 +457,8 @@ public abstract class Server {
         }
       }
       
-      void addChannelToQueue(SocketChannel channel) {
-        newChannels.add(channel);
+      void addChannelToQueue(SocketChannel channel) throws InterruptedException{
+        newChannels.put(channel);
         readSelector.wakeup();
       }
       
@@ -608,7 +608,32 @@ public abstract class Server {
         channel.configureBlocking(false);
         channel.socket().setTcpNoDelay(tcpNoDelay);
         Reader reader = getReader();
-        reader.addChannelToQueue(channel);
+        try {
+          reader.addChannelToQueue(channel);
+          if (LOG.isDebugEnabled())
+            LOG.debug("Add connection to queue from " + 
+                NetUtils.getSrcNameFromSocketChannel(channel) +
+                "; # active connections: " + numConnections +
+                "; # queued calls: " + callQueue.size());      
+        } catch (RuntimeException e) {
+          channel.close();
+          if (LOG.isDebugEnabled())
+            LOG.debug("Faied to add connection to queue from " + 
+                NetUtils.getSrcNameFromSocketChannel(channel) +
+                "; # active connections: " + numConnections +
+                "; # queued calls: " + callQueue.size() +
+                "; # reader.queueSize " + reader.getNewChannelsSize());
+          throw e;
+        } catch (InterruptedException e) {
+          channel.close();
+          if (LOG.isDebugEnabled())
+            LOG.debug("Interrupt to add connection to queue from " + 
+                NetUtils.getSrcNameFromSocketChannel(channel) +
+                "; # active connections: " + numConnections +
+                "; # queued calls: " + callQueue.size() +
+                "; # reader.queueSize " + reader.getNewChannelsSize());
+          Thread.currentThread().interrupt();
+        }
         if (LOG.isDebugEnabled()) {
           LOG.debug("Add connection to queue from "
               + NetUtils.getSrcNameFromSocketChannel(channel)
