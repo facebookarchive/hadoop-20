@@ -63,7 +63,7 @@ parity bits to recover corrupted data.
 
        <property>
          <name>fs.hdfs.impl</name>
-         <value>org.apache.hadoop.dfs.DistributedRaidFileSystem</value>
+         <value>org.apache.hadoop.hdfs.DistributedRaidFileSystem</value>
          <description>The FileSystem for hdfs: uris.</description>
        </property>
 
