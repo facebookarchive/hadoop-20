@@ -348,4 +348,12 @@ public class DynamicCloudsDaemon implements Tool,
       return launched;
     }
   }
+  
+  
+  @Override
+  public ProtocolSignature getProtocolSignature(String protocol,
+      long clientVersion, int clientMethodsHash) throws IOException {
+    return ProtocolSignature.getProtocolSignature(
+        this, protocol, clientVersion, clientMethodsHash);
+  }  
 }
