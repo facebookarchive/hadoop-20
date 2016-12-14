@@ -12,7 +12,7 @@ HBase/Scribe workloads.
 
 This code is based on Apache Hadoop 0.20/Apache Hadoop 0.20-append.
 
-FB-CHANGES.txt contains the additional pathches that have been committed to
+FB-CHANGES.txt contains the additional patches that have been committed to
 the original code base.
 
 For instructions on starting a Corona cluster, see
